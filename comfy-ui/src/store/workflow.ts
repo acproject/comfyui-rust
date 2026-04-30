@@ -1,6 +1,15 @@
 import { create } from 'zustand';
 import type { ObjectInfoMap, QueueInfo } from '@/types/api';
 import type { Node, Edge } from '@xyflow/react';
+import {
+  validateConnection,
+  validatePrompt,
+  getExecutionOrder,
+  detectCycleInGraph,
+  type ValidationError,
+  type ValidationResult,
+  type ExecutionOrderResult,
+} from '@/dag';
 
 interface ComfyNodeData extends Record<string, unknown> {
   classType: string;
@@ -38,6 +47,8 @@ interface WorkflowState {
 
   outputImages: Record<string, OutputImage[]>;
 
+  validationErrors: ValidationError[];
+
   setNodes: (nodes: ComfyNode[]) => void;
   setEdges: (edges: Edge[]) => void;
   onNodesChange: (changes: unknown[]) => void;
@@ -45,7 +56,7 @@ interface WorkflowState {
   addNode: (classType: string, position: { x: number; y: number }) => void;
   removeNode: (nodeId: string) => void;
   updateNodeInput: (nodeId: string, inputName: string, value: unknown) => void;
-  connectNodes: (source: string, sourceHandle: string, target: string, targetHandle: string) => void;
+  connectNodes: (source: string, sourceHandle: string, target: string, targetHandle: string) => ValidationError | null;
   disconnectNode: (edgeId: string) => void;
 
   setSelectedNodeId: (nodeId: string | null) => void;
@@ -62,6 +73,12 @@ interface WorkflowState {
   clearWorkflow: () => void;
   loadWorkflowFromJson: (workflow: Record<string, unknown>) => void;
   getWorkflowAsJson: () => Record<string, unknown>;
+
+  validateWorkflow: () => ValidationResult;
+  getExecutionOrderForWorkflow: () => ExecutionOrderResult;
+  validateConnection: (source: string, sourceHandle: string, target: string, targetHandle: string) => ValidationError | null;
+  setValidationErrors: (errors: ValidationError[]) => void;
+  clearValidationErrors: () => void;
 }
 
 let _nodeIdCounter = 0;
@@ -81,6 +98,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   progress: null,
   clientId: crypto.randomUUID(),
   outputImages: {},
+  validationErrors: [],
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
@@ -160,7 +178,62 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   connectNodes: (source, sourceHandle, target, targetHandle) => {
-    const { edges } = get();
+    const { objectInfo, nodes, edges } = get();
+
+    const sourceNode = nodes.find((n) => n.id === source);
+    if (!sourceNode) return { type: 'node_not_found', message: 'Source node not found', details: source };
+
+    const sourceDef = objectInfo[sourceNode.data.classType];
+    if (!sourceDef) return { type: 'missing_node_type', message: 'Source node type not found', details: sourceNode.data.classType };
+
+    const sourceOutputIndex = sourceDef.output_names.indexOf(sourceHandle);
+    if (sourceOutputIndex < 0) return { type: 'invalid_output', message: 'Invalid output handle', details: sourceHandle };
+
+    const connError = validateConnection(
+      sourceNode.data.classType,
+      sourceOutputIndex,
+      nodes.find((n) => n.id === target)?.data.classType || '',
+      targetHandle,
+      objectInfo
+    );
+    if (connError) return connError;
+
+    const tempEdges = [
+      ...edges.filter((e) => !(e.target === target && e.targetHandle === targetHandle)),
+      { id: `e-${source}-${sourceHandle}-${target}-${targetHandle}`, source, sourceHandle, target, targetHandle },
+    ];
+
+    const tempNodes: Record<string, { inputs: Record<string, unknown> }> = {};
+    for (const node of nodes) {
+      const inputs: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(node.data.inputs)) {
+        inputs[key] = value;
+      }
+      for (const edge of tempEdges) {
+        if (edge.target === node.id && edge.targetHandle) {
+          const sn = nodes.find((n) => n.id === edge.source);
+          if (sn) {
+            const sd = objectInfo[sn.data.classType];
+            if (sd) {
+              const oi = sd.output_names.indexOf(edge.sourceHandle || '');
+              if (oi >= 0) inputs[edge.targetHandle] = [edge.source, oi];
+            }
+          }
+        }
+      }
+      tempNodes[node.id] = { inputs };
+    }
+
+    const cycle = detectCycleInGraph(tempNodes);
+    if (cycle) {
+      return {
+        type: 'dependency_cycle',
+        message: 'Connection would create a dependency cycle',
+        details: cycle.join(' -> '),
+        extraInfo: { cycleNodes: cycle },
+      };
+    }
+
     const edgeId = `e-${source}-${sourceHandle}-${target}-${targetHandle}`;
     const newEdge: Edge = {
       id: edgeId,
@@ -172,7 +245,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const filtered = edges.filter(
       (e) => !(e.target === target && e.targetHandle === targetHandle)
     );
-    set({ edges: [...filtered, newEdge] });
+    set({ edges: [...filtered, newEdge], validationErrors: [] });
+    return null;
   },
 
   disconnectNode: (edgeId) => {
@@ -389,6 +463,75 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       version: 0.4,
     };
   },
+
+  validateWorkflow: () => {
+    const { nodes, edges, objectInfo } = get();
+    const graphNodes = nodes.map((n) => ({
+      id: n.id,
+      classType: n.data.classType,
+      inputs: n.data.inputs,
+    }));
+    const graphEdges = edges.map((e) => ({
+      source: e.source,
+      sourceHandle: e.sourceHandle || '',
+      target: e.target,
+      targetHandle: e.targetHandle || '',
+    }));
+    const result = validatePrompt(graphNodes, graphEdges, objectInfo);
+    set({ validationErrors: result.errors });
+    return result;
+  },
+
+  getExecutionOrderForWorkflow: () => {
+    const { nodes, edges, objectInfo } = get();
+    const graphNodes = nodes.map((n) => ({
+      id: n.id,
+      classType: n.data.classType,
+      inputs: n.data.inputs,
+    }));
+    const graphEdges = edges.map((e) => ({
+      source: e.source,
+      sourceHandle: e.sourceHandle || '',
+      target: e.target,
+      targetHandle: e.targetHandle || '',
+    }));
+    return getExecutionOrder(graphNodes, graphEdges, objectInfo);
+  },
+
+  validateConnection: (source, sourceHandle, target, targetHandle) => {
+    const { objectInfo, nodes } = get();
+    const sourceNode = nodes.find((n) => n.id === source);
+    if (!sourceNode) return { type: 'node_not_found', message: 'Source node not found', details: source };
+
+    const sourceDef = objectInfo[sourceNode.data.classType];
+    console.log('[validateConnection]', {
+      source,
+      sourceHandle,
+      target,
+      targetHandle,
+      sourceClassType: sourceNode.data.classType,
+      targetClassType: nodes.find((n) => n.id === target)?.data.classType,
+      sourceOutputNames: sourceDef?.output_names,
+    });
+    if (!sourceDef) return { type: 'missing_node_type', message: 'Source node type not found', details: sourceNode.data.classType };
+
+    const sourceOutputIndex = sourceDef.output_names.indexOf(sourceHandle);
+    if (sourceOutputIndex < 0) return { type: 'invalid_output', message: 'Invalid output handle', details: `${sourceHandle} not in [${sourceDef.output_names.join(', ')}]` };
+
+    const targetNode = nodes.find((n) => n.id === target);
+    if (!targetNode) return { type: 'node_not_found', message: 'Target node not found', details: target };
+
+    return validateConnection(
+      sourceNode.data.classType,
+      sourceOutputIndex,
+      targetNode.data.classType,
+      targetHandle,
+      objectInfo
+    );
+  },
+
+  setValidationErrors: (errors) => set({ validationErrors: errors }),
+  clearValidationErrors: () => set({ validationErrors: [] }),
 }));
 
 function applyNodeChanges(changes: unknown[], nodes: ComfyNode[]): ComfyNode[] {

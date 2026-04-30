@@ -5,7 +5,6 @@ import {
   Controls,
   MiniMap,
   type Connection,
-  type Edge,
   type Node,
   BackgroundVariant,
   useReactFlow,
@@ -30,6 +29,7 @@ const GraphEditor: FC = () => {
   const setSelectedNodeId = useWorkflowStore((s) => s.setSelectedNodeId);
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId);
   const getWorkflowAsJson = useWorkflowStore((s) => s.getWorkflowAsJson);
+  const disconnectNode = useWorkflowStore((s) => s.disconnectNode);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
 
@@ -37,25 +37,36 @@ const GraphEditor: FC = () => {
 
   const onConnect = useCallback(
     (connection: Connection) => {
+      console.log('[onConnect]', JSON.stringify(connection));
       if (!connection.source || !connection.target) return;
-      const sourceHandle = connection.sourceHandle || '0';
-      const targetHandle = connection.targetHandle || '0';
-
-      const newEdge: Edge = {
-        id: `e-${connection.source}-${sourceHandle}-${connection.target}-${targetHandle}`,
-        source: connection.source,
-        sourceHandle,
-        target: connection.target,
-        targetHandle,
-      };
+      const sourceHandle = connection.sourceHandle || '';
+      const targetHandle = connection.targetHandle || '';
 
       const store = useWorkflowStore.getState();
-      const filtered = store.edges.filter(
-        (e) => !(e.target === connection.target && e.targetHandle === targetHandle)
+      const error = store.connectNodes(
+        connection.source,
+        sourceHandle,
+        connection.target,
+        targetHandle
       );
-      useWorkflowStore.setState({ edges: [...filtered, newEdge] });
+
+      if (error) {
+        console.warn(`Connection rejected: ${error.message} - ${error.details}`);
+        store.setValidationErrors([error]);
+      } else {
+        store.clearValidationErrors();
+      }
     },
     []
+  );
+
+  const onEdgesDelete = useCallback(
+    (deletedEdges: Array<{ id: string }>) => {
+      for (const edge of deletedEdges) {
+        disconnectNode(edge.id);
+      }
+    },
+    [disconnectNode]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -106,11 +117,11 @@ const GraphEditor: FC = () => {
   );
 
   const onPaneContextMenu = useCallback(
-    (event: React.MouseEvent) => {
+    (event: React.MouseEvent | MouseEvent) => {
       event.preventDefault();
       setContextMenu({
-        x: event.clientX,
-        y: event.clientY,
+        x: (event as React.MouseEvent).clientX,
+        y: (event as React.MouseEvent).clientY,
         type: 'canvas',
       });
       const store = useWorkflowStore.getState();
@@ -155,6 +166,7 @@ const GraphEditor: FC = () => {
         onNodesChange={onNodesChange as never}
         onEdgesChange={onEdgesChange as never}
         onConnect={onConnect}
+        onEdgesDelete={onEdgesDelete}
         onDragOver={onDragOver}
         onDrop={onDrop}
         onNodeClick={onNodeClick}
@@ -170,6 +182,7 @@ const GraphEditor: FC = () => {
           style: { stroke: '#555', strokeWidth: 2 },
           animated: false,
         }}
+        connectionLineStyle={{ stroke: '#888', strokeWidth: 2 }}
         nodesDraggable
         nodesConnectable
         elementsSelectable
@@ -181,6 +194,8 @@ const GraphEditor: FC = () => {
         selectionOnDrag
         selectNodesOnDrag
         deleteKeyCode={null}
+        snapToGrid
+        snapGrid={[10, 10]}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#2d3748" />
         <Controls

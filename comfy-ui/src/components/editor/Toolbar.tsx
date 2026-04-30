@@ -10,15 +10,23 @@ const Toolbar: FC = () => {
   const executingPromptId = useWorkflowStore((s) => s.executingPromptId);
   const queueInfo = useWorkflowStore((s) => s.queueInfo);
   const loadWorkflowFromJson = useWorkflowStore((s) => s.loadWorkflowFromJson);
+  const validateWorkflow = useWorkflowStore((s) => s.validateWorkflow);
+  const validationErrors = useWorkflowStore((s) => s.validationErrors);
 
   const handleQueuePrompt = async () => {
     try {
+      const result = validateWorkflow();
+      if (!result.valid) {
+        console.error('Workflow validation failed:', result.errors);
+        return;
+      }
+
       const prompt = getPrompt();
-      const result = await api.submitPrompt({
+      const response = await api.submitPrompt({
         prompt: prompt as Record<string, import('@/types/api').NodeDefinition>,
         client_id: clientId,
       });
-      console.log('Prompt queued:', result.prompt_id);
+      console.log('Prompt queued:', response.prompt_id);
     } catch (err) {
       console.error('Failed to queue prompt:', err);
     }
@@ -84,6 +92,7 @@ const Toolbar: FC = () => {
         gap: 4,
         color: '#e2e8f0',
         fontSize: 12,
+        position: 'relative',
       }}
     >
       <ToolbarButton
@@ -137,6 +146,49 @@ const Toolbar: FC = () => {
       }}>
         ComfyUI-Rust
       </div>
+
+      {validationErrors.length > 0 && (
+        <div style={{
+          position: 'absolute',
+          top: 38,
+          left: 0,
+          right: 0,
+          background: '#2d1515',
+          borderBottom: '1px solid #742a2a',
+          padding: '6px 12px',
+          fontSize: 11,
+          color: '#fc8181',
+          maxHeight: 120,
+          overflowY: 'auto',
+          zIndex: 100,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ fontWeight: 600 }}>
+              Validation Errors ({validationErrors.length})
+            </span>
+            <button
+              onClick={() => useWorkflowStore.getState().clearValidationErrors()}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#fc8181',
+                cursor: 'pointer',
+                fontSize: 11,
+                padding: '0 4px',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          {validationErrors.map((err, i) => (
+            <div key={i} style={{ padding: '2px 0', borderBottom: i < validationErrors.length - 1 ? '1px solid #4a2020' : 'none' }}>
+              <span style={{ fontWeight: 500 }}>{err.message}</span>
+              {err.details && <span style={{ color: '#e0a0a0', marginLeft: 6 }}>- {err.details}</span>}
+              {err.nodeId && <span style={{ color: '#c08080', marginLeft: 6 }}>(Node #{err.nodeId})</span>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

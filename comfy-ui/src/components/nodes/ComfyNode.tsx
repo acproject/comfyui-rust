@@ -11,31 +11,80 @@ interface ComfyNodeProps {
   selected: boolean;
 }
 
+const HEADER_H = 28;
+const ROW_H = 24;
+const SEP_H = 2;
+
 const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => {
-  const { title, outputs, isOutputNode, category } = data;
+  const { title, outputs, isOutputNode, category, classType } = data;
   const headerColor = getCategoryColor(category);
   const [collapsed, setCollapsed] = useState(false);
 
   const objectInfo = useWorkflowStore((s) => s.objectInfo[data.classType]);
 
-  const inputTypeMap: Record<string, string> = {};
+  const allInputSpecs: Array<{
+    name: string;
+    typeName: string;
+    optional: boolean;
+    choices?: string[];
+    multiline?: boolean;
+  }> = [];
+
   if (objectInfo?.input_types?.required) {
     for (const [k, v] of Object.entries(objectInfo.input_types.required)) {
-      inputTypeMap[k] = (v as { type_name: string }).type_name;
+      const spec = v as { type_name: string; extra?: Record<string, unknown> };
+      allInputSpecs.push({
+        name: k,
+        typeName: spec.type_name,
+        optional: false,
+        choices: (spec.extra?.choices as string[]) || undefined,
+        multiline: spec.extra?.multiline === true || (k === 'text' && spec.type_name === 'STRING'),
+      });
     }
   }
   if (objectInfo?.input_types?.optional) {
     for (const [k, v] of Object.entries(objectInfo.input_types.optional)) {
-      inputTypeMap[k] = (v as { type_name: string }).type_name;
+      const spec = v as { type_name: string; extra?: Record<string, unknown> };
+      allInputSpecs.push({
+        name: k,
+        typeName: spec.type_name,
+        optional: true,
+        choices: (spec.extra?.choices as string[]) || undefined,
+        multiline: spec.extra?.multiline === true || (k === 'text' && spec.type_name === 'STRING'),
+      });
     }
   }
 
-  const inputEntries = Object.entries(data.inputs);
-  const isImageNode = data.classType === 'LoadImage';
-  const isSaveImageNode = data.classType === 'SaveImage';
+  const isImageNode = classType === 'LoadImage';
+  const isSaveImageNode = classType === 'SaveImage';
 
   const isPrimitive = (typeName: string) =>
     ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
+
+  const nonPrimitiveInputs = allInputSpecs.filter((s) => !isPrimitive(s.typeName));
+
+  let y = HEADER_H;
+  if (!collapsed) {
+    if (isImageNode && data.inputs['image']) y += 80;
+    if (isSaveImageNode && data.inputs['images']) y += 80;
+  }
+
+  const inputHandleY: Record<string, number> = {};
+  for (const spec of allInputSpecs) {
+    const rowH = (!collapsed && spec.multiline) ? ROW_H * 3 : ROW_H;
+    inputHandleY[spec.name] = y + rowH / 2;
+    y += rowH;
+  }
+
+  if (!collapsed && outputs.length > 0) {
+    y += SEP_H;
+  }
+
+  const outputHandleY: Record<string, number> = {};
+  for (const output of outputs) {
+    outputHandleY[output.name] = y + ROW_H / 2;
+    y += ROW_H;
+  }
 
   return (
     <div
@@ -47,12 +96,43 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         maxWidth: 280,
         fontSize: 12,
         color: '#e2e8f0',
-        overflow: 'visible',
         boxShadow: selected
           ? '0 0 12px rgba(100, 150, 255, 0.4)'
           : '0 2px 8px rgba(0,0,0,0.3)',
       }}
     >
+      {nonPrimitiveInputs.map((spec) => (
+        <Handle
+          key={`in-${spec.name}`}
+          type="target"
+          position={Position.Left}
+          id={spec.name}
+          style={{
+            background: getTypeColor(spec.typeName),
+            width: 12,
+            height: 12,
+            border: '2px solid #1e1e2e',
+            top: inputHandleY[spec.name],
+          }}
+        />
+      ))}
+
+      {outputs.map((output) => (
+        <Handle
+          key={`out-${output.name}`}
+          type="source"
+          position={Position.Right}
+          id={output.name}
+          style={{
+            background: getTypeColor(output.type),
+            width: 12,
+            height: 12,
+            border: '2px solid #1e1e2e',
+            top: outputHandleY[output.name],
+          }}
+        />
+      ))}
+
       <div
         style={{
           background: headerColor,
@@ -65,6 +145,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           borderRadius: '4px 4px 0 0',
           cursor: 'pointer',
           userSelect: 'none',
+          height: HEADER_H,
+          boxSizing: 'border-box',
         }}
         onDoubleClick={() => setCollapsed(!collapsed)}
       >
@@ -97,50 +179,45 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           )}
 
           <div style={{ padding: '2px 0' }}>
-            {inputEntries.map(([name, value]) => {
-              const typeName = inputTypeMap[name] || '';
-              const showHandle = !isPrimitive(typeName);
+            {allInputSpecs.map((spec) => {
+              const { name, typeName, choices, multiline } = spec;
+              const value = data.inputs[name];
               const typeColor = getTypeColor(typeName);
-
-              const inputSpec = objectInfo?.input_types?.required?.[name] || objectInfo?.input_types?.optional?.[name];
-              const choices = (inputSpec as { extra?: { choices?: string[] } })?.extra?.choices;
+              const showHandle = !isPrimitive(typeName);
 
               return (
                 <div
                   key={name}
                   style={{
-                    position: 'relative',
                     padding: '2px 8px',
                     display: 'flex',
-                    alignItems: 'center',
+                    alignItems: multiline ? 'flex-start' : 'center',
                     gap: 4,
-                    minHeight: 22,
+                    height: multiline ? ROW_H * 3 : ROW_H,
+                    boxSizing: 'border-box',
+                    paddingLeft: showHandle ? 18 : 8,
                   }}
                 >
                   {showHandle && (
-                    <Handle
-                      type="target"
-                      position={Position.Left}
-                      id={name}
-                      style={{
-                        background: typeColor,
-                        width: 12,
-                        height: 12,
-                        border: '2px solid #1e1e2e',
-                        top: 'auto',
-                        position: 'relative',
-                        transform: 'none',
-                        left: -16,
-                      }}
-                    />
+                    <span style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background: typeColor,
+                      border: '1.5px solid #1e1e2e',
+                      flexShrink: 0,
+                      marginTop: multiline ? 7 : 0,
+                    }} />
                   )}
                   <span style={{
-                    flex: 1,
+                    flex: '0 0 auto',
                     fontSize: 10,
                     color: '#a0aec0',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
+                    lineHeight: multiline ? undefined : '20px',
+                    paddingTop: multiline ? 3 : 0,
                   }}>
                     {name}
                   </span>
@@ -151,7 +228,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
                       value={value}
                       typeName={typeName}
                       choices={choices}
-                      classType={data.classType}
+                      classType={classType}
+                      multiline={multiline}
                     />
                   )}
                 </div>
@@ -160,56 +238,53 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           </div>
 
           {outputs.length > 0 && (
-            <div style={{ padding: '2px 0', borderTop: '1px solid #333' }}>
-              {outputs.map((output) => {
-                const typeColor = getTypeColor(output.type);
-                return (
-                  <div
-                    key={output.name}
-                    style={{
-                      position: 'relative',
-                      padding: '2px 8px',
-                      textAlign: 'right',
-                      fontSize: 10,
-                      color: '#a0aec0',
-                      minHeight: 22,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'flex-end',
-                      gap: 4,
-                    }}
-                  >
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {output.name}
-                    </span>
-                    <span style={{
-                      fontSize: 8,
-                      color: typeColor,
-                      background: `${typeColor}22`,
-                      padding: '0px 3px',
-                      borderRadius: 2,
-                    }}>
-                      {output.type}
-                    </span>
-                    <Handle
-                      type="source"
-                      position={Position.Right}
-                      id={output.name}
+            <>
+              <div style={{ height: SEP_H, background: '#333' }} />
+              <div style={{ padding: '2px 0' }}>
+                {outputs.map((output) => {
+                  const typeColor = getTypeColor(output.type);
+                  return (
+                    <div
+                      key={output.name}
                       style={{
-                        background: typeColor,
-                        width: 12,
-                        height: 12,
-                        border: '2px solid #1e1e2e',
-                        top: 'auto',
-                        position: 'relative',
-                        transform: 'none',
-                        right: -16,
+                        padding: '2px 8px',
+                        textAlign: 'right',
+                        fontSize: 10,
+                        color: '#a0aec0',
+                        height: ROW_H,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'flex-end',
+                        gap: 4,
+                        boxSizing: 'border-box',
+                        paddingRight: 18,
                       }}
-                    />
-                  </div>
-                );
-              })}
-            </div>
+                    >
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {output.name}
+                      </span>
+                      <span style={{
+                        fontSize: 8,
+                        color: typeColor,
+                        background: `${typeColor}22`,
+                        padding: '0px 3px',
+                        borderRadius: 2,
+                      }}>
+                        {output.type}
+                      </span>
+                      <span style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: typeColor,
+                        border: '1.5px solid #1e1e2e',
+                        flexShrink: 0,
+                      }} />
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </>
       )}
@@ -294,9 +369,10 @@ interface NodeInputFieldProps {
   typeName: string;
   choices?: string[];
   classType: string;
+  multiline?: boolean;
 }
 
-const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typeName, choices, classType }) => {
+const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typeName, choices, classType, multiline }) => {
   const updateNodeInput = useWorkflowStore((s) => s.updateNodeInput);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -321,8 +397,7 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
     [handleChange]
   );
 
-  const inputStyle: React.CSSProperties = {
-    width: 80,
+  const baseStyle: React.CSSProperties = {
     background: '#2a2a3e',
     border: '1px solid #444',
     borderRadius: 3,
@@ -330,6 +405,8 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
     padding: '1px 4px',
     fontSize: 10,
     outline: 'none',
+    flex: 1,
+    minWidth: 60,
   };
 
   if (typeName === 'BOOLEAN') {
@@ -338,7 +415,7 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
         type="checkbox"
         checked={!!value}
         onChange={(e) => handleChange(e.target.checked)}
-        style={{ width: 12, height: 12, cursor: 'pointer' }}
+        style={{ width: 12, height: 12, cursor: 'pointer', marginTop: 4 }}
       />
     );
   }
@@ -349,7 +426,7 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
         type="number"
         value={Number(value) || 0}
         onChange={(e) => handleChange(parseInt(e.target.value, 10) || 0)}
-        style={inputStyle}
+        style={{ ...baseStyle, width: 70 }}
       />
     );
   }
@@ -361,18 +438,34 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
         step="0.1"
         value={Number(value) || 0}
         onChange={(e) => handleChange(parseFloat(e.target.value) || 0)}
-        style={inputStyle}
+        style={{ ...baseStyle, width: 70 }}
       />
     );
   }
 
   if (typeName === 'STRING') {
+    if (multiline) {
+      return (
+        <textarea
+          value={String(value || '')}
+          onChange={(e) => handleChange(e.target.value)}
+          rows={3}
+          style={{
+            ...baseStyle,
+            width: '100%',
+            resize: 'vertical',
+            fontFamily: 'inherit',
+            lineHeight: 1.4,
+          }}
+        />
+      );
+    }
     return (
       <input
         type="text"
         value={String(value || '')}
         onChange={(e) => handleChange(e.target.value)}
-        style={{ ...inputStyle, width: 90 }}
+        style={{ ...baseStyle, width: 90 }}
       />
     );
   }
@@ -380,12 +473,12 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
   if (typeName === 'COMBO') {
     const isImageField = classType === 'LoadImage' && name === 'image';
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1 }}>
         <select
           value={String(value || '')}
           onChange={(e) => handleChange(e.target.value)}
           style={{
-            ...inputStyle,
+            ...baseStyle,
             width: isImageField ? 70 : 90,
             cursor: 'pointer',
           }}
