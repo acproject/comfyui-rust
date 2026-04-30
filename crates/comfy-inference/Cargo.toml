@@ -1,0 +1,27 @@
+[package]
+name = "comfy-inference"
+version = "0.1.0"
+edition = "2021"
+description = "Inference backend for ComfyUI-Rust, integrating stable-diffusion-cpp via FFI"
+
+[dependencies]
+comfy-core = { path = "../comfy-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+png = "0.17"
+tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+base64 = { version = "0.22", optional = true }
+tracing = "0.1"
+cc = { version = "1", optional = true }
+cmake = { version = "0.1", optional = true }
+
+[features]
+default = []
+local = []
+local-build = ["local", "cc", "cmake"]
+remote = ["reqwest", "base64"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }

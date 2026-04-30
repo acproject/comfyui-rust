@@ -1,0 +1,22 @@
+[package]
+name = "comfy-executor"
+version = "0.1.0"
+edition = "2021"
+description = "DAG execution engine integrating comfy-core and comfy-inference"
+
+[dependencies]
+comfy-core = { path = "../comfy-core" }
+comfy-inference = { path = "../comfy-inference", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
+tracing = "0.1"
+
+[features]
+default = []
+local = ["comfy-inference/local"]
+remote = ["comfy-inference/remote"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync"] }

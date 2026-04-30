@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/comfy-core",
+    "crates/comfy-inference",
+    "crates/comfy-executor",
+    "crates/comfy-api",
+]
+resolver = "2"
