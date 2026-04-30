@@ -1,6 +1,7 @@
 import { useState, useMemo, type FC } from 'react';
 import { Search, ChevronRight, ChevronDown } from 'lucide-react';
 import { useWorkflowStore } from '@/store/workflow';
+import { isCustomNode } from '@/components/nodes/nodeColors';
 import type { NodeClassDef } from '@/types/api';
 
 interface CategorizedNodes {
@@ -124,6 +125,9 @@ const NodePanel: FC = () => {
                       borderRadius: 3,
                       margin: '1px 6px',
                       transition: 'background 0.1s',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
                     }}
                     onMouseEnter={(e) => {
                       (e.currentTarget as HTMLElement).style.background = '#2a2a3e';
@@ -132,7 +136,22 @@ const NodePanel: FC = () => {
                       (e.currentTarget as HTMLElement).style.background = 'transparent';
                     }}
                   >
-                    {def.display_name || def.class_type}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {def.display_name || def.class_type}
+                    </span>
+                    {isCustomNode(def.class_type) && (
+                      <span style={{
+                        fontSize: 8,
+                        background: '#8b6bbf33',
+                        color: '#8b6bbf',
+                        padding: '1px 4px',
+                        borderRadius: 2,
+                        flexShrink: 0,
+                        marginLeft: 4,
+                      }}>
+                        custom
+                      </span>
+                    )}
                   </div>
                 ))}
             </div>

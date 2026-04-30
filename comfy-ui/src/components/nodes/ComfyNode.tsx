@@ -3,7 +3,7 @@ import { Handle, Position } from '@xyflow/react';
 import type { ComfyNodeData } from '@/store/workflow';
 import { useWorkflowStore } from '@/store/workflow';
 import { api } from '@/api/client';
-import { getTypeColor, getCategoryColor } from '@/components/nodes/nodeColors';
+import { getTypeColor, getCategoryColor, isCustomNode } from '@/components/nodes/nodeColors';
 
 interface ComfyNodeProps {
   id: string;
@@ -154,6 +154,17 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           {title}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {isCustomNode(classType) && (
+            <span style={{
+              fontSize: 8,
+              background: 'rgba(139,107,191,0.3)',
+              color: '#b39ddb',
+              padding: '1px 4px',
+              borderRadius: 3,
+            }}>
+              custom
+            </span>
+          )}
           <span style={{ fontSize: 9, opacity: 0.6 }}>#{id}</span>
           {isOutputNode && (
             <span style={{

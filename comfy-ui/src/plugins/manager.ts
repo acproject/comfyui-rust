@@ -1,4 +1,6 @@
 import type { NodeClassDef } from '@/types/api';
+import type { CustomNodeDef } from '@/types/customNode';
+import { customNodeDefToNodeClassDef } from '@/types/customNode';
 
 export interface ComfyPlugin {
   name: string;
@@ -43,6 +45,31 @@ class PluginManager {
     if (plugin) {
       plugin.onDestroy?.();
       this.plugins.delete(name);
+    }
+  }
+
+  registerCustomNodeDef(def: CustomNodeDef): void {
+    this.customNodes.set(def.classType, customNodeDefToNodeClassDef(def));
+  }
+
+  unregisterCustomNodeDef(classType: string): void {
+    this.customNodes.delete(classType);
+  }
+
+  syncCustomNodeDefs(defs: CustomNodeDef[]): void {
+    const existingPluginNodes = new Set<string>();
+    for (const [key] of this.customNodes) {
+      if (!key.startsWith('Custom_')) {
+        existingPluginNodes.add(key);
+      }
+    }
+    this.customNodes.clear();
+    for (const key of existingPluginNodes) {
+      const def = this.customNodes.get(key);
+      if (def) this.customNodes.set(key, def);
+    }
+    for (const def of defs) {
+      this.customNodes.set(def.classType, customNodeDefToNodeClassDef(def));
     }
   }
 

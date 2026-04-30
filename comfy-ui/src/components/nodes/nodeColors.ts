@@ -26,6 +26,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   latent: '#7a5bbf',
   image: '#bf5b7a',
   mask: '#8b5bbf',
+  custom: '#8b6bbf',
   _default: '#4a5568',
 };
 
@@ -36,4 +37,8 @@ function getCategoryColor(category: string): string {
   return CATEGORY_COLORS._default;
 }
 
-export { TYPE_COLORS, getTypeColor, CATEGORY_COLORS, getCategoryColor };
+function isCustomNode(classType: string): boolean {
+  return classType.startsWith('Custom_');
+}
+
+export { TYPE_COLORS, getTypeColor, CATEGORY_COLORS, getCategoryColor, isCustomNode };

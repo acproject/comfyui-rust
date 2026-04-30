@@ -1,5 +1,6 @@
 import { memo, type FC, useState, useRef, useEffect, useCallback } from 'react';
 import { useWorkflowStore } from '@/store/workflow';
+import { isCustomNode } from '@/components/nodes/nodeColors';
 
 interface ContextMenuState {
   x: number;
@@ -179,6 +180,9 @@ const ContextMenu: FC<ContextMenuProps> = memo(({ menu, onClose }) => {
                   padding: '4px 10px 4px 16px',
                   cursor: 'pointer',
                   transition: 'background 0.1s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLElement).style.background = '#2a2a3e';
@@ -187,7 +191,22 @@ const ContextMenu: FC<ContextMenuProps> = memo(({ menu, onClose }) => {
                   (e.currentTarget as HTMLElement).style.background = 'transparent';
                 }}
               >
-                {def.display_name || classType}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {def.display_name || classType}
+                </span>
+                {isCustomNode(classType) && (
+                  <span style={{
+                    fontSize: 8,
+                    background: '#8b6bbf33',
+                    color: '#8b6bbf',
+                    padding: '1px 4px',
+                    borderRadius: 2,
+                    flexShrink: 0,
+                    marginLeft: 4,
+                  }}>
+                    custom
+                  </span>
+                )}
               </div>
             ))}
           </div>

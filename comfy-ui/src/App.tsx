@@ -7,12 +7,13 @@ import { NodePanel } from '@/components/sidebar/NodePanel';
 import { PropertyPanel } from '@/components/sidebar/PropertyPanel';
 import ImageGallery from '@/components/sidebar/ImageGallery';
 import WorkflowManager from '@/components/sidebar/WorkflowManager';
+import { CustomNodePanel } from '@/components/custom/CustomNodePanel';
 import { AIAgent } from '@/components/agent/AIAgent';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useInitApp } from '@/hooks/useInitApp';
 import { useWorkflowStore } from '@/store/workflow';
 
-type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows';
+type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'custom';
 
 const AppInner: FC = () => {
   useWebSocket();
@@ -47,7 +48,7 @@ const AppInner: FC = () => {
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
         <div style={{ width: '260px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #2d3748', background: '#1a202c' }}>
           <div style={{ display: 'flex', borderBottom: '1px solid #2d3748' }}>
-            {(['nodes', 'properties', 'images', 'workflows'] as SidebarTab[]).map((tab) => (
+            {(['nodes', 'properties', 'images', 'workflows', 'custom'] as SidebarTab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -63,7 +64,7 @@ const AppInner: FC = () => {
                   textTransform: 'capitalize',
                 }}
               >
-                {tab}
+                {tab === 'custom' ? '⚙' : tab}
               </button>
             ))}
           </div>
@@ -77,6 +78,7 @@ const AppInner: FC = () => {
                 getCurrentWorkflow={handleGetCurrentWorkflow}
               />
             )}
+            {activeTab === 'custom' && <CustomNodePanel />}
           </div>
         </div>
 
