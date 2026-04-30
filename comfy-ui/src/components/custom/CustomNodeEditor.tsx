@@ -1,8 +1,10 @@
-import { useState, useCallback, type FC } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, type FC } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { CustomNodeDef, CustomNodeInputDef, CustomNodeOutputDef } from '@/types/customNode';
-import { PRIMITIVE_TYPES, COMMON_TYPES, generateClassType } from '@/types/customNode';
+import { PRIMITIVE_TYPES, COMPLEX_TYPES, collectTypesFromObjectInfo, generateClassType } from '@/types/customNode';
 import type { IoType } from '@/types/api';
+import { useWorkflowStore } from '@/store/workflow';
 
 interface CustomNodeEditorProps {
   initialNode?: CustomNodeDef | null;
@@ -10,10 +12,23 @@ interface CustomNodeEditorProps {
   onCancel: () => void;
 }
 
-const ALL_TYPES: IoType[] = [...PRIMITIVE_TYPES, 'COMBO', ...COMMON_TYPES, '*'];
-
 const CustomNodeEditor: FC<CustomNodeEditorProps> = ({ initialNode, onSave, onCancel }) => {
   const isEditing = !!initialNode;
+  const objectInfo = useWorkflowStore((s) => s.objectInfo);
+
+  const allTypes = useMemo(() => {
+    const dynamicTypes = collectTypesFromObjectInfo(objectInfo);
+    const staticTypes = [...PRIMITIVE_TYPES, ...COMPLEX_TYPES, '*'];
+    const merged = new Set<IoType>([...staticTypes, ...dynamicTypes]);
+    return Array.from(merged).sort((a, b) => {
+      const aIdx = staticTypes.indexOf(a);
+      const bIdx = staticTypes.indexOf(b);
+      if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+      if (aIdx !== -1) return -1;
+      if (bIdx !== -1) return 1;
+      return a.localeCompare(b);
+    });
+  }, [objectInfo]);
 
   const [displayName, setDisplayName] = useState(initialNode?.displayName || '');
   const [classType, setClassType] = useState(initialNode?.classType || '');
@@ -225,6 +240,7 @@ const CustomNodeEditor: FC<CustomNodeEditorProps> = ({ initialNode, onSave, onCa
                 onToggle={() => toggleInputExpand(inp.name)}
                 onUpdate={(updates) => updateInput(i, updates)}
                 onRemove={() => removeInput(i)}
+                allTypes={allTypes}
               />
             ))}
             <button onClick={addInput} style={addBtnStyle}>
@@ -247,15 +263,12 @@ const CustomNodeEditor: FC<CustomNodeEditorProps> = ({ initialNode, onSave, onCa
                   placeholder="Output name"
                   style={{ ...inputStyle, flex: 1 }}
                 />
-                <select
+                <TypeCombobox
                   value={out.type}
-                  onChange={(e) => updateOutput(i, { type: e.target.value as IoType })}
-                  style={{ ...selectStyle, width: 120 }}
-                >
-                  {ALL_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
+                  onChange={(t) => updateOutput(i, { type: t })}
+                  allTypes={allTypes}
+                  style={{ width: 140 }}
+                />
                 <button onClick={() => removeOutput(i)} style={removeBtnStyle}>
                   <Trash2 size={14} />
                 </button>
@@ -303,15 +316,188 @@ const CustomNodeEditor: FC<CustomNodeEditorProps> = ({ initialNode, onSave, onCa
   );
 };
 
+interface TypeComboboxProps {
+  value: IoType;
+  onChange: (type: IoType) => void;
+  allTypes: IoType[];
+  style?: React.CSSProperties;
+}
+
+const TypeCombobox: FC<TypeComboboxProps> = ({ value, onChange, allTypes, style }) => {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('');
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        triggerRef.current && triggerRef.current.contains(e.target as Node)
+      ) return;
+      if (
+        dropdownRef.current && dropdownRef.current.contains(e.target as Node)
+      ) return;
+      setOpen(false);
+      setFilter('');
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const filtered = filter
+    ? allTypes.filter((t) => t.toLowerCase().includes(filter.toLowerCase()))
+    : allTypes;
+
+  const isCustom = value && !allTypes.includes(value);
+
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
+
+  useEffect(() => {
+    if (open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setDropdownPos({
+        top: rect.bottom + 2,
+        left: rect.left,
+        width: rect.width,
+      });
+    }
+  }, [open]);
+
+  const selectType = (t: IoType) => {
+    onChange(t);
+    setOpen(false);
+    setFilter('');
+  };
+
+  return (
+    <div ref={triggerRef} style={{ position: 'relative', ...style }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          background: '#2a2a3e',
+          border: open ? '1px solid #6a8abf' : '1px solid #444',
+          borderRadius: 4,
+          color: '#e2e8f0',
+          fontSize: 12,
+        }}
+      >
+        <input
+          type="text"
+          value={open ? filter : value}
+          onChange={(e) => {
+            setFilter(e.target.value);
+            onChange(e.target.value as IoType);
+          }}
+          onFocus={() => {
+            setOpen(true);
+            setFilter('');
+          }}
+          placeholder="Type or select..."
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: '#e2e8f0',
+            fontSize: 12,
+            outline: 'none',
+            padding: '4px 6px',
+            width: '100%',
+            boxSizing: 'border-box',
+          }}
+        />
+        <div
+          onClick={() => {
+            if (open) {
+              setOpen(false);
+              setFilter('');
+            } else {
+              setOpen(true);
+              setFilter('');
+            }
+          }}
+          style={{ padding: '0 4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+        >
+          <ChevronDown size={12} style={{ opacity: 0.5 }} />
+        </div>
+      </div>
+
+      {open && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{
+            position: 'fixed',
+            top: dropdownPos.top,
+            left: dropdownPos.left,
+            width: Math.max(dropdownPos.width, 160),
+            zIndex: 9999,
+            background: '#252538',
+            border: '1px solid #444',
+            borderRadius: 4,
+            maxHeight: 200,
+            overflowY: 'auto',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+          }}
+        >
+          {isCustom && value && !filter && (
+            <div
+              onMouseDown={(e) => {
+                e.preventDefault();
+                selectType(value);
+              }}
+              style={{
+                padding: '5px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                color: '#8ab4f8',
+                background: '#1a2a3e',
+              }}
+            >
+              {value} (custom)
+            </div>
+          )}
+          {filtered.map((t) => (
+            <div
+              key={t}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                selectType(t);
+              }}
+              style={{
+                padding: '5px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                color: t === value ? '#8ab4f8' : '#e2e8f0',
+                background: t === value ? '#1a2a3e' : 'transparent',
+              }}
+              onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#1a2a3e'; }}
+              onMouseLeave={(e) => { (e.target as HTMLElement).style.background = t === value ? '#1a2a3e' : 'transparent'; }}
+            >
+              {t}
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div style={{ padding: '5px 8px', fontSize: 11, color: '#718096' }}>
+              No matches — type custom type name
+            </div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+};
+
 interface InputEditorProps {
   input: CustomNodeInputDef;
   expanded: boolean;
   onToggle: () => void;
   onUpdate: (updates: Partial<CustomNodeInputDef>) => void;
   onRemove: () => void;
+  allTypes: IoType[];
 }
 
-const InputEditor: FC<InputEditorProps> = ({ input, expanded, onToggle, onUpdate, onRemove }) => {
+const InputEditor: FC<InputEditorProps> = ({ input, expanded, onToggle, onUpdate, onRemove, allTypes }) => {
   const isCombo = input.type === 'COMBO' || (input.extra?.choices && input.extra.choices.length > 0);
   const [choicesText, setChoicesText] = useState(
     input.extra?.choices?.join(', ') || ''
@@ -330,7 +516,6 @@ const InputEditor: FC<InputEditorProps> = ({ input, expanded, onToggle, onUpdate
       border: '1px solid #333',
       borderRadius: 4,
       marginBottom: 6,
-      overflow: 'hidden',
     }}>
       <div
         style={{
@@ -352,23 +537,21 @@ const InputEditor: FC<InputEditorProps> = ({ input, expanded, onToggle, onUpdate
           style={{ ...inputStyle, flex: 1, background: 'transparent', border: 'none', padding: 0 }}
           placeholder="Input name"
         />
-        <select
-          value={isCombo ? 'COMBO' : input.type}
-          onChange={(e) => {
-            const newType = e.target.value as IoType;
-            onUpdate({ type: newType });
-            if (newType !== 'COMBO') {
-              setChoicesText('');
-              onUpdate({ extra: { ...input.extra, choices: undefined } });
-            }
-          }}
-          onClick={(e) => e.stopPropagation()}
-          style={{ ...selectStyle, width: 100, fontSize: 10 }}
-        >
-          {ALL_TYPES.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
+        <div onClick={(e) => e.stopPropagation()}>
+          <TypeCombobox
+            value={isCombo ? 'COMBO' : input.type}
+            onChange={(t) => {
+              if (t !== 'COMBO') {
+                setChoicesText('');
+                onUpdate({ type: t, extra: { ...input.extra, choices: undefined } });
+              } else {
+                onUpdate({ type: t });
+              }
+            }}
+            allTypes={allTypes}
+            style={{ width: 120 }}
+          />
+        </div>
         <label
           style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: '#a0aec0' }}
           onClick={(e) => e.stopPropagation()}
@@ -544,17 +727,6 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   width: '100%',
   boxSizing: 'border-box',
-};
-
-const selectStyle: React.CSSProperties = {
-  background: '#2a2a3e',
-  border: '1px solid #444',
-  borderRadius: 4,
-  color: '#e2e8f0',
-  padding: '4px 6px',
-  fontSize: 12,
-  outline: 'none',
-  cursor: 'pointer',
 };
 
 const addBtnStyle: React.CSSProperties = {

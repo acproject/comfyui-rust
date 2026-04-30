@@ -18,6 +18,13 @@
       "name": "input_2",
       "required": true,
       "type": "STRING"
+    },
+    {
+      "default": "",
+      "extra": {},
+      "name": "input_3",
+      "required": true,
+      "type": "CLIP"
     }
   ],
   "isOutputNode": false,
@@ -25,7 +32,11 @@
     {
       "name": "output_1",
       "type": "STRING"
+    },
+    {
+      "name": "output_2",
+      "type": "Clip"
     }
   ],
-  "updatedAt": 1777547562441
+  "updatedAt": 1777556732478
 }

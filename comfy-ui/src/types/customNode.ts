@@ -1,4 +1,4 @@
-import type { NodeClassDef, IoType } from '@/types/api';
+import type { NodeClassDef, IoType, ObjectInfoMap } from '@/types/api';
 
 export interface CustomNodeInputDef {
   name: string;
@@ -83,7 +83,7 @@ export const PRIMITIVE_TYPES: IoType[] = [
   'BOOLEAN',
 ];
 
-export const COMMON_TYPES: IoType[] = [
+export const COMPLEX_TYPES: IoType[] = [
   'MODEL',
   'CLIP',
   'VAE',
@@ -92,7 +92,40 @@ export const COMMON_TYPES: IoType[] = [
   'LATENT',
   'CONDITIONING',
   'CONTROL_NET',
+  'UPSCALE_MODEL',
+  'CLIP_VISION',
+  'STYLE_MODEL',
+  'GLIGENBOX',
+  'NOISE',
+  'SIGMAS',
+  'GUIDER',
+  'SAMPLER',
+  'COMBO',
 ];
+
+export const COMMON_TYPES: IoType[] = [...COMPLEX_TYPES];
+
+export function collectTypesFromObjectInfo(objectInfo: ObjectInfoMap): IoType[] {
+  const types = new Set<IoType>();
+  for (const def of Object.values(objectInfo)) {
+    if (def.input_types?.required) {
+      for (const spec of Object.values(def.input_types.required)) {
+        if (spec.type_name) types.add(spec.type_name as IoType);
+      }
+    }
+    if (def.input_types?.optional) {
+      for (const spec of Object.values(def.input_types.optional)) {
+        if (spec.type_name) types.add(spec.type_name as IoType);
+      }
+    }
+    if (def.output_types) {
+      for (const t of def.output_types) {
+        types.add(t);
+      }
+    }
+  }
+  return Array.from(types).sort();
+}
 
 export function generateClassType(displayName: string): string {
   const sanitized = displayName
