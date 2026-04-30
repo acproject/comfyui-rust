@@ -647,3 +647,93 @@ pub async fn get_config(
     let config = crate::config::ComfyConfig::from_env();
     Ok(Json(serde_json::to_value(config).unwrap_or(Value::Null)))
 }
+
+pub async fn list_custom_nodes(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let custom_nodes_dir = &state.custom_nodes_dir;
+    if !custom_nodes_dir.exists() {
+        return Ok(Json(json!({ "nodes": [] })));
+    }
+
+    let mut nodes = Vec::new();
+    let entries = std::fs::read_dir(custom_nodes_dir).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| ApiError::Internal(e.to_string()))?;
+        let path = entry.path();
+        if path.extension().map(|e| e == "json").unwrap_or(false) {
+            let content = std::fs::read_to_string(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
+            if let Ok(node_value) = serde_json::from_str::<Value>(&content) {
+                let filename = path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                nodes.push(json!({
+                    "filename": filename,
+                    "definition": node_value,
+                }));
+            }
+        }
+    }
+
+    Ok(Json(json!({ "nodes": nodes })))
+}
+
+#[derive(Deserialize)]
+pub struct SaveCustomNodeRequest {
+    pub filename: String,
+    pub definition: serde_json::Value,
+}
+
+pub async fn save_custom_node(
+    State(state): State<AppState>,
+    Json(body): Json<SaveCustomNodeRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let custom_nodes_dir = &state.custom_nodes_dir;
+    std::fs::create_dir_all(custom_nodes_dir).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let safe_filename = body.filename
+        .replace("..", "")
+        .replace("/", "")
+        .replace("\\", "");
+    if safe_filename.is_empty() {
+        return Err(ApiError::BadRequest("Invalid filename".to_string()));
+    }
+
+    let filename = format!("{}.json", safe_filename);
+    let path = custom_nodes_dir.join(&filename);
+
+    let content = serde_json::to_string_pretty(&body.definition)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    std::fs::write(&path, content).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(json!({
+        "filename": safe_filename,
+        "path": filename,
+    })))
+}
+
+pub async fn delete_custom_node(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let safe_filename = filename
+        .replace("..", "")
+        .replace("/", "")
+        .replace("\\", "");
+    if safe_filename.is_empty() {
+        return Err(ApiError::BadRequest("Invalid filename".to_string()));
+    }
+
+    let path = state.custom_nodes_dir.join(format!("{}.json", safe_filename));
+
+    if !path.exists() {
+        return Err(ApiError::NotFound(format!("Custom node not found: {}", safe_filename)));
+    }
+
+    std::fs::remove_file(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(axum::http::StatusCode::OK)
+}

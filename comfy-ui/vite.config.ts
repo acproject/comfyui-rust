@@ -30,6 +30,7 @@ export default defineConfig({
       '/workflow': 'http://127.0.0.1:8188',
       '/workflows': 'http://127.0.0.1:8188',
       '/config': 'http://127.0.0.1:8188',
+      '/custom_nodes': 'http://127.0.0.1:8188',
       '/ws': {
         target: 'ws://127.0.0.1:8188',
         ws: true,

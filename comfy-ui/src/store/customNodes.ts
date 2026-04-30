@@ -2,36 +2,19 @@ import { create } from 'zustand';
 import type { CustomNodeDef } from '@/types/customNode';
 import { customNodeDefToNodeClassDef } from '@/types/customNode';
 import type { NodeClassDef, ObjectInfoMap } from '@/types/api';
-
-const STORAGE_KEY = 'comfyui_custom_nodes';
-
-function loadFromStorage(): CustomNodeDef[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as CustomNodeDef[];
-  } catch {
-    return [];
-  }
-}
-
-function saveToStorage(nodes: CustomNodeDef[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nodes));
-  } catch (e) {
-    console.error('Failed to save custom nodes:', e);
-  }
-}
+import { api } from '@/api/client';
 
 interface CustomNodesState {
   customNodes: CustomNodeDef[];
+  loaded: boolean;
   editingNode: CustomNodeDef | null;
 
-  addCustomNode: (node: CustomNodeDef) => void;
-  updateCustomNode: (id: string, updates: Partial<CustomNodeDef>) => void;
-  removeCustomNode: (id: string) => void;
-  duplicateCustomNode: (id: string) => void;
-  importCustomNodes: (nodes: CustomNodeDef[]) => void;
+  loadFromServer: () => Promise<void>;
+  addCustomNode: (node: CustomNodeDef) => Promise<void>;
+  updateCustomNode: (id: string, updates: Partial<CustomNodeDef>) => Promise<void>;
+  removeCustomNode: (id: string) => Promise<void>;
+  duplicateCustomNode: (id: string) => Promise<void>;
+  importCustomNodes: (nodes: CustomNodeDef[]) => Promise<void>;
   exportCustomNodes: () => string;
 
   setEditingNode: (node: CustomNodeDef | null) => void;
@@ -42,33 +25,60 @@ interface CustomNodesState {
 }
 
 export const useCustomNodesStore = create<CustomNodesState>((set, get) => ({
-  customNodes: loadFromStorage(),
+  customNodes: [],
+  loaded: false,
   editingNode: null,
 
-  addCustomNode: (node) => {
-    const { customNodes } = get();
-    const updated = [...customNodes, node];
-    saveToStorage(updated);
-    set({ customNodes: updated });
+  loadFromServer: async () => {
+    try {
+      const result = await api.listCustomNodes();
+      const nodes: CustomNodeDef[] = [];
+      for (const item of result.nodes) {
+        try {
+          const def = item.definition as CustomNodeDef;
+          if (def && def.classType) {
+            nodes.push(def);
+          }
+        } catch {
+          console.warn(`Failed to parse custom node: ${item.filename}`);
+        }
+      }
+      set({ customNodes: nodes, loaded: true });
+    } catch (err) {
+      console.error('Failed to load custom nodes from server:', err);
+      set({ loaded: true });
+    }
   },
 
-  updateCustomNode: (id, updates) => {
+  addCustomNode: async (node) => {
+    await api.saveCustomNode(node.classType, node);
     const { customNodes } = get();
-    const updated = customNodes.map((n) =>
-      n.id === id ? { ...n, ...updates, updatedAt: Date.now() } : n
-    );
-    saveToStorage(updated);
-    set({ customNodes: updated });
+    set({ customNodes: [...customNodes, node] });
   },
 
-  removeCustomNode: (id) => {
+  updateCustomNode: async (id, updates) => {
     const { customNodes } = get();
-    const updated = customNodes.filter((n) => n.id !== id);
-    saveToStorage(updated);
-    set({ customNodes: updated });
+    const existing = customNodes.find((n) => n.id === id);
+    if (!existing) return;
+
+    const updated = { ...existing, ...updates, updatedAt: Date.now() };
+    await api.saveCustomNode(updated.classType, updated);
+
+    set({
+      customNodes: customNodes.map((n) => (n.id === id ? updated : n)),
+    });
   },
 
-  duplicateCustomNode: (id) => {
+  removeCustomNode: async (id) => {
+    const { customNodes } = get();
+    const node = customNodes.find((n) => n.id === id);
+    if (!node) return;
+
+    await api.deleteCustomNode(node.classType);
+    set({ customNodes: customNodes.filter((n) => n.id !== id) });
+  },
+
+  duplicateCustomNode: async (id) => {
     const { customNodes } = get();
     const source = customNodes.find((n) => n.id === id);
     if (!source) return;
@@ -82,19 +92,17 @@ export const useCustomNodesStore = create<CustomNodesState>((set, get) => ({
       createdAt: now,
       updatedAt: now,
     };
-    const updated = [...customNodes, dup];
-    saveToStorage(updated);
-    set({ customNodes: updated });
+
+    await api.saveCustomNode(dup.classType, dup);
+    set({ customNodes: [...customNodes, dup] });
   },
 
-  importCustomNodes: (nodes) => {
+  importCustomNodes: async (nodes) => {
     const { customNodes } = get();
-    const existingIds = new Set(customNodes.map((n) => n.id));
     const existingClassTypes = new Set(customNodes.map((n) => n.classType));
 
     const toAdd: CustomNodeDef[] = [];
     for (const node of nodes) {
-      if (existingIds.has(node.id)) continue;
       if (existingClassTypes.has(node.classType)) {
         node.classType = `${node.classType}_imported`;
         node.displayName = `${node.displayName} (Imported)`;
@@ -102,12 +110,12 @@ export const useCustomNodesStore = create<CustomNodesState>((set, get) => ({
       node.id = crypto.randomUUID();
       node.createdAt = Date.now();
       node.updatedAt = Date.now();
+
+      await api.saveCustomNode(node.classType, node);
       toAdd.push(node);
     }
 
-    const updated = [...customNodes, ...toAdd];
-    saveToStorage(updated);
-    set({ customNodes: updated });
+    set({ customNodes: [...customNodes, ...toAdd] });
   },
 
   exportCustomNodes: () => {

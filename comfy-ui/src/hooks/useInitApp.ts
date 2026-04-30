@@ -16,6 +16,7 @@ export function useInitApp() {
         const customNodes = pluginManager.getCustomNodes();
 
         const customNodesStore = useCustomNodesStore.getState();
+        await customNodesStore.loadFromServer();
         const merged = customNodesStore.mergeWithObjectInfo(objectInfo);
 
         if (customNodes.size > 0) {

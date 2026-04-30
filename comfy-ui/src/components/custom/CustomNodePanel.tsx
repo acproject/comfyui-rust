@@ -37,25 +37,25 @@ const CustomNodePanel: FC = () => {
     setShowEditor(true);
   }, []);
 
-  const handleSave = useCallback((node: CustomNodeDef) => {
+  const handleSave = useCallback(async (node: CustomNodeDef) => {
     if (editingNode) {
-      updateCustomNode(node.id, node);
+      await updateCustomNode(node.id, node);
     } else {
-      addCustomNode(node);
+      await addCustomNode(node);
     }
     setShowEditor(false);
     setEditingNode(null);
     setTimeout(refreshObjectInfo, 0);
   }, [editingNode, addCustomNode, updateCustomNode, refreshObjectInfo]);
 
-  const handleDelete = useCallback((id: string) => {
-    removeCustomNode(id);
+  const handleDelete = useCallback(async (id: string) => {
+    await removeCustomNode(id);
     setConfirmDelete(null);
     setTimeout(refreshObjectInfo, 0);
   }, [removeCustomNode, refreshObjectInfo]);
 
-  const handleDuplicate = useCallback((id: string) => {
-    duplicateCustomNode(id);
+  const handleDuplicate = useCallback(async (id: string) => {
+    await duplicateCustomNode(id);
     setTimeout(refreshObjectInfo, 0);
   }, [duplicateCustomNode, refreshObjectInfo]);
 
@@ -75,11 +75,11 @@ const CustomNodePanel: FC = () => {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const nodes = JSON.parse(ev.target?.result as string) as CustomNodeDef[];
         if (Array.isArray(nodes)) {
-          importCustomNodes(nodes);
+          await importCustomNodes(nodes);
           setTimeout(refreshObjectInfo, 0);
         }
       } catch {

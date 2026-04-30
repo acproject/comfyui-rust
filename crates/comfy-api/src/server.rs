@@ -63,6 +63,9 @@ impl ComfyServer {
             .route("/workflow", axum::routing::get(routes::get_load_workflow))
             .route("/workflows", axum::routing::get(routes::get_list_workflows))
             .route("/config", axum::routing::get(routes::get_config))
+            .route("/custom_nodes", axum::routing::get(routes::list_custom_nodes))
+            .route("/custom_nodes", axum::routing::post(routes::save_custom_node))
+            .route("/custom_nodes/{filename}", axum::routing::delete(routes::delete_custom_node))
             .with_state(self.state.clone());
 
         let mut router = Router::new().merge(api_routes);

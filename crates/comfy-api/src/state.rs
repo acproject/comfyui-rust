@@ -14,6 +14,7 @@ pub struct AppState {
     pub registry: Arc<Mutex<NodeRegistry>>,
     pub images: Arc<ImageStore>,
     pub input_dir: PathBuf,
+    pub custom_nodes_dir: PathBuf,
 }
 
 impl AppState {
@@ -28,6 +29,10 @@ impl AppState {
             .unwrap_or_else(|_| "input".to_string()));
         std::fs::create_dir_all(&input_dir).ok();
 
+        let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
+            .unwrap_or_else(|_| "custom_nodes".to_string()));
+        std::fs::create_dir_all(&custom_nodes_dir).ok();
+
         let executor = Arc::new(Executor::new(registry.clone(), Arc::new(NullBackend)));
         let registry = Arc::new(Mutex::new(registry));
         let queue = Arc::new(PromptQueue::new());
@@ -41,6 +46,7 @@ impl AppState {
             registry,
             images,
             input_dir,
+            custom_nodes_dir,
         }
     }
 
@@ -48,6 +54,10 @@ impl AppState {
         let input_dir = PathBuf::from(std::env::var("COMFY_INPUT_DIR")
             .unwrap_or_else(|_| "input".to_string()));
         std::fs::create_dir_all(&input_dir).ok();
+
+        let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
+            .unwrap_or_else(|_| "custom_nodes".to_string()));
+        std::fs::create_dir_all(&custom_nodes_dir).ok();
 
         let registry = Arc::new(Mutex::new(registry));
         let queue = Arc::new(PromptQueue::new());
@@ -61,6 +71,7 @@ impl AppState {
             registry,
             images,
             input_dir,
+            custom_nodes_dir,
         }
     }
 
@@ -71,6 +82,10 @@ impl AppState {
         let input_dir = PathBuf::from(std::env::var("COMFY_INPUT_DIR")
             .unwrap_or_else(|_| "input".to_string()));
         std::fs::create_dir_all(&input_dir).ok();
+
+        let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
+            .unwrap_or_else(|_| "custom_nodes".to_string()));
+        std::fs::create_dir_all(&custom_nodes_dir).ok();
 
         let output_dir = std::env::var("COMFY_OUTPUT_DIR")
             .unwrap_or_else(|_| "output".to_string());
@@ -87,6 +102,7 @@ impl AppState {
             registry,
             images,
             input_dir,
+            custom_nodes_dir,
         }
     }
 }
@@ -100,6 +116,7 @@ impl Clone for AppState {
             registry: self.registry.clone(),
             images: self.images.clone(),
             input_dir: self.input_dir.clone(),
+            custom_nodes_dir: self.custom_nodes_dir.clone(),
         }
     }
 }

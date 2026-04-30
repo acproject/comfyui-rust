@@ -1,0 +1,31 @@
+{
+  "category": "custom",
+  "classType": "Custom_c",
+  "createdAt": 1777547562441,
+  "description": "",
+  "displayName": "test01",
+  "id": "152b6923-2ef8-4046-a1f6-ec4897a8733b",
+  "inputs": [
+    {
+      "default": "",
+      "name": "input_1",
+      "required": true,
+      "type": "STRING"
+    },
+    {
+      "default": "",
+      "extra": {},
+      "name": "input_2",
+      "required": true,
+      "type": "STRING"
+    }
+  ],
+  "isOutputNode": false,
+  "outputs": [
+    {
+      "name": "output_1",
+      "type": "STRING"
+    }
+  ],
+  "updatedAt": 1777547562441
+}

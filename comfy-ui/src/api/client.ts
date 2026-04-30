@@ -205,4 +205,26 @@ export const api = {
     if (subfolder) params.set('subfolder', subfolder);
     return `${API_BASE}/view_input?${params.toString()}`;
   },
+
+  async listCustomNodes(): Promise<{ nodes: Array<{ filename: string; definition: unknown }> }> {
+    return fetchJson('/custom_nodes');
+  },
+
+  async saveCustomNode(filename: string, definition: unknown): Promise<{ filename: string; path: string }> {
+    return fetchJson('/custom_nodes', {
+      method: 'POST',
+      body: JSON.stringify({ filename, definition }),
+    });
+  },
+
+  async deleteCustomNode(filename: string): Promise<void> {
+    const response = await fetch(`${API_BASE}/custom_nodes/${encodeURIComponent(filename)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
+      throw new Error(error.error?.message || `Delete failed: ${response.status}`);
+    }
+  },
 };
