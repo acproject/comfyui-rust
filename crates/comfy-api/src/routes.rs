@@ -967,3 +967,104 @@ pub async fn get_agent_models(
         Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
+
+pub async fn get_model_download_list() -> Result<impl IntoResponse, ApiError> {
+    let list = crate::model_downloads::get_model_download_list();
+    Ok(Json(json!(list)))
+}
+
+#[derive(Deserialize)]
+pub struct DownloadModelRequest {
+    pub url: String,
+    pub model_type: String,
+    pub filename: Option<String>,
+}
+
+pub async fn post_download_model(
+    State(state): State<AppState>,
+    Json(body): Json<DownloadModelRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let sub_dir = config.get_model_type_dir(&body.model_type);
+    let dir = state.models_dir.join(&sub_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let filename = body.filename.clone().or_else(|| {
+        body.url
+            .split('/')
+            .next_back()
+            .map(|s| {
+                let s = s.to_string();
+                if s.contains('?') {
+                    s.split('?').next().unwrap_or(&s).to_string()
+                } else {
+                    s
+                }
+            })
+    }).unwrap_or_else(|| "model.bin".to_string());
+
+    let file_path = dir.join(&filename);
+
+    if file_path.exists() {
+        return Err(ApiError::BadRequest(format!("File already exists: {}", filename)));
+    }
+
+    let url = body.url.clone();
+    let file_path_clone = file_path.clone();
+    let filename_clone = filename.clone();
+
+    tokio::spawn(async move {
+        match reqwest::get(&url).await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    use tokio::io::AsyncWriteExt;
+                    let mut file = match tokio::fs::File::create(&file_path_clone).await {
+                        Ok(f) => f,
+                        Err(e) => {
+                            tracing::error!("Failed to create file: {}", e);
+                            return;
+                        }
+                    };
+                    let mut stream = response.bytes_stream();
+                    let mut total: u64 = 0;
+                    use futures::StreamExt;
+                    while let Some(chunk) = stream.next().await {
+                        match chunk {
+                            Ok(bytes) => {
+                                total += bytes.len() as u64;
+                                if let Err(e) = file.write_all(&bytes).await {
+                                    tracing::error!("Failed to write chunk: {}", e);
+                                    let _ = tokio::fs::remove_file(&file_path_clone).await;
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to read chunk: {}", e);
+                                let _ = tokio::fs::remove_file(&file_path_clone).await;
+                                return;
+                            }
+                        }
+                    }
+                    if let Err(e) = file.flush().await {
+                        tracing::error!("Failed to flush file: {}", e);
+                        let _ = tokio::fs::remove_file(&file_path_clone).await;
+                        return;
+                    }
+                    tracing::info!("Downloaded model: {} ({} bytes)", filename_clone, total);
+                } else {
+                    tracing::error!("Download failed with status: {}", response.status());
+                }
+            }
+            Err(e) => {
+                tracing::error!("Download request failed: {}", e);
+            }
+        }
+    });
+
+    Ok(Json(json!({
+        "status": "downloading",
+        "filename": filename,
+        "model_type": body.model_type,
+        "url": body.url,
+    })))
+}

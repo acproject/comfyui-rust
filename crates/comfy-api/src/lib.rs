@@ -2,6 +2,7 @@ pub mod agent;
 pub mod config;
 pub mod error;
 pub mod images;
+pub mod model_downloads;
 pub mod queue;
 pub mod routes;
 pub mod server;

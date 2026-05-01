@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, type FC } from 'react';
-import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive, Settings, Save, CheckCircle, AlertCircle } from 'lucide-react';
+import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive, Settings, Save, CheckCircle, AlertCircle, Download, ExternalLink, Filter } from 'lucide-react';
 import { useModelManagerStore, MODEL_TYPES } from '@/store/models';
 import { api } from '@/api/client';
-import type { ModelFileInfo, ServerConfig } from '@/types/api';
+import type { ModelFileInfo, ServerConfig, ModelDownloadEntry } from '@/types/api';
 
 const MODEL_TYPE_ICONS: Record<string, string> = {
   checkpoints: '🏛️',
@@ -72,6 +72,24 @@ const ModelManager: FC = () => {
   const [savingConfig, setSavingConfig] = useState(false);
   const [saveResult, setSaveResult] = useState<'success' | 'error' | null>(null);
 
+  const [showDownloads, setShowDownloads] = useState(false);
+  const [downloadList, setDownloadList] = useState<ModelDownloadEntry[]>([]);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const [downloadLoaded, setDownloadLoaded] = useState(false);
+  const [downloadCategory, setDownloadCategory] = useState<string>('all');
+  const [downloadingUrls, setDownloadingUrls] = useState<Set<string>>(new Set());
+  const [downloadSearch, setDownloadSearch] = useState('');
+
+  const loadDownloadList = () => {
+    setDownloadLoading(true);
+    api.getModelDownloadList().then((list) => {
+      setDownloadList(list);
+      setDownloadLoaded(true);
+    }).catch(() => {}).finally(() => {
+      setDownloadLoading(false);
+    });
+  };
+
   useEffect(() => {
     loadModels();
   }, [loadModels]);
@@ -91,6 +109,30 @@ const ModelManager: FC = () => {
       }).catch(() => {});
     }
   }, [configLoaded]);
+
+  useEffect(() => {
+    if (showDownloads && !downloadLoaded) {
+      loadDownloadList();
+    }
+  }, [showDownloads, downloadLoaded]);
+
+  const handleDownload = async (url: string, modelType: string, filename?: string) => {
+    const key = `${url}:${modelType}`;
+    setDownloadingUrls((prev) => new Set(prev).add(key));
+    try {
+      await api.downloadModel({ url, model_type: modelType, filename });
+    } catch {
+    } finally {
+      setTimeout(() => {
+        setDownloadingUrls((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+        loadModels();
+      }, 2000);
+    }
+  };
 
   const handleSaveConfig = async () => {
     setSavingConfig(true);
@@ -407,6 +449,238 @@ const ModelManager: FC = () => {
                 保存失败，请重试
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      <div style={{ borderBottom: '1px solid #333' }}>
+        <div
+          style={{
+            padding: '6px 10px',
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#a0aec0',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            userSelect: 'none',
+          }}
+          onClick={() => setShowDownloads(!showDownloads)}
+        >
+          {showDownloads ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <Download size={12} />
+          <span>模型下载</span>
+          <span style={{ fontSize: 9, color: '#555', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+            {downloadList.length > 0 ? `${downloadList.length} 个模型` : ''}
+            {showDownloads && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setDownloadLoaded(false); }}
+                disabled={downloadLoading}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: downloadLoading ? 'wait' : 'pointer',
+                  color: '#718096',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+                title="刷新下载列表"
+              >
+                <RefreshCw size={11} style={{ animation: downloadLoading ? 'spin 1s linear infinite' : 'none' }} />
+              </button>
+            )}
+          </span>
+        </div>
+
+        {showDownloads && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ padding: '4px 10px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  background: '#2a2a3e',
+                  borderRadius: 6,
+                  padding: '4px 8px',
+                }}
+              >
+                <Filter size={11} style={{ color: '#718096', flexShrink: 0 }} />
+                <input
+                  type="text"
+                  placeholder="搜索模型..."
+                  value={downloadSearch}
+                  onChange={(e) => setDownloadSearch(e.target.value)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    color: '#e2e8f0',
+                    fontSize: 11,
+                    width: '100%',
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ padding: '0 10px', display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+              {['all', ...Array.from(new Set(downloadList.map((d) => d.category)))].map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setDownloadCategory(cat)}
+                  style={{
+                    background: downloadCategory === cat ? '#3b5998' : '#2a2a3e',
+                    border: '1px solid',
+                    borderColor: downloadCategory === cat ? '#5a7abf' : '#444',
+                    borderRadius: 3,
+                    color: downloadCategory === cat ? '#e2e8f0' : '#718096',
+                    fontSize: 9,
+                    padding: '2px 6px',
+                    cursor: 'pointer',
+                    transition: 'all 0.1s',
+                  }}
+                >
+                  {cat === 'all' ? '全部' : cat}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ maxHeight: 300, overflowY: 'auto', padding: '2px 0' }}>
+              {downloadLoading && (
+                <div style={{ padding: '8px 10px', fontSize: 10, color: '#718096', textAlign: 'center' }}>
+                  加载中...
+                </div>
+              )}
+
+              {!downloadLoading && (() => {
+                const filtered = downloadList.filter((entry) => {
+                  if (downloadCategory !== 'all' && entry.category !== downloadCategory) return false;
+                  if (downloadSearch) {
+                    const q = downloadSearch.toLowerCase();
+                    return entry.name.toLowerCase().includes(q) ||
+                      entry.description.toLowerCase().includes(q) ||
+                      entry.category.toLowerCase().includes(q);
+                  }
+                  return true;
+                });
+
+                return filtered.map((entry, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      padding: '5px 10px',
+                      borderBottom: '1px solid #2a2a3e',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: '#e2e8f0', flex: 1 }}>
+                        {entry.name}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 8,
+                          padding: '1px 4px',
+                          borderRadius: 2,
+                          background: '#2a2a3e',
+                          color: '#718096',
+                          border: '1px solid #444',
+                        }}
+                      >
+                        {entry.model_type}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 9, color: '#718096', marginBottom: 4 }}>
+                      {entry.description}
+                    </div>
+                    {entry.dependencies.length > 0 && (
+                      <div style={{ fontSize: 9, color: '#555', marginBottom: 3 }}>
+                        依赖: {entry.dependencies.join(', ')}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                      {entry.urls.map((urlObj, urlIdx) => {
+                        const dlKey = `${urlObj.url}:${entry.model_type}`;
+                        const isDownloading = downloadingUrls.has(dlKey);
+                        return (
+                          <div
+                            key={urlIdx}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 3,
+                              background: '#2a2a3e',
+                              borderRadius: 3,
+                              padding: '2px 5px',
+                              border: '1px solid #444',
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 8,
+                                padding: '0px 3px',
+                                borderRadius: 2,
+                                background: urlObj.format === 'gguf' ? '#2d4a2d' : '#2d3a4a',
+                                color: urlObj.format === 'gguf' ? '#68d391' : '#63b3ed',
+                              }}
+                            >
+                              {urlObj.format}
+                            </span>
+                            <span style={{ fontSize: 9, color: '#a0aec0', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {urlObj.label}
+                            </span>
+                            <button
+                              onClick={() => handleDownload(urlObj.url, entry.model_type)}
+                              disabled={isDownloading}
+                              title={isDownloading ? '下载中...' : `下载到 ${entry.model_type}`}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                cursor: isDownloading ? 'wait' : 'pointer',
+                                color: isDownloading ? '#68d391' : '#718096',
+                                padding: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                transition: 'color 0.1s',
+                              }}
+                              onMouseEnter={(e) => {
+                                if (!isDownloading) (e.currentTarget as HTMLElement).style.color = '#63b3ed';
+                              }}
+                              onMouseLeave={(e) => {
+                                if (!isDownloading) (e.currentTarget as HTMLElement).style.color = '#718096';
+                              }}
+                            >
+                              <Download size={10} />
+                            </button>
+                            <a
+                              href={urlObj.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                color: '#555',
+                                display: 'flex',
+                                alignItems: 'center',
+                                transition: 'color 0.1s',
+                              }}
+                              title="在浏览器中打开"
+                              onMouseEnter={(e) => {
+                                (e.currentTarget as HTMLElement).style.color = '#718096';
+                              }}
+                              onMouseLeave={(e) => {
+                                (e.currentTarget as HTMLElement).style.color = '#555';
+                              }}
+                            >
+                              <ExternalLink size={9} />
+                            </a>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
           </div>
         )}
       </div>

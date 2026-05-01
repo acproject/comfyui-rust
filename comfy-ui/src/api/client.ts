@@ -19,6 +19,9 @@ import type {
   DeleteModelRequest,
   DeleteModelResponse,
   UploadModelResponse,
+  ModelDownloadEntry,
+  DownloadModelRequest,
+  DownloadModelResponse,
 } from '@/types/api';
 
 const API_BASE = '';
@@ -295,5 +298,16 @@ export const api = {
     }
 
     return response.json();
+  },
+
+  async getModelDownloadList(): Promise<ModelDownloadEntry[]> {
+    return fetchJson<ModelDownloadEntry[]>('/model_downloads');
+  },
+
+  async downloadModel(request: DownloadModelRequest): Promise<DownloadModelResponse> {
+    return fetchJson<DownloadModelResponse>('/model_downloads/download', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
   },
 };

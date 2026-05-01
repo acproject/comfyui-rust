@@ -33,6 +33,7 @@ export default defineConfig({
       '/custom_nodes': 'http://127.0.0.1:8188',
       '/agent': 'http://127.0.0.1:8188',
       '/model_manager': 'http://127.0.0.1:8188',
+      '/model_downloads': 'http://127.0.0.1:8188',
       '/ws': {
         target: 'ws://127.0.0.1:8188',
         ws: true,

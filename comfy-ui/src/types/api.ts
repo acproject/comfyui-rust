@@ -308,3 +308,31 @@ export interface UploadModelResponse {
   model_type: string;
   path: string;
 }
+
+export interface ModelDownloadUrl {
+  label: string;
+  url: string;
+  format: string;
+}
+
+export interface ModelDownloadEntry {
+  name: string;
+  description: string;
+  category: string;
+  model_type: string;
+  urls: ModelDownloadUrl[];
+  dependencies: string[];
+}
+
+export interface DownloadModelRequest {
+  url: string;
+  model_type: string;
+  filename?: string;
+}
+
+export interface DownloadModelResponse {
+  status: string;
+  filename: string;
+  model_type: string;
+  url: string;
+}
