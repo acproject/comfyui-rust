@@ -18,6 +18,8 @@ uuid = { version = "1", features = ["v4"] }
 axum = { version = "0.8", features = ["ws", "multipart"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 futures = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+regex = "1"
 
 [features]
 default = []

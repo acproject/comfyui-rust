@@ -11,6 +11,10 @@ import type {
   SaveWorkflowResponse,
   WorkflowListResponse,
   ServerConfig,
+  AgentConfig,
+  AgentChatRequest,
+  AgentChatResponse,
+  AgentModelsResponse,
 } from '@/types/api';
 
 const API_BASE = '';
@@ -226,5 +230,27 @@ export const api = {
       const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
       throw new Error(error.error?.message || `Delete failed: ${response.status}`);
     }
+  },
+
+  async getAgentConfig(): Promise<AgentConfig> {
+    return fetchJson<AgentConfig>('/agent/config');
+  },
+
+  async setAgentConfig(config: AgentConfig): Promise<AgentConfig> {
+    return fetchJson<AgentConfig>('/agent/config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  },
+
+  async agentChat(request: AgentChatRequest): Promise<AgentChatResponse> {
+    return fetchJson<AgentChatResponse>('/agent/chat', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  },
+
+  async getAgentModels(): Promise<AgentModelsResponse> {
+    return fetchJson<AgentModelsResponse>('/agent/models');
   },
 };

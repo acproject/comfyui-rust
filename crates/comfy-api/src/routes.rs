@@ -1,3 +1,4 @@
+use crate::agent::{AgentConfig, ChatRequest};
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::ws::WsMessage;
@@ -736,4 +737,51 @@ pub async fn delete_custom_node(
     std::fs::remove_file(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(axum::http::StatusCode::OK)
+}
+
+pub async fn get_agent_config(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.agent.get_config().await;
+    let safe_config = AgentConfig {
+        api_key: config.api_key.as_ref().map(|_| "********".to_string()),
+        ..config
+    };
+    Ok(Json(serde_json::to_value(safe_config).unwrap_or(Value::Null)))
+}
+
+pub async fn post_agent_config(
+    State(state): State<AppState>,
+    Json(mut body): Json<AgentConfig>,
+) -> Result<impl IntoResponse, ApiError> {
+    if body.api_key.as_deref() == Some("********") {
+        let existing = state.agent.get_config().await;
+        body.api_key = existing.api_key;
+    }
+    state.agent.set_config(body).await;
+    let config = state.agent.get_config().await;
+    let safe_config = AgentConfig {
+        api_key: config.api_key.as_ref().map(|_| "********".to_string()),
+        ..config
+    };
+    Ok(Json(serde_json::to_value(safe_config).unwrap_or(Value::Null)))
+}
+
+pub async fn post_agent_chat(
+    State(state): State<AppState>,
+    Json(body): Json<ChatRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    match state.agent.chat(body).await {
+        Ok(response) => Ok(Json(serde_json::to_value(response).unwrap_or(Value::Null))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
+    }
+}
+
+pub async fn get_agent_models(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    match state.agent.list_models().await {
+        Ok(models) => Ok(Json(json!({ "models": models }))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
+    }
 }

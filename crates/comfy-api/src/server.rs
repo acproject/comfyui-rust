@@ -66,6 +66,10 @@ impl ComfyServer {
             .route("/custom_nodes", axum::routing::get(routes::list_custom_nodes))
             .route("/custom_nodes", axum::routing::post(routes::save_custom_node))
             .route("/custom_nodes/{filename}", axum::routing::delete(routes::delete_custom_node))
+            .route("/agent/config", axum::routing::get(routes::get_agent_config))
+            .route("/agent/config", axum::routing::post(routes::post_agent_config))
+            .route("/agent/chat", axum::routing::post(routes::post_agent_chat))
+            .route("/agent/models", axum::routing::get(routes::get_agent_models))
             .with_state(self.state.clone());
 
         let mut router = Router::new().merge(api_routes);

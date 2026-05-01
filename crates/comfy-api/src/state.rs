@@ -1,3 +1,4 @@
+use crate::agent::{AgentConfig, AgentService};
 use crate::images::ImageStore;
 use crate::queue::PromptQueue;
 use crate::ws::WsBroadcaster;
@@ -15,6 +16,12 @@ pub struct AppState {
     pub images: Arc<ImageStore>,
     pub input_dir: PathBuf,
     pub custom_nodes_dir: PathBuf,
+    pub agent: Arc<AgentService>,
+}
+
+fn create_agent_service() -> Arc<AgentService> {
+    let config = AgentConfig::from_env();
+    Arc::new(AgentService::new(config))
 }
 
 impl AppState {
@@ -47,6 +54,7 @@ impl AppState {
             images,
             input_dir,
             custom_nodes_dir,
+            agent: create_agent_service(),
         }
     }
 
@@ -72,6 +80,7 @@ impl AppState {
             images,
             input_dir,
             custom_nodes_dir,
+            agent: create_agent_service(),
         }
     }
 
@@ -103,6 +112,7 @@ impl AppState {
             images,
             input_dir,
             custom_nodes_dir,
+            agent: create_agent_service(),
         }
     }
 }
@@ -117,6 +127,7 @@ impl Clone for AppState {
             images: self.images.clone(),
             input_dir: self.input_dir.clone(),
             custom_nodes_dir: self.custom_nodes_dir.clone(),
+            agent: self.agent.clone(),
         }
     }
 }

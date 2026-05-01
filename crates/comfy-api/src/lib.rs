@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod config;
 pub mod error;
 pub mod images;
@@ -8,6 +9,7 @@ pub mod state;
 pub mod worker;
 pub mod ws;
 
+pub use agent::{AgentConfig, AgentService, AgentError, ChatRequest, ChatResponse, ChatMessage, AgentAction};
 pub use config::ComfyConfig;
 pub use error::ApiError;
 pub use images::ImageStore;

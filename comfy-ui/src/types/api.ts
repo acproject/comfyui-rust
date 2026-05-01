@@ -205,3 +205,64 @@ export interface ServerConfig {
     format: string;
   };
 }
+
+export interface AgentConfig {
+  enabled: boolean;
+  provider: string;
+  api_url: string;
+  api_key: string | null;
+  model: string;
+  max_tokens: number;
+  temperature: number;
+  system_prompt: string;
+}
+
+export interface AgentChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface WorkflowNodeInfo {
+  id: string;
+  class_type: string;
+  title: string;
+  inputs: Record<string, unknown>;
+  outputs: Array<{ name: string; type_name: string }>;
+}
+
+export interface WorkflowEdgeInfo {
+  source: string;
+  source_handle: string;
+  target: string;
+  target_handle: string;
+}
+
+export interface AgentChatContext {
+  available_nodes: string[];
+  current_workflow_nodes: WorkflowNodeInfo[];
+  current_workflow_edges: WorkflowEdgeInfo[];
+}
+
+export interface AgentChatRequest {
+  messages: AgentChatMessage[];
+  context?: AgentChatContext;
+}
+
+export interface AgentAction {
+  type: 'add_node' | 'connect' | 'set_param' | 'run_workflow' | 'validate_workflow' | 'clear_workflow';
+  payload: Record<string, unknown>;
+}
+
+export interface AgentChatResponse {
+  message: AgentChatMessage;
+  actions: AgentAction[];
+}
+
+export interface AgentModelInfo {
+  id: string;
+  owned_by: string;
+}
+
+export interface AgentModelsResponse {
+  models: AgentModelInfo[];
+}
