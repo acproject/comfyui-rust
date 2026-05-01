@@ -31,7 +31,7 @@ async fn main() {
     let mut registry = NodeRegistry::new();
     builtin_nodes::register_builtin_nodes(&mut registry);
 
-    let state = AppState::with_config(registry, config, config_path.clone());
+    let state = create_state(registry, config, config_path.clone());
 
     let addr: SocketAddr = state.config.read().unwrap().address().parse().unwrap_or_else(|_| {
         tracing::warn!("Invalid address, falling back to 0.0.0.0:8188");
@@ -61,5 +61,39 @@ async fn main() {
     if let Err(e) = server.start().await {
         tracing::error!("Server error: {}", e);
         std::process::exit(1);
+    }
+}
+
+#[cfg(feature = "local")]
+fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
+    let backend_type = std::env::var("COMFY_BACKEND")
+        .unwrap_or_else(|_| "local".to_string());
+
+    match backend_type.as_str() {
+        "cli" => {
+            tracing::info!("Using CLI inference backend (sd-cli subprocess)");
+            AppState::with_cli_backend(registry, config, config_path)
+        }
+        _ => {
+            tracing::info!("Using local inference backend (stable-diffusion.cpp via FFI)");
+            AppState::with_local_backend(registry, config, config_path)
+        }
+    }
+}
+
+#[cfg(not(feature = "local"))]
+fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
+    let backend_type = std::env::var("COMFY_BACKEND")
+        .unwrap_or_else(|_| "null".to_string());
+
+    match backend_type.as_str() {
+        "cli" => {
+            tracing::info!("Using CLI inference backend (sd-cli subprocess)");
+            AppState::with_cli_backend(registry, config, config_path)
+        }
+        _ => {
+            tracing::info!("Using null inference backend (no local inference support compiled)");
+            AppState::with_config(registry, config, config_path)
+        }
     }
 }

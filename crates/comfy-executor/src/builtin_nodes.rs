@@ -1,19 +1,65 @@
 use crate::error::ExecutorError;
 use crate::registry::NodeRegistry;
 use comfy_core::{IoType, NodeClassDef, NodeInputTypes, InputTypeSpec};
-use comfy_inference::{ImageGenParams, SampleMethod, Scheduler};
+use comfy_inference::{ImageGenParams, ModelConfig, SampleMethod, Scheduler};
+#[cfg(feature = "local")]
+use comfy_inference::{ConvertParams, convert_model, SdType};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_checkpoint_loader(registry);
+    register_flux_loader(registry);
+    register_sd3_loader(registry);
+    register_wan_loader(registry);
+    register_diffusion_model_loader(registry);
+    register_vae_loader(registry);
+    register_lora_loader(registry);
+    register_clip_loader(registry);
+    register_dual_clip_loader(registry);
     register_clip_text_encode(registry);
     register_ksampler(registry);
     register_save_image(registry);
     register_empty_latent_image(registry);
     register_vae_decode(registry);
     register_load_image(registry);
+    register_upscale_image(registry);
+    register_clip_vision_encode(registry);
+    register_control_net_apply(registry);
+    register_convert_model(registry);
+    register_wan_video_sampler(registry);
+}
+
+fn resolve_model_path(model_type: &str, filename: &str) -> String {
+    let base = std::env::var("COMFY_MODELS_DIR").unwrap_or_else(|_| "models".to_string());
+    let sub_dir = match model_type {
+        "checkpoints" => "checkpoints",
+        "clip" | "text_encoders" => "text_encoders",
+        "vae" => "vae",
+        "loras" => "loras",
+        "controlnet" => "controlnet",
+        "upscale_models" => "upscale_models",
+        "embeddings" => "embeddings",
+        "diffusion_models" => "diffusion_models",
+        "clip_vision" => "clip_vision",
+        "style_models" => "style_models",
+        "diffusers" => "diffusers",
+        "vae_approx" => "vae_approx",
+        "gligen" => "gligen",
+        "latent_upscale_models" => "latent_upscale_models",
+        "hypernetworks" => "hypernetworks",
+        "photomarker" => "photomarker",
+        "classifiers" => "classifiers",
+        "model_patches" => "model_patches",
+        "audio_encoders" => "audio_encoders",
+        _ => model_type,
+    };
+    std::path::Path::new(&base)
+        .join(sub_dir)
+        .join(filename)
+        .to_string_lossy()
+        .to_string()
 }
 
 fn register_checkpoint_loader(registry: &mut NodeRegistry) {
@@ -48,12 +94,340 @@ fn register_checkpoint_loader(registry: &mut NodeRegistry) {
             .and_then(|v| v.as_str())
             .unwrap_or("model.safetensors");
 
+        let model_path = resolve_model_path("checkpoints", ckpt_name);
+
         Box::pin(async move {
-            Ok(vec![
-                json!({ "type": "model", "path": ckpt_name }),
-                json!({ "type": "clip", "path": ckpt_name }),
-                json!({ "type": "vae", "path": ckpt_name }),
-            ])
+            let model_config = json!({
+                "model_path": model_path,
+            });
+            let clip_config = json!({
+                "type": "clip",
+                "source_model": model_path,
+            });
+            let vae_config = json!({
+                "type": "vae",
+                "source_model": model_path,
+            });
+            Ok(vec![model_config, clip_config, vae_config])
+        })
+    }));
+}
+
+fn register_flux_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "UNETLoader".to_string(),
+        display_name: "Load Diffusion Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("unet_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("weight_dtype".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_unet".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let unet_name = node.inputs.get("unet_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let diffusion_model_path = resolve_model_path("diffusion_models", unet_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "diffusion_model_path": diffusion_model_path,
+            })])
+        })
+    }));
+}
+
+fn register_sd3_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "SD3Loader".to_string(),
+        display_name: "Load SD3 Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model, IoType::Clip, IoType::Vae],
+        output_names: vec!["MODEL".to_string(), "CLIP".to_string(), "VAE".to_string()],
+        output_is_list: vec![false, false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_sd3".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let model_name = node.inputs.get("model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let model_path = resolve_model_path("checkpoints", model_name);
+
+        Box::pin(async move {
+            let model_config = json!({
+                "model_path": model_path,
+            });
+            let clip_config = json!({
+                "type": "clip",
+                "source_model": model_path,
+            });
+            let vae_config = json!({
+                "type": "vae",
+                "source_model": model_path,
+            });
+            Ok(vec![model_config, clip_config, vae_config])
+        })
+    }));
+}
+
+fn register_wan_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "WanLoader".to_string(),
+        display_name: "Load Wan Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model, IoType::Clip, IoType::Vae],
+        output_names: vec!["MODEL".to_string(), "CLIP".to_string(), "VAE".to_string()],
+        output_is_list: vec![false, false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_wan".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let model_name = node.inputs.get("model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let model_path = resolve_model_path("checkpoints", model_name);
+
+        Box::pin(async move {
+            let model_config = json!({
+                "model_path": model_path,
+            });
+            let clip_config = json!({
+                "type": "clip",
+                "source_model": model_path,
+            });
+            let vae_config = json!({
+                "type": "vae",
+                "source_model": model_path,
+            });
+            Ok(vec![model_config, clip_config, vae_config])
+        })
+    }));
+}
+
+fn register_diffusion_model_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "DiffusionModelLoader".to_string(),
+        display_name: "Load Diffusion Model (Standalone)".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_diffusion_model".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let model_name = node.inputs.get("model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let diffusion_model_path = resolve_model_path("diffusion_models", model_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "diffusion_model_path": diffusion_model_path,
+            })])
+        })
+    }));
+}
+
+fn register_vae_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VAELoader".to_string(),
+        display_name: "Load VAE".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("vae_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Vae],
+        output_names: vec!["VAE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_vae".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let vae_name = node.inputs.get("vae_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let vae_path = resolve_model_path("vae", vae_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "vae",
+                "vae_path": vae_path,
+            })])
+        })
+    }));
+}
+
+fn register_lora_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LoraLoader".to_string(),
+        display_name: "Load LoRA".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("clip".to_string(), InputTypeSpec {
+                    type_name: "CLIP".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("lora_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength_model".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength_clip".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model, IoType::Clip],
+        output_names: vec!["MODEL".to_string(), "CLIP".to_string()],
+        output_is_list: vec![false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_lora".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model")
+            .unwrap_or_else(|_| json!({}));
+        let clip = ctx.resolve_input(node_id, "clip")
+            .unwrap_or_else(|_| json!({}));
+        let lora_name = ctx.resolve_input(node_id, "lora_name")
+            .unwrap_or_else(|_| json!(""))
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let strength_model = ctx.resolve_input(node_id, "strength_model")
+            .unwrap_or_else(|_| json!(1.0))
+            .as_f64()
+            .unwrap_or(1.0) as f32;
+        let _strength_clip = ctx.resolve_input(node_id, "strength_clip")
+            .unwrap_or_else(|_| json!(1.0))
+            .as_f64()
+            .unwrap_or(1.0) as f32;
+
+        let lora_path = resolve_model_path("loras", &lora_name);
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            let loras = model_out.get("loras")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut loras = loras.clone();
+            loras.push(json!({
+                "path": lora_path,
+                "multiplier": strength_model,
+            }));
+            model_out.insert("loras".to_string(), json!(loras));
+
+            let mut clip_out = clip.as_object().cloned().unwrap_or_default();
+            clip_out.insert("lora_path".to_string(), json!(lora_path));
+            clip_out.insert("lora_strength".to_string(), json!(strength_model));
+
+            Ok(vec![json!(model_out), json!(clip_out)])
         })
     }));
 }
@@ -167,7 +541,7 @@ fn register_ksampler(registry: &mut NodeRegistry) {
     };
 
     registry.register(class_def, Arc::new(|ctx, _node, node_id| {
-        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!(null));
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
         let seed = ctx.resolve_input(node_id, "seed").unwrap_or_else(|_| json!(42));
         let steps = ctx.resolve_input(node_id, "steps").unwrap_or_else(|_| json!(20));
         let cfg = ctx.resolve_input(node_id, "cfg").unwrap_or_else(|_| json!(7.0));
@@ -198,18 +572,64 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     scheduler.as_str().unwrap_or("normal")
                 );
 
+                let mut model_config = ModelConfig::new();
+
+                if let Some(path) = model.get("model_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_model(path);
+                }
+                if let Some(path) = model.get("diffusion_model_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_diffusion_model(path);
+                }
+                if let Some(path) = model.get("clip_l_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_l(path);
+                }
+                if let Some(path) = model.get("clip_g_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_g(path);
+                }
+                if let Some(path) = model.get("t5xxl_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_t5xxl(path);
+                }
+                if let Some(path) = model.get("llm_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_llm(path);
+                }
+                if let Some(path) = model.get("llm_vision_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_llm_vision(path);
+                }
+                if let Some(path) = model.get("clip_vision_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_vision(path);
+                }
+                if let Some(path) = model.get("control_net_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_control_net(path);
+                }
+
+                let mut width = 512i32;
+                let mut height = 512i32;
+                if let Some(latent) = latent_image.as_object() {
+                    if let Some(w) = latent.get("width").and_then(|v| v.as_i64()) {
+                        width = w as i32;
+                    }
+                    if let Some(h) = latent.get("height").and_then(|v| v.as_i64()) {
+                        height = h as i32;
+                    }
+                }
+
                 let mut params = ImageGenParams::new(prompt_text)
                     .with_negative_prompt(neg_prompt_text)
                     .with_seed(seed.as_i64().unwrap_or(42))
                     .with_sample_steps(steps.as_i64().unwrap_or(20) as i32)
                     .with_cfg_scale(cfg.as_f64().unwrap_or(7.0) as f32)
                     .with_sample_method(sample_method)
-                    .with_scheduler(sched);
+                    .with_scheduler(sched)
+                    .with_dimensions(width, height)
+                    .with_model_config(model_config);
 
-                if let Some(latent) = latent_image.as_object() {
-                    if let Some(w) = latent.get("width").and_then(|v| v.as_i64()) {
-                        if let Some(h) = latent.get("height").and_then(|v| v.as_i64()) {
-                            params = params.with_dimensions(w as i32, h as i32);
+                if let Some(loras) = model.get("loras").and_then(|v| v.as_array()) {
+                    for lora in loras {
+                        if let (Some(path), Some(mult)) = (
+                            lora.get("path").and_then(|v| v.as_str()),
+                            lora.get("multiplier").and_then(|v| v.as_f64()),
+                        ) {
+                            params = params.with_lora(path, mult as f32);
                         }
                     }
                 }
@@ -229,6 +649,7 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                             "type": "latent",
                             "samples": image_data,
                             "seed": seed,
+                            "decoded_images": images.len(),
                         })])
                     }
                     Err(e) => Err(ExecutorError::Inference(e)),
@@ -291,11 +712,23 @@ fn register_save_image(registry: &mut NodeRegistry) {
         let filename_prefix = ctx.resolve_input(node_id, "filename_prefix")
             .unwrap_or_else(|_| json!("ComfyUI"));
 
+        let output_dir = std::env::var("COMFY_OUTPUT_DIR")
+            .unwrap_or_else(|_| "output".to_string());
+
         Box::pin(async move {
-            tracing::info!(
-                "SaveImage: saving image with prefix {}",
-                filename_prefix.as_str().unwrap_or("ComfyUI")
-            );
+            let prefix = filename_prefix.as_str().unwrap_or("ComfyUI");
+            tracing::info!("SaveImage: saving image with prefix {}", prefix);
+
+            if let Some(samples) = images.get("samples").and_then(|v| v.as_array()) {
+                for (i, sample) in samples.iter().enumerate() {
+                    if sample.get("type").and_then(|v| v.as_str()) == Some("image") {
+                        let filename = format!("{}_{:05}.png", prefix, i);
+                        let filepath = std::path::Path::new(&output_dir).join(&filename);
+                        tracing::info!("SaveImage: would save to {}", filepath.display());
+                    }
+                }
+            }
+
             Ok(vec![images.clone()])
         })
     }));
@@ -461,6 +894,306 @@ fn register_load_image(registry: &mut NodeRegistry) {
     }));
 }
 
+fn register_upscale_image(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ImageUpscaleWithModel".to_string(),
+        display_name: "Upscale Image (using Model)".to_string(),
+        category: "image/upscaling".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("upscale_model".to_string(), InputTypeSpec {
+                    type_name: "UPSCALE_MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "upscale".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let upscale_model = ctx.resolve_input(node_id, "upscale_model")
+            .unwrap_or_else(|_| json!(null));
+        let image = ctx.resolve_input(node_id, "image")
+            .unwrap_or_else(|_| json!(null));
+
+        let backend = ctx.backend();
+
+        Box::pin(async move {
+            let esrgan_path = upscale_model.get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if esrgan_path.is_empty() {
+                return Ok(vec![image.clone()]);
+            }
+
+            let params = comfy_inference::UpscaleParams::new(esrgan_path);
+
+            let placeholder = comfy_inference::SdImage::new(1, 1, 3);
+            match backend.upscale(placeholder, params) {
+                Ok(_result) => {
+                    Ok(vec![json!({
+                        "type": "image",
+                        "source": "upscale",
+                        "upscale_model": upscale_model,
+                        "input_image": image,
+                    })])
+                }
+                Err(e) => {
+                    tracing::warn!("Upscale failed: {}, returning original image", e);
+                    Ok(vec![image.clone()])
+                }
+            }
+        })
+    }));
+}
+
+fn register_clip_vision_encode(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "CLIPVisionEncode".to_string(),
+        display_name: "CLIP Vision Encode".to_string(),
+        category: "conditioning".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("clip_vision".to_string(), InputTypeSpec {
+                    type_name: "CLIP_VISION".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Conditioning],
+        output_names: vec!["CONDITIONING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "encode".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let clip_vision = ctx.resolve_input(node_id, "clip_vision")
+            .unwrap_or_else(|_| json!(null));
+        let image = ctx.resolve_input(node_id, "image")
+            .unwrap_or_else(|_| json!(null));
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "conditioning",
+                "clip_vision": clip_vision,
+                "image": image,
+            })])
+        })
+    }));
+}
+
+fn register_control_net_apply(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ControlNetApply".to_string(),
+        display_name: "Apply ControlNet".to_string(),
+        category: "conditioning".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("conditioning".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("control_net".to_string(), InputTypeSpec {
+                    type_name: "CONTROL_NET".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Conditioning],
+        output_names: vec!["CONDITIONING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "apply".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let conditioning = ctx.resolve_input(node_id, "conditioning")
+            .unwrap_or_else(|_| json!(null));
+        let control_net = ctx.resolve_input(node_id, "control_net")
+            .unwrap_or_else(|_| json!(null));
+        let image = ctx.resolve_input(node_id, "image")
+            .unwrap_or_else(|_| json!(null));
+        let strength = ctx.resolve_input(node_id, "strength")
+            .unwrap_or_else(|_| json!(1.0));
+
+        Box::pin(async move {
+            let mut result = conditioning.as_object().cloned().unwrap_or_default();
+            result.insert("control_net".to_string(), control_net);
+            result.insert("control_image".to_string(), image);
+            result.insert("control_strength".to_string(), strength);
+            Ok(vec![json!(result)])
+        })
+    }));
+}
+
+fn register_convert_model(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ConvertModel".to_string(),
+        display_name: "Convert Model".to_string(),
+        category: "model_management".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("input_path".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("output_path".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("output_type".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("vae_path".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("tensor_type_rules".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::String],
+        output_names: vec!["OUTPUT_PATH".to_string()],
+        output_is_list: vec![false],
+        is_output_node: true,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "convert".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let input_path = node.inputs.get("input_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let output_path = node.inputs.get("output_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let output_type_str = node.inputs.get("output_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("q8_0");
+        let vae_path = node.inputs.get("vae_path")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        let tensor_type_rules = node.inputs.get("tensor_type_rules")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+
+        let input_path = input_path.to_string();
+        let output_path = output_path.to_string();
+        let output_type_str = output_type_str.to_string();
+        let vae_path = vae_path.map(|s| s.to_string());
+        let tensor_type_rules = tensor_type_rules.map(|s| s.to_string());
+
+        Box::pin(async move {
+            #[cfg(feature = "local")]
+            {
+                let sd_type = parse_sd_type(&output_type_str);
+                let mut params = ConvertParams::new(&input_path, &output_path)
+                    .with_output_type(sd_type);
+                if let Some(ref vae) = vae_path {
+                    params = params.with_vae(vae);
+                }
+                if let Some(ref rules) = tensor_type_rules {
+                    params = params.with_tensor_type_rules(rules);
+                }
+
+                match convert_model(params) {
+                    Ok(true) => Ok(vec![json!(output_path)]),
+                    Ok(false) => Err(ExecutorError::NodeExecutionFailed {
+                        node_id: String::new(),
+                        message: "Model conversion returned false".to_string(),
+                    }),
+                    Err(e) => Err(ExecutorError::Inference(e)),
+                }
+            }
+            #[cfg(not(feature = "local"))]
+            {
+                let _ = (input_path, output_path, output_type_str, vae_path, tensor_type_rules);
+                Err(ExecutorError::NodeExecutionFailed {
+                    node_id: String::new(),
+                    message: "Model conversion requires local feature".to_string(),
+                })
+            }
+        })
+    }));
+}
+
+#[cfg(feature = "local")]
+fn parse_sd_type(name: &str) -> SdType {
+    match name {
+        "f32" => SdType::F32,
+        "f16" => SdType::F16,
+        "bf16" => SdType::BF16,
+        "q4_0" => SdType::Q4_0,
+        "q4_1" => SdType::Q4_1,
+        "q5_0" => SdType::Q5_0,
+        "q5_1" => SdType::Q5_1,
+        "q8_0" => SdType::Q8_0,
+        "q8_1" => SdType::Q8_1,
+        "q2_k" => SdType::Q2_K,
+        "q3_k" => SdType::Q3_K,
+        "q4_k" => SdType::Q4_K,
+        "q5_k" => SdType::Q5_K,
+        "q6_k" => SdType::Q6_K,
+        "q8_k" => SdType::Q8_K,
+        _ => SdType::Q8_0,
+    }
+}
+
 fn parse_sample_method(name: &str) -> SampleMethod {
     match name {
         "euler" => SampleMethod::Euler,
@@ -526,4 +1259,369 @@ fn scan_image_dir(dir: &std::path::Path, base: &std::path::Path, results: &mut V
             }
         }
     }
+}
+
+fn register_clip_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "CLIPLoader".to_string(),
+        display_name: "Load CLIP".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("clip_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("type".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Clip],
+        output_names: vec!["CLIP".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_clip".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let clip_name = node.inputs.get("clip_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let clip_type = node.inputs.get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stable_diffusion");
+
+        let clip_path = resolve_model_path("text_encoders", clip_name);
+
+        let clip_type_str = clip_type.to_string();
+
+        Box::pin(async move {
+            let mut clip_config = serde_json::Map::new();
+            clip_config.insert("type".to_string(), json!("clip"));
+            clip_config.insert("clip_type".to_string(), json!(clip_type_str));
+
+            match clip_type_str.as_str() {
+                "stable_diffusion" => {
+                    clip_config.insert("clip_l_path".to_string(), json!(clip_path));
+                }
+                "stable_cascade" => {
+                    clip_config.insert("clip_g_path".to_string(), json!(clip_path));
+                }
+                "sd3" | "flux" | "wan" => {
+                    clip_config.insert("t5xxl_path".to_string(), json!(clip_path));
+                }
+                _ => {
+                    clip_config.insert("clip_l_path".to_string(), json!(clip_path));
+                }
+            }
+
+            Ok(vec![json!(clip_config)])
+        })
+    }));
+}
+
+fn register_dual_clip_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "DualCLIPLoader".to_string(),
+        display_name: "DualCLIPLoader".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("clip_name1".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("clip_name2".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("type".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Clip],
+        output_names: vec!["CLIP".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_dual_clip".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let clip_name1 = node.inputs.get("clip_name1")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let clip_name2 = node.inputs.get("clip_name2")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let clip_type = node.inputs.get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("sdxl");
+
+        let clip1_path = resolve_model_path("text_encoders", clip_name1);
+        let clip2_path = resolve_model_path("text_encoders", clip_name2);
+
+        let clip_type_str = clip_type.to_string();
+
+        Box::pin(async move {
+            let mut clip_config = serde_json::Map::new();
+            clip_config.insert("type".to_string(), json!("clip"));
+            clip_config.insert("clip_type".to_string(), json!(clip_type_str));
+
+            match clip_type_str.as_str() {
+                "sdxl" => {
+                    clip_config.insert("clip_l_path".to_string(), json!(clip1_path));
+                    clip_config.insert("clip_g_path".to_string(), json!(clip2_path));
+                }
+                "flux" => {
+                    clip_config.insert("clip_l_path".to_string(), json!(clip1_path));
+                    clip_config.insert("t5xxl_path".to_string(), json!(clip2_path));
+                }
+                "sd3" => {
+                    clip_config.insert("clip_l_path".to_string(), json!(clip1_path));
+                    clip_config.insert("clip_g_path".to_string(), json!(clip1_path));
+                    clip_config.insert("t5xxl_path".to_string(), json!(clip2_path));
+                }
+                "wan" => {
+                    clip_config.insert("t5xxl_path".to_string(), json!(clip2_path));
+                }
+                _ => {
+                    clip_config.insert("clip_l_path".to_string(), json!(clip1_path));
+                    clip_config.insert("clip_g_path".to_string(), json!(clip2_path));
+                }
+            }
+
+            Ok(vec![json!(clip_config)])
+        })
+    }));
+}
+
+fn register_wan_video_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "WanVideoSampler".to_string(),
+        display_name: "Wan Video Sampler".to_string(),
+        category: "sampling/video".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("cfg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("sampler_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("scheduler".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("positive".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("negative".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("width".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("height".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("video_frames".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("init_image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("end_image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("flow_shift".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "sample_video".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let seed = ctx.resolve_input(node_id, "seed").unwrap_or_else(|_| json!(42));
+        let steps = ctx.resolve_input(node_id, "steps").unwrap_or_else(|_| json!(20));
+        let cfg = ctx.resolve_input(node_id, "cfg").unwrap_or_else(|_| json!(6.0));
+        let sampler_name = ctx.resolve_input(node_id, "sampler_name")
+            .unwrap_or_else(|_| json!("euler"));
+        let scheduler = ctx.resolve_input(node_id, "scheduler")
+            .unwrap_or_else(|_| json!("discrete"));
+        let positive = ctx.resolve_input(node_id, "positive").unwrap_or_else(|_| json!(null));
+        let negative = ctx.resolve_input(node_id, "negative").unwrap_or_else(|_| json!(null));
+        let width = ctx.resolve_input(node_id, "width").unwrap_or_else(|_| json!(832));
+        let height = ctx.resolve_input(node_id, "height").unwrap_or_else(|_| json!(480));
+        let video_frames = ctx.resolve_input(node_id, "video_frames").unwrap_or_else(|_| json!(33));
+        let _init_image = ctx.resolve_input(node_id, "init_image").ok();
+        let _end_image = ctx.resolve_input(node_id, "end_image").ok();
+        let flow_shift = ctx.resolve_input(node_id, "flow_shift")
+            .ok()
+            .and_then(|v| v.as_f64());
+
+        let backend = ctx.backend();
+        let supports_vid_gen = backend.supports_video_generation();
+
+        Box::pin(async move {
+            if supports_vid_gen {
+                let prompt_text = positive.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let negative_text = negative.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let mut model_config = ModelConfig::default();
+                if let Some(path) = model.get("model_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_model(path);
+                }
+                if let Some(path) = model.get("diffusion_model_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_diffusion_model(path);
+                }
+                if let Some(path) = model.get("vae_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_vae(path);
+                }
+                if let Some(path) = model.get("clip_l_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_l(path);
+                }
+                if let Some(path) = model.get("clip_g_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_g(path);
+                }
+                if let Some(path) = model.get("clip_vision_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_vision(path);
+                }
+                if let Some(path) = model.get("t5xxl_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_t5xxl(path);
+                }
+
+                let clip_config = positive.get("clip");
+                if let Some(clip) = clip_config {
+                    if model_config.clip_l_path.is_none() {
+                        if let Some(path) = clip.get("clip_l_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_clip_l(path);
+                        }
+                    }
+                    if model_config.clip_g_path.is_none() {
+                        if let Some(path) = clip.get("clip_g_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_clip_g(path);
+                        }
+                    }
+                    if model_config.t5xxl_path.is_none() {
+                        if let Some(path) = clip.get("t5xxl_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_t5xxl(path);
+                        }
+                    }
+                }
+
+                let sample_method = parse_sample_method(
+                    sampler_name.as_str().unwrap_or("euler")
+                );
+                let scheduler_type = parse_scheduler(
+                    scheduler.as_str().unwrap_or("discrete")
+                );
+
+                let mut video_params = comfy_inference::VideoGenParams::new(prompt_text)
+                    .with_negative_prompt(negative_text)
+                    .with_dimensions(
+                        width.as_i64().unwrap_or(832) as i32,
+                        height.as_i64().unwrap_or(480) as i32,
+                    )
+                    .with_seed(seed.as_i64().unwrap_or(42))
+                    .with_video_frames(video_frames.as_i64().unwrap_or(33) as i32)
+                    .with_model_config(model_config);
+
+                video_params.sample_params.sample_steps = steps.as_i64().unwrap_or(20) as i32;
+                video_params.sample_params.guidance.txt_cfg = cfg.as_f64().unwrap_or(6.0) as f32;
+                video_params.sample_params.sample_method = sample_method;
+                video_params.sample_params.scheduler = scheduler_type;
+                video_params.sample_params.flow_shift = flow_shift.map(|v| v as f32);
+
+                match backend.generate_video(video_params) {
+                    Ok(video) => {
+                        let frame_count = video.frame_count();
+                        tracing::info!("WanVideoSampler: generated {} video frames", frame_count);
+                        Ok(vec![json!({
+                            "type": "video",
+                            "frame_count": frame_count,
+                            "fps": video.fps,
+                        })])
+                    }
+                    Err(e) => {
+                        tracing::error!("Video generation failed: {}", e);
+                        Err(ExecutorError::Inference(e))
+                    }
+                }
+            } else {
+                Ok(vec![json!({
+                    "type": "video",
+                    "seed": seed,
+                    "steps": steps,
+                    "cfg": cfg,
+                    "sampler": sampler_name,
+                    "scheduler": scheduler,
+                    "positive": positive,
+                    "negative": negative,
+                    "width": width,
+                    "height": height,
+                    "video_frames": video_frames,
+                })])
+            }
+        })
+    }));
 }

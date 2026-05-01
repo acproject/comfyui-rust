@@ -34,6 +34,21 @@ pub enum InferenceError {
 
     #[error("Backend not available: {0}")]
     BackendNotAvailable(String),
+
+    #[error("IO error: {0}")]
+    IoError(String),
+}
+
+impl From<std::io::Error> for InferenceError {
+    fn from(e: std::io::Error) -> Self {
+        InferenceError::IoError(e.to_string())
+    }
+}
+
+impl From<crate::image::ImageError> for InferenceError {
+    fn from(e: crate::image::ImageError) -> Self {
+        InferenceError::ImageDecodeError(e.to_string())
+    }
 }
 
 pub type InferenceResult<T> = Result<T, InferenceError>;

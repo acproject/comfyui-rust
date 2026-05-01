@@ -4,7 +4,8 @@ use crate::ffi::*;
 use crate::image::{SdImage, SdVideo};
 use crate::params::*;
 use crate::types::*;
-use std::ffi::{c_char, c_float, c_int, c_void, CString, NulError};
+use std::collections::HashMap;
+use std::ffi::{c_char, c_int, c_void, CString, NulError};
 use std::ptr;
 use std::sync::Mutex;
 
@@ -13,66 +14,250 @@ extern "C" {
 }
 
 pub struct LocalBackend {
-    ctx: Mutex<*mut SdCtxT>,
-    config: ContextConfig,
+    contexts: Mutex<ContextCache>,
+    base_config: ContextConfig,
 }
 
 unsafe impl Send for LocalBackend {}
 unsafe impl Sync for LocalBackend {}
 
+struct ContextCache {
+    entries: HashMap<String, *mut SdCtxT>,
+}
+
+impl ContextCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    fn get_or_create(
+        &mut self,
+        model_config: &ModelConfig,
+        base_config: &ContextConfig,
+    ) -> InferenceResult<*mut SdCtxT> {
+        let key = model_config.cache_key();
+
+        if let Some(&ctx) = self.entries.get(&key) {
+            if !ctx.is_null() {
+                return Ok(ctx);
+            }
+        }
+
+        let ctx_config = build_ctx_config(model_config, base_config);
+        let ctx = create_sd_ctx(&ctx_config)?;
+
+        self.entries.insert(key, ctx);
+        Ok(ctx)
+    }
+
+    fn clear(&mut self) {
+        for (_, ctx) in self.entries.drain() {
+            if !ctx.is_null() {
+                unsafe {
+                    free_sd_ctx(ctx);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ContextCache {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> ContextConfig {
+    ContextConfig {
+        model_path: model_config.model_path.clone().or(base_config.model_path.clone()),
+        clip_l_path: model_config.clip_l_path.clone().or(base_config.clip_l_path.clone()),
+        clip_g_path: model_config.clip_g_path.clone().or(base_config.clip_g_path.clone()),
+        clip_vision_path: model_config.clip_vision_path.clone().or(base_config.clip_vision_path.clone()),
+        t5xxl_path: model_config.t5xxl_path.clone().or(base_config.t5xxl_path.clone()),
+        llm_path: model_config.llm_path.clone().or(base_config.llm_path.clone()),
+        llm_vision_path: model_config.llm_vision_path.clone().or(base_config.llm_vision_path.clone()),
+        diffusion_model_path: model_config.diffusion_model_path.clone().or(base_config.diffusion_model_path.clone()),
+        vae_path: model_config.vae_path.clone().or(base_config.vae_path.clone()),
+        control_net_path: model_config.control_net_path.clone().or(base_config.control_net_path.clone()),
+        ..base_config.clone()
+    }
+}
+
+fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
+    let mut c_params: CSdCtxParams = unsafe { std::mem::zeroed() };
+
+    unsafe {
+        sd_ctx_params_init(&mut c_params);
+    }
+
+    let mut strings = CStringHolder::new();
+    c_params.model_path = strings.opt_cstr(&config.model_path);
+    c_params.clip_l_path = strings.opt_cstr(&config.clip_l_path);
+    c_params.clip_g_path = strings.opt_cstr(&config.clip_g_path);
+    c_params.clip_vision_path = strings.opt_cstr(&config.clip_vision_path);
+    c_params.t5xxl_path = strings.opt_cstr(&config.t5xxl_path);
+    c_params.llm_path = strings.opt_cstr(&config.llm_path);
+    c_params.llm_vision_path = strings.opt_cstr(&config.llm_vision_path);
+    c_params.diffusion_model_path = strings.opt_cstr(&config.diffusion_model_path);
+    c_params.high_noise_diffusion_model_path = strings.opt_cstr(&config.high_noise_diffusion_model_path);
+    c_params.vae_path = strings.opt_cstr(&config.vae_path);
+    c_params.taesd_path = strings.opt_cstr(&config.taesd_path);
+    c_params.control_net_path = strings.opt_cstr(&config.control_net_path);
+    c_params.photo_maker_path = strings.opt_cstr(&config.photo_maker_path);
+    c_params.tensor_type_rules = strings.opt_cstr(&config.tensor_type_rules);
+
+    c_params.vae_decode_only = config.vae_decode_only;
+    c_params.free_params_immediately = config.free_params_immediately;
+    c_params.n_threads = config.n_threads;
+    c_params.wtype = CSdType::Count;
+    c_params.rng_type = CRngType::Cuda;
+    c_params.sampler_rng_type = CRngType::Count;
+    c_params.prediction = CPredictionType::Count;
+    c_params.lora_apply_mode = CLoraApplyMode::Auto;
+    c_params.offload_params_to_cpu = config.offload_params_to_cpu;
+    c_params.enable_mmap = config.enable_mmap;
+    c_params.keep_clip_on_cpu = config.keep_clip_on_cpu;
+    c_params.keep_control_net_on_cpu = config.keep_control_net_on_cpu;
+    c_params.keep_vae_on_cpu = config.keep_vae_on_cpu;
+    c_params.flash_attn = config.flash_attn;
+    c_params.diffusion_flash_attn = config.diffusion_flash_attn;
+
+    let ctx = unsafe { new_sd_ctx(&c_params) };
+    if ctx.is_null() {
+        return Err(InferenceError::ContextCreationFailed);
+    }
+
+    Ok(ctx)
+}
+
+pub fn convert_model(params: ConvertParams) -> InferenceResult<bool> {
+    let c_input = CString::new(params.input_path.as_str())
+        .map_err(|e: NulError| InferenceError::InvalidParameter(e.to_string()))?;
+    let c_output = CString::new(params.output_path.as_str())
+        .map_err(|e: NulError| InferenceError::InvalidParameter(e.to_string()))?;
+    let c_vae = params
+        .vae_path
+        .as_deref()
+        .map(|s| CString::new(s).map_err(|e: NulError| InferenceError::InvalidParameter(e.to_string())))
+        .transpose()?;
+    let c_rules = params
+        .tensor_type_rules
+        .as_deref()
+        .map(|s| CString::new(s).map_err(|e: NulError| InferenceError::InvalidParameter(e.to_string())))
+        .transpose()?;
+
+    let c_sd_type = match params.output_type {
+        SdType::F32 => CSdType::F32,
+        SdType::F16 => CSdType::F16,
+        SdType::Q4_0 => CSdType::Q4_0,
+        SdType::Q4_1 => CSdType::Q4_1,
+        SdType::Q5_0 => CSdType::Q5_0,
+        SdType::Q5_1 => CSdType::Q5_1,
+        SdType::Q8_0 => CSdType::Q8_0,
+        SdType::Q8_1 => CSdType::Q8_1,
+        SdType::Q2_K => CSdType::Q2_K,
+        SdType::Q3_K => CSdType::Q3_K,
+        SdType::Q4_K => CSdType::Q4_K,
+        SdType::Q5_K => CSdType::Q5_K,
+        SdType::Q6_K => CSdType::Q6_K,
+        SdType::Q8_K => CSdType::Q8_K,
+        SdType::BF16 => CSdType::BF16,
+        _ => CSdType::F16,
+    };
+
+    let result = unsafe {
+        convert(
+            c_input.as_ptr(),
+            c_vae.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+            c_output.as_ptr(),
+            c_sd_type,
+            c_rules.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+            params.convert_name,
+        )
+    };
+
+    Ok(result)
+}
+
+pub fn get_system_info() -> String {
+    unsafe {
+        let ptr = sd_get_system_info();
+        if ptr.is_null() {
+            return "unknown".to_string();
+        }
+        let c_str = std::ffi::CStr::from_ptr(ptr);
+        c_str.to_string_lossy().to_string()
+    }
+}
+
+pub fn get_version() -> String {
+    unsafe {
+        let ptr = sd_version();
+        if ptr.is_null() {
+            return "unknown".to_string();
+        }
+        let c_str = std::ffi::CStr::from_ptr(ptr);
+        c_str.to_string_lossy().to_string()
+    }
+}
+
+pub fn get_commit() -> String {
+    unsafe {
+        let ptr = sd_commit();
+        if ptr.is_null() {
+            return "unknown".to_string();
+        }
+        let c_str = std::ffi::CStr::from_ptr(ptr);
+        c_str.to_string_lossy().to_string()
+    }
+}
+
+pub fn get_num_physical_cores() -> i32 {
+    unsafe { sd_get_num_physical_cores() }
+}
+
 impl LocalBackend {
     pub fn new(config: ContextConfig) -> InferenceResult<Self> {
-        let mut c_params: CSdCtxParams = unsafe { std::mem::zeroed() };
-
-        unsafe {
-            sd_ctx_params_init(&mut c_params);
-        }
-
-        let mut strings = CStringHolder::new();
-        c_params.model_path = strings.opt_cstr(&config.model_path);
-        c_params.clip_l_path = strings.opt_cstr(&config.clip_l_path);
-        c_params.clip_g_path = strings.opt_cstr(&config.clip_g_path);
-        c_params.clip_vision_path = strings.opt_cstr(&config.clip_vision_path);
-        c_params.t5xxl_path = strings.opt_cstr(&config.t5xxl_path);
-        c_params.llm_path = strings.opt_cstr(&config.llm_path);
-        c_params.llm_vision_path = strings.opt_cstr(&config.llm_vision_path);
-        c_params.diffusion_model_path = strings.opt_cstr(&config.diffusion_model_path);
-        c_params.high_noise_diffusion_model_path = strings.opt_cstr(&config.high_noise_diffusion_model_path);
-        c_params.vae_path = strings.opt_cstr(&config.vae_path);
-        c_params.taesd_path = strings.opt_cstr(&config.taesd_path);
-        c_params.control_net_path = strings.opt_cstr(&config.control_net_path);
-        c_params.photo_maker_path = strings.opt_cstr(&config.photo_maker_path);
-        c_params.tensor_type_rules = strings.opt_cstr(&config.tensor_type_rules);
-
-        c_params.vae_decode_only = config.vae_decode_only;
-        c_params.free_params_immediately = config.free_params_immediately;
-        c_params.n_threads = config.n_threads;
-        c_params.wtype = CSdType::Count;
-        c_params.rng_type = CRngType::Cuda;
-        c_params.sampler_rng_type = CRngType::Count;
-        c_params.prediction = CPredictionType::Count;
-        c_params.lora_apply_mode = CLoraApplyMode::Auto;
-        c_params.offload_params_to_cpu = config.offload_params_to_cpu;
-        c_params.enable_mmap = config.enable_mmap;
-        c_params.keep_clip_on_cpu = config.keep_clip_on_cpu;
-        c_params.keep_control_net_on_cpu = config.keep_control_net_on_cpu;
-        c_params.keep_vae_on_cpu = config.keep_vae_on_cpu;
-        c_params.flash_attn = config.flash_attn;
-        c_params.diffusion_flash_attn = config.diffusion_flash_attn;
-
-        let ctx = unsafe { new_sd_ctx(&c_params) };
-        if ctx.is_null() {
-            return Err(InferenceError::ContextCreationFailed);
-        }
-
         Ok(Self {
-            ctx: Mutex::new(ctx),
-            config,
+            contexts: Mutex::new(ContextCache::new()),
+            base_config: config,
         })
     }
 
-    pub fn config(&self) -> &ContextConfig {
-        &self.config
+    pub fn base_config(&self) -> &ContextConfig {
+        &self.base_config
+    }
+
+    pub fn load_model(&self, model_config: &ModelConfig) -> InferenceResult<()> {
+        let mut cache = self.contexts.lock().unwrap();
+        cache.get_or_create(model_config, &self.base_config)?;
+        Ok(())
+    }
+
+    pub fn unload_model(&self, model_config: &ModelConfig) -> InferenceResult<()> {
+        let mut cache = self.contexts.lock().unwrap();
+        let key = model_config.cache_key();
+        if let Some(ctx) = cache.entries.remove(&key) {
+            if !ctx.is_null() {
+                unsafe {
+                    free_sd_ctx(ctx);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn unload_all_models(&self) -> InferenceResult<()> {
+        let mut cache = self.contexts.lock().unwrap();
+        cache.clear();
+        Ok(())
+    }
+
+    pub fn loaded_models(&self) -> Vec<String> {
+        let cache = self.contexts.lock().unwrap();
+        cache.entries.keys().cloned().collect()
     }
 
     fn build_c_img_gen_params(
@@ -128,21 +313,27 @@ impl LocalBackend {
 
 impl InferenceBackend for LocalBackend {
     fn supports_image_generation(&self) -> bool {
-        let ctx = self.ctx.lock().unwrap();
-        unsafe { sd_ctx_supports_image_generation(*ctx) }
+        let cache = self.contexts.lock().unwrap();
+        cache.entries.values().any(|ctx| {
+            !ctx.is_null() && unsafe { sd_ctx_supports_image_generation(*ctx) }
+        })
     }
 
     fn supports_video_generation(&self) -> bool {
-        let ctx = self.ctx.lock().unwrap();
-        unsafe { sd_ctx_supports_video_generation(*ctx) }
+        let cache = self.contexts.lock().unwrap();
+        cache.entries.values().any(|ctx| {
+            !ctx.is_null() && unsafe { sd_ctx_supports_video_generation(*ctx) }
+        })
     }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
-        let ctx = self.ctx.lock().unwrap();
+        let mut cache = self.contexts.lock().unwrap();
+        let ctx = cache.get_or_create(&params.model_config, &self.base_config)?;
+
         let mut strings = CStringHolder::new();
         let c_params = Self::build_c_img_gen_params(&params, &mut strings);
 
-        let result = unsafe { generate_image(*ctx, &c_params) };
+        let result = unsafe { generate_image(ctx, &c_params) };
 
         if result.is_null() {
             return Err(InferenceError::GenerationFailed(
@@ -179,7 +370,10 @@ impl InferenceBackend for LocalBackend {
     }
 
     fn generate_video(&self, params: VideoGenParams) -> InferenceResult<SdVideo> {
-        let ctx = self.ctx.lock().unwrap();
+        let model_config = ModelConfig::default();
+        let mut cache = self.contexts.lock().unwrap();
+        let ctx = cache.get_or_create(&model_config, &self.base_config)?;
+
         let mut strings = CStringHolder::new();
         let mut c_params: CVidGenParams = unsafe { std::mem::zeroed() };
 
@@ -209,7 +403,7 @@ impl InferenceBackend for LocalBackend {
             .unwrap_or_else(null_c_image);
 
         let mut num_frames_out: c_int = 0;
-        let result = unsafe { generate_video(*ctx, &c_params, &mut num_frames_out) };
+        let result = unsafe { generate_video(ctx, &c_params, &mut num_frames_out) };
 
         if result.is_null() || num_frames_out <= 0 {
             return Err(InferenceError::GenerationFailed(
@@ -278,12 +472,8 @@ impl InferenceBackend for LocalBackend {
 
 impl Drop for LocalBackend {
     fn drop(&mut self) {
-        let ctx = self.ctx.lock().unwrap();
-        if !ctx.is_null() {
-            unsafe {
-                free_sd_ctx(*ctx);
-            }
-        }
+        let mut cache = self.contexts.lock().unwrap();
+        cache.clear();
     }
 }
 

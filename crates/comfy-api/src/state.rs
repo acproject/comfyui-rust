@@ -9,6 +9,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[cfg(feature = "local")]
+use comfy_inference::{LocalBackend, ContextConfig};
+use comfy_inference::{CliBackend, CliBackendConfig};
+
 pub struct AppState {
     pub executor: Arc<Executor>,
     pub queue: Arc<PromptQueue>,
@@ -104,6 +108,117 @@ impl AppState {
         let images = Arc::new(ImageStore::new(output_dir));
 
         let config_path = Self::default_config_path();
+
+        Self {
+            executor,
+            queue,
+            broadcaster,
+            registry,
+            images,
+            input_dir,
+            custom_nodes_dir,
+            models_dir,
+            config: Arc::new(std::sync::RwLock::new(config)),
+            config_path: Arc::new(config_path),
+            agent: create_agent_service(),
+        }
+    }
+
+    #[cfg(feature = "local")]
+    pub fn with_local_backend(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
+        let models_dir = PathBuf::from(&config.models.base_dir);
+        std::fs::create_dir_all(&models_dir).ok();
+
+        let ctx_config = ContextConfig {
+            n_threads: config.inference.n_threads as i32,
+            vae_decode_only: config.inference.vae_decode_only,
+            free_params_immediately: config.inference.free_params_immediately,
+            enable_mmap: config.inference.enable_mmap,
+            flash_attn: config.inference.flash_attn,
+            offload_params_to_cpu: config.inference.offload_params_to_cpu,
+            ..ContextConfig::default()
+        };
+
+        let backend = match LocalBackend::new(ctx_config) {
+            Ok(b) => {
+                tracing::info!("LocalBackend created successfully");
+                Arc::new(b) as Arc<dyn comfy_inference::InferenceBackend>
+            }
+            Err(e) => {
+                tracing::error!("Failed to create LocalBackend: {}, falling back to NullBackend", e);
+                Arc::new(NullBackend) as Arc<dyn comfy_inference::InferenceBackend>
+            }
+        };
+
+        let output_dir = config.output.dir.clone();
+        let input_dir = PathBuf::from(std::env::var("COMFY_INPUT_DIR")
+            .unwrap_or_else(|_| "input".to_string()));
+        std::fs::create_dir_all(&input_dir).ok();
+
+        let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
+            .unwrap_or_else(|_| "custom_nodes".to_string()));
+        std::fs::create_dir_all(&custom_nodes_dir).ok();
+
+        let executor = Arc::new(Executor::new(registry.clone(), backend));
+        let registry = Arc::new(Mutex::new(registry));
+        let queue = Arc::new(PromptQueue::new());
+        let broadcaster = WsBroadcaster::new();
+        let images = Arc::new(ImageStore::new(output_dir));
+
+        Self {
+            executor,
+            queue,
+            broadcaster,
+            registry,
+            images,
+            input_dir,
+            custom_nodes_dir,
+            models_dir,
+            config: Arc::new(std::sync::RwLock::new(config)),
+            config_path: Arc::new(config_path),
+            agent: create_agent_service(),
+        }
+    }
+
+    pub fn with_cli_backend(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
+        let models_dir = PathBuf::from(&config.models.base_dir);
+        std::fs::create_dir_all(&models_dir).ok();
+
+        let sd_cli_path = std::env::var("SD_CLI_PATH")
+            .unwrap_or_else(|_| "sd-cli".to_string());
+
+        let cli_config = CliBackendConfig::new(&sd_cli_path)
+            .with_threads(config.inference.n_threads as i32)
+            .with_flash_attn(config.inference.flash_attn)
+            .with_offload_to_cpu(config.inference.offload_params_to_cpu)
+            .with_verbose(true)
+            .with_output_dir(&config.output.dir);
+
+        let backend = match CliBackend::new(cli_config) {
+            Ok(b) => {
+                tracing::info!("CliBackend created with sd-cli at '{}'", sd_cli_path);
+                Arc::new(b) as Arc<dyn comfy_inference::InferenceBackend>
+            }
+            Err(e) => {
+                tracing::error!("Failed to create CliBackend: {}, falling back to NullBackend", e);
+                Arc::new(NullBackend) as Arc<dyn comfy_inference::InferenceBackend>
+            }
+        };
+
+        let output_dir = config.output.dir.clone();
+        let input_dir = PathBuf::from(std::env::var("COMFY_INPUT_DIR")
+            .unwrap_or_else(|_| "input".to_string()));
+        std::fs::create_dir_all(&input_dir).ok();
+
+        let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
+            .unwrap_or_else(|_| "custom_nodes".to_string()));
+        std::fs::create_dir_all(&custom_nodes_dir).ok();
+
+        let executor = Arc::new(Executor::new(registry.clone(), backend));
+        let registry = Arc::new(Mutex::new(registry));
+        let queue = Arc::new(PromptQueue::new());
+        let broadcaster = WsBroadcaster::new();
+        let images = Arc::new(ImageStore::new(output_dir));
 
         Self {
             executor,

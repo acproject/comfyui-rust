@@ -155,6 +155,7 @@ impl ContextConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageGenParams {
+    pub model_config: ModelConfig,
     pub loras: Vec<LoraEntry>,
     pub prompt: String,
     pub negative_prompt: String,
@@ -177,9 +178,112 @@ pub struct ImageGenParams {
     pub hires_params: HiresParams,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub model_path: Option<String>,
+    pub clip_l_path: Option<String>,
+    pub clip_g_path: Option<String>,
+    pub clip_vision_path: Option<String>,
+    pub t5xxl_path: Option<String>,
+    pub llm_path: Option<String>,
+    pub llm_vision_path: Option<String>,
+    pub diffusion_model_path: Option<String>,
+    pub vae_path: Option<String>,
+    pub control_net_path: Option<String>,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            model_path: None,
+            clip_l_path: None,
+            clip_g_path: None,
+            clip_vision_path: None,
+            t5xxl_path: None,
+            llm_path: None,
+            llm_vision_path: None,
+            diffusion_model_path: None,
+            vae_path: None,
+            control_net_path: None,
+        }
+    }
+}
+
+impl ModelConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_model(mut self, path: impl Into<String>) -> Self {
+        self.model_path = Some(path.into());
+        self
+    }
+
+    pub fn with_clip_l(mut self, path: impl Into<String>) -> Self {
+        self.clip_l_path = Some(path.into());
+        self
+    }
+
+    pub fn with_clip_g(mut self, path: impl Into<String>) -> Self {
+        self.clip_g_path = Some(path.into());
+        self
+    }
+
+    pub fn with_clip_vision(mut self, path: impl Into<String>) -> Self {
+        self.clip_vision_path = Some(path.into());
+        self
+    }
+
+    pub fn with_t5xxl(mut self, path: impl Into<String>) -> Self {
+        self.t5xxl_path = Some(path.into());
+        self
+    }
+
+    pub fn with_llm(mut self, path: impl Into<String>) -> Self {
+        self.llm_path = Some(path.into());
+        self
+    }
+
+    pub fn with_llm_vision(mut self, path: impl Into<String>) -> Self {
+        self.llm_vision_path = Some(path.into());
+        self
+    }
+
+    pub fn with_diffusion_model(mut self, path: impl Into<String>) -> Self {
+        self.diffusion_model_path = Some(path.into());
+        self
+    }
+
+    pub fn with_vae(mut self, path: impl Into<String>) -> Self {
+        self.vae_path = Some(path.into());
+        self
+    }
+
+    pub fn with_control_net(mut self, path: impl Into<String>) -> Self {
+        self.control_net_path = Some(path.into());
+        self
+    }
+
+    pub fn cache_key(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(ref p) = self.model_path { parts.push(format!("m:{}", p)); }
+        if let Some(ref p) = self.clip_l_path { parts.push(format!("cl:{}", p)); }
+        if let Some(ref p) = self.clip_g_path { parts.push(format!("cg:{}", p)); }
+        if let Some(ref p) = self.clip_vision_path { parts.push(format!("cv:{}", p)); }
+        if let Some(ref p) = self.t5xxl_path { parts.push(format!("t5:{}", p)); }
+        if let Some(ref p) = self.llm_path { parts.push(format!("llm:{}", p)); }
+        if let Some(ref p) = self.llm_vision_path { parts.push(format!("llmv:{}", p)); }
+        if let Some(ref p) = self.diffusion_model_path { parts.push(format!("dm:{}", p)); }
+        if let Some(ref p) = self.vae_path { parts.push(format!("vae:{}", p)); }
+        if let Some(ref p) = self.control_net_path { parts.push(format!("cn:{}", p)); }
+        if parts.is_empty() { "empty".to_string() } else { parts.join("|") }
+    }
+}
+
 impl Default for ImageGenParams {
     fn default() -> Self {
         Self {
+            model_config: ModelConfig::default(),
             loras: Vec::new(),
             prompt: String::new(),
             negative_prompt: String::new(),
@@ -262,6 +366,11 @@ impl ImageGenParams {
         self
     }
 
+    pub fn with_model_config(mut self, config: ModelConfig) -> Self {
+        self.model_config = config;
+        self
+    }
+
     pub fn with_init_image(mut self, image: SdImage) -> Self {
         self.init_image = Some(image);
         self
@@ -284,6 +393,7 @@ impl ImageGenParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoGenParams {
+    pub model_config: ModelConfig,
     pub loras: Vec<LoraEntry>,
     pub prompt: String,
     pub negative_prompt: String,
@@ -307,6 +417,7 @@ pub struct VideoGenParams {
 impl Default for VideoGenParams {
     fn default() -> Self {
         Self {
+            model_config: ModelConfig::default(),
             loras: Vec::new(),
             prompt: String::new(),
             negative_prompt: String::new(),
@@ -372,6 +483,16 @@ impl VideoGenParams {
         self.end_image = Some(image);
         self
     }
+
+    pub fn with_negative_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.negative_prompt = prompt.into();
+        self
+    }
+
+    pub fn with_model_config(mut self, config: ModelConfig) -> Self {
+        self.model_config = config;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,5 +515,48 @@ impl UpscaleParams {
             tile_size: 128,
             upscale_factor: 4,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvertParams {
+    pub input_path: String,
+    pub vae_path: Option<String>,
+    pub output_path: String,
+    pub output_type: SdType,
+    pub tensor_type_rules: Option<String>,
+    pub convert_name: bool,
+}
+
+impl ConvertParams {
+    pub fn new(input_path: impl Into<String>, output_path: impl Into<String>) -> Self {
+        Self {
+            input_path: input_path.into(),
+            vae_path: None,
+            output_path: output_path.into(),
+            output_type: SdType::Q8_0,
+            tensor_type_rules: None,
+            convert_name: false,
+        }
+    }
+
+    pub fn with_vae(mut self, path: impl Into<String>) -> Self {
+        self.vae_path = Some(path.into());
+        self
+    }
+
+    pub fn with_output_type(mut self, sd_type: SdType) -> Self {
+        self.output_type = sd_type;
+        self
+    }
+
+    pub fn with_tensor_type_rules(mut self, rules: impl Into<String>) -> Self {
+        self.tensor_type_rules = Some(rules.into());
+        self
+    }
+
+    pub fn with_convert_name(mut self, enable: bool) -> Self {
+        self.convert_name = enable;
+        self
     }
 }
