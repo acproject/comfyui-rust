@@ -1036,91 +1036,125 @@ pub async fn post_download_model(
     let download_id_clone = download_id.clone();
 
     let is_hf_url = url.contains("huggingface.co") || url.contains("hf.co");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
 
     tokio::spawn(async move {
-        let mut request = client.get(&url);
-        if is_hf_url {
-            if let Some(ref token) = hf_token {
-                if !token.is_empty() {
-                    request = request.header("Authorization", format!("Bearer {}", token));
+        let mut current_url = url.clone();
+        let mut redirect_count = 0u32;
+        let max_redirects = 20u32;
+
+        let response = loop {
+            let mut request = client.get(&current_url);
+            if is_hf_url {
+                if let Some(ref token) = hf_token {
+                    if !token.is_empty() {
+                        request = request.header("Authorization", format!("Bearer {}", token));
+                    }
                 }
             }
-        }
 
-        match request.send().await {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    let mut t = tracker.lock().await;
-                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(format!("HTTP {}", response.status())));
-                    tracing::error!("Download failed with status: {}", response.status());
-                    return;
-                }
-
-                let total_size = response.content_length().unwrap_or(0);
-
-                use tokio::io::AsyncWriteExt;
-                let mut file = match tokio::fs::File::create(&file_path_clone).await {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let mut t = tracker.lock().await;
-                        t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(e.to_string()));
-                        tracing::error!("Failed to create file: {}", e);
-                        return;
-                    }
-                };
-
-                {
-                    let mut t = tracker.lock().await;
-                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Downloading, 0, total_size, None);
-                }
-
-                let mut stream = response.bytes_stream();
-                let mut downloaded: u64 = 0;
-                let mut last_report: u64 = 0;
-                use futures::StreamExt;
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(bytes) => {
-                            downloaded += bytes.len() as u64;
-                            if let Err(e) = file.write_all(&bytes).await {
-                                let mut t = tracker.lock().await;
-                                t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
-                                let _ = tokio::fs::remove_file(&file_path_clone).await;
-                                return;
-                            }
-                            if downloaded - last_report > 1024 * 1024 {
-                                let mut t = tracker.lock().await;
-                                t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Downloading, downloaded, total_size, None);
-                                last_report = downloaded;
-                            }
-                        }
-                        Err(e) => {
+            match request.send().await {
+                Ok(resp) => {
+                    if resp.status().is_redirection() {
+                        redirect_count += 1;
+                        if redirect_count > max_redirects {
                             let mut t = tracker.lock().await;
-                            t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
-                            let _ = tokio::fs::remove_file(&file_path_clone).await;
+                            t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some("Too many redirects".to_string()));
                             return;
                         }
+                        if let Some(location) = resp.headers().get("location") {
+                            if let Ok(loc_str) = location.to_str() {
+                                current_url = if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                                    loc_str.to_string()
+                                } else {
+                                    let base = reqwest::Url::parse(&current_url).unwrap_or_else(|_| reqwest::Url::parse("https://huggingface.co").unwrap());
+                                    base.join(loc_str).map(|u| u.to_string()).unwrap_or_else(|_| loc_str.to_string())
+                                };
+                                continue;
+                            }
+                        }
+                        let mut t = tracker.lock().await;
+                        t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some("Redirect without Location header".to_string()));
+                        return;
+                    }
+                    break resp;
+                }
+                Err(e) => {
+                    let mut t = tracker.lock().await;
+                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(e.to_string()));
+                    tracing::error!("Download request failed: {}", e);
+                    return;
+                }
+            }
+        };
+
+        if !response.status().is_success() {
+            let mut t = tracker.lock().await;
+            t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(format!("HTTP {}", response.status())));
+            tracing::error!("Download failed with status: {}", response.status());
+            return;
+        }
+
+        let total_size = response.content_length().unwrap_or(0);
+
+        use tokio::io::AsyncWriteExt;
+        let mut file = match tokio::fs::File::create(&file_path_clone).await {
+            Ok(f) => f,
+            Err(e) => {
+                let mut t = tracker.lock().await;
+                t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(e.to_string()));
+                tracing::error!("Failed to create file: {}", e);
+                return;
+            }
+        };
+
+        {
+            let mut t = tracker.lock().await;
+            t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Downloading, 0, total_size, None);
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut downloaded: u64 = 0;
+        let mut last_report: u64 = 0;
+        use futures::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    downloaded += bytes.len() as u64;
+                    if let Err(e) = file.write_all(&bytes).await {
+                        let mut t = tracker.lock().await;
+                        t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
+                        let _ = tokio::fs::remove_file(&file_path_clone).await;
+                        return;
+                    }
+                    if downloaded - last_report > 1024 * 1024 {
+                        let mut t = tracker.lock().await;
+                        t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Downloading, downloaded, total_size, None);
+                        last_report = downloaded;
                     }
                 }
-                if let Err(e) = file.flush().await {
+                Err(e) => {
                     let mut t = tracker.lock().await;
                     t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
                     let _ = tokio::fs::remove_file(&file_path_clone).await;
                     return;
                 }
-                {
-                    let mut t = tracker.lock().await;
-                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Completed, downloaded, total_size, None);
-                }
-                tracing::info!("Downloaded model: {} ({} bytes)", filename_clone, downloaded);
-            }
-            Err(e) => {
-                let mut t = tracker.lock().await;
-                t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(e.to_string()));
-                tracing::error!("Download request failed: {}", e);
             }
         }
+        if let Err(e) = file.flush().await {
+            let mut t = tracker.lock().await;
+            t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
+            let _ = tokio::fs::remove_file(&file_path_clone).await;
+            return;
+        }
+        {
+            let mut t = tracker.lock().await;
+            t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Completed, downloaded, total_size, None);
+        }
+        tracing::info!("Downloaded model: {} ({} bytes)", filename_clone, downloaded);
     });
 
     Ok(Json(json!({
