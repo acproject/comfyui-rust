@@ -60,6 +60,7 @@ const ModelManager: FC = () => {
     flash_attn: boolean;
     offload_params_to_cpu: boolean;
     enable_mmap: boolean;
+    hf_token: string;
   }>({
     backend: 'local',
     sd_cli_path: '',
@@ -67,6 +68,7 @@ const ModelManager: FC = () => {
     flash_attn: false,
     offload_params_to_cpu: false,
     enable_mmap: true,
+    hf_token: '',
   });
   const [configLoaded, setConfigLoaded] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -140,6 +142,7 @@ const ModelManager: FC = () => {
           flash_attn: config.inference.flash_attn,
           offload_params_to_cpu: config.inference.offload_params_to_cpu,
           enable_mmap: config.inference.enable_mmap,
+          hf_token: config.inference.hf_token || '',
         });
         setConfigLoaded(true);
       }).catch(() => {});
@@ -183,6 +186,7 @@ const ModelManager: FC = () => {
           flash_attn: inferenceConfig.flash_attn,
           offload_params_to_cpu: inferenceConfig.offload_params_to_cpu,
           enable_mmap: inferenceConfig.enable_mmap,
+          hf_token: inferenceConfig.hf_token || null,
         },
       };
       await api.updateConfig(updatedConfig);
@@ -475,6 +479,36 @@ const ModelManager: FC = () => {
                 </div>
               </div>
             )}
+
+            <div>
+              <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>
+                HuggingFace Token
+              </label>
+              <input
+                type="password"
+                value={inferenceConfig.hf_token}
+                onChange={(e) => setInferenceConfig({ ...inferenceConfig, hf_token: e.target.value })}
+                placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxx"
+                style={{
+                  width: '100%',
+                  background: '#2a2a3e',
+                  border: '1px solid #444',
+                  borderRadius: 4,
+                  color: '#e2e8f0',
+                  fontSize: 11,
+                  padding: '4px 6px',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ fontSize: 9, color: '#555', marginTop: 2 }}>
+                用于下载 HuggingFace 受限模型，在
+                <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" style={{ color: '#6b8dd6', textDecoration: 'none' }}>
+                  hf.co/settings/tokens
+                </a>
+                获取
+              </div>
+            </div>
 
             <div>
               <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>

@@ -984,7 +984,7 @@ pub async fn post_download_model(
     State(state): State<AppState>,
     Json(body): Json<DownloadModelRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let (dir, filename) = {
+    let (dir, filename, hf_token) = {
         let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
         let sub_dir = config.get_model_type_dir(&body.model_type);
         let dir = state.models_dir.join(&sub_dir);
@@ -1004,7 +1004,7 @@ pub async fn post_download_model(
                 })
         }).unwrap_or_else(|| "model.bin".to_string());
 
-        (dir, filename)
+        (dir, filename, config.inference.hf_token.clone())
     };
 
     let file_path = dir.join(&filename);
@@ -1035,8 +1035,20 @@ pub async fn post_download_model(
     let tracker = state.download_tracker.clone();
     let download_id_clone = download_id.clone();
 
+    let is_hf_url = url.contains("huggingface.co") || url.contains("hf.co");
+    let client = reqwest::Client::new();
+
     tokio::spawn(async move {
-        match reqwest::get(&url).await {
+        let mut request = client.get(&url);
+        if is_hf_url {
+            if let Some(ref token) = hf_token {
+                if !token.is_empty() {
+                    request = request.header("Authorization", format!("Bearer {}", token));
+                }
+            }
+        }
+
+        match request.send().await {
             Ok(response) => {
                 if !response.status().is_success() {
                     let mut t = tracker.lock().await;

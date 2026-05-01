@@ -90,6 +90,8 @@ pub struct InferenceConfig {
     pub remote_url: Option<String>,
     #[serde(default)]
     pub sd_cli_path: Option<String>,
+    #[serde(default)]
+    pub hf_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +167,7 @@ impl Default for InferenceConfig {
             offload_params_to_cpu: false,
             remote_url: None,
             sd_cli_path: None,
+            hf_token: None,
         }
     }
 }

@@ -212,6 +212,7 @@ export interface ServerConfig {
     offload_params_to_cpu: boolean;
     remote_url: string | null;
     sd_cli_path: string | null;
+    hf_token: string | null;
   };
   output: {
     dir: string;
