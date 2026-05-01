@@ -15,6 +15,10 @@ import type {
   AgentChatRequest,
   AgentChatResponse,
   AgentModelsResponse,
+  ModelListResponse,
+  DeleteModelRequest,
+  DeleteModelResponse,
+  UploadModelResponse,
 } from '@/types/api';
 
 const API_BASE = '';
@@ -181,6 +185,13 @@ export const api = {
     return fetchJson<ServerConfig>('/config');
   },
 
+  async updateConfig(config: ServerConfig): Promise<ServerConfig> {
+    return fetchJson<ServerConfig>('/config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  },
+
   async getInputImages(): Promise<{ images: string[] }> {
     return fetchJson<{ images: string[] }>('/input_images');
   },
@@ -252,5 +263,37 @@ export const api = {
 
   async getAgentModels(): Promise<AgentModelsResponse> {
     return fetchJson<AgentModelsResponse>('/agent/models');
+  },
+
+  async listModelFiles(modelType?: string): Promise<ModelListResponse> {
+    const params = new URLSearchParams();
+    if (modelType) params.set('model_type', modelType);
+    const qs = params.toString();
+    return fetchJson<ModelListResponse>(`/model_manager/list${qs ? `?${qs}` : ''}`);
+  },
+
+  async deleteModelFile(request: DeleteModelRequest): Promise<DeleteModelResponse> {
+    return fetchJson<DeleteModelResponse>('/model_manager/delete', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  },
+
+  async uploadModelFile(file: File, modelType: string): Promise<UploadModelResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('model_type', modelType);
+
+    const response = await fetch(`${API_BASE}/model_manager/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
+      throw new Error(error.error?.message || `Upload failed: ${response.status}`);
+    }
+
+    return response.json();
   },
 };

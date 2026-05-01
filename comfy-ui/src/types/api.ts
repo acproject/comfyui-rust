@@ -188,6 +188,19 @@ export interface ServerConfig {
     controlnet: string;
     upscale: string;
     embeddings: string;
+    text_encoders: string;
+    diffusion_models: string;
+    clip_vision: string;
+    style_models: string;
+    diffusers: string;
+    vae_approx: string;
+    gligen: string;
+    latent_upscale_models: string;
+    hypernetworks: string;
+    photomarker: string;
+    classifiers: string;
+    model_patches: string;
+    audio_encoders: string;
   };
   inference: {
     backend: string;
@@ -204,6 +217,7 @@ export interface ServerConfig {
     save_metadata: boolean;
     format: string;
   };
+  extra?: Record<string, unknown>;
 }
 
 export interface AgentConfig {
@@ -265,4 +279,31 @@ export interface AgentModelInfo {
 
 export interface AgentModelsResponse {
   models: AgentModelInfo[];
+}
+
+export interface ModelFileInfo {
+  name: string;
+  path: string;
+  size: number;
+  modified: number | null;
+}
+
+export type ModelTypeMap = Record<string, ModelFileInfo[]>;
+
+export interface ModelListResponse extends ModelTypeMap {}
+
+export interface DeleteModelRequest {
+  model_type: string;
+  path: string;
+}
+
+export interface DeleteModelResponse {
+  success: boolean;
+  path: string;
+}
+
+export interface UploadModelResponse {
+  name: string;
+  model_type: string;
+  path: string;
 }

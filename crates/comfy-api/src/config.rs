@@ -42,6 +42,32 @@ pub struct ModelPathsConfig {
     pub upscale: String,
     #[serde(default = "default_embeddings_dir")]
     pub embeddings: String,
+    #[serde(default = "default_text_encoders_dir")]
+    pub text_encoders: String,
+    #[serde(default = "default_diffusion_models_dir")]
+    pub diffusion_models: String,
+    #[serde(default = "default_clip_vision_dir")]
+    pub clip_vision: String,
+    #[serde(default = "default_style_models_dir")]
+    pub style_models: String,
+    #[serde(default = "default_diffusers_dir")]
+    pub diffusers: String,
+    #[serde(default = "default_vae_approx_dir")]
+    pub vae_approx: String,
+    #[serde(default = "default_gligen_dir")]
+    pub gligen: String,
+    #[serde(default = "default_latent_upscale_models_dir")]
+    pub latent_upscale_models: String,
+    #[serde(default = "default_hypernetworks_dir")]
+    pub hypernetworks: String,
+    #[serde(default = "default_photomarker_dir")]
+    pub photomarker: String,
+    #[serde(default = "default_classifiers_dir")]
+    pub classifiers: String,
+    #[serde(default = "default_model_patches_dir")]
+    pub model_patches: String,
+    #[serde(default = "default_audio_encoders_dir")]
+    pub audio_encoders: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +134,19 @@ impl Default for ModelPathsConfig {
             controlnet: default_controlnet_dir(),
             upscale: default_upscale_dir(),
             embeddings: default_embeddings_dir(),
+            text_encoders: default_text_encoders_dir(),
+            diffusion_models: default_diffusion_models_dir(),
+            clip_vision: default_clip_vision_dir(),
+            style_models: default_style_models_dir(),
+            diffusers: default_diffusers_dir(),
+            vae_approx: default_vae_approx_dir(),
+            gligen: default_gligen_dir(),
+            latent_upscale_models: default_latent_upscale_models_dir(),
+            hypernetworks: default_hypernetworks_dir(),
+            photomarker: default_photomarker_dir(),
+            classifiers: default_classifiers_dir(),
+            model_patches: default_model_patches_dir(),
+            audio_encoders: default_audio_encoders_dir(),
         }
     }
 }
@@ -175,6 +214,58 @@ fn default_upscale_dir() -> String {
 
 fn default_embeddings_dir() -> String {
     "embeddings".to_string()
+}
+
+fn default_text_encoders_dir() -> String {
+    "text_encoders".to_string()
+}
+
+fn default_diffusion_models_dir() -> String {
+    "diffusion_models".to_string()
+}
+
+fn default_clip_vision_dir() -> String {
+    "clip_vision".to_string()
+}
+
+fn default_style_models_dir() -> String {
+    "style_models".to_string()
+}
+
+fn default_diffusers_dir() -> String {
+    "diffusers".to_string()
+}
+
+fn default_vae_approx_dir() -> String {
+    "vae_approx".to_string()
+}
+
+fn default_gligen_dir() -> String {
+    "gligen".to_string()
+}
+
+fn default_latent_upscale_models_dir() -> String {
+    "latent_upscale_models".to_string()
+}
+
+fn default_hypernetworks_dir() -> String {
+    "hypernetworks".to_string()
+}
+
+fn default_photomarker_dir() -> String {
+    "photomarker".to_string()
+}
+
+fn default_classifiers_dir() -> String {
+    "classifiers".to_string()
+}
+
+fn default_model_patches_dir() -> String {
+    "model_patches".to_string()
+}
+
+fn default_audio_encoders_dir() -> String {
+    "audio_encoders".to_string()
 }
 
 fn default_backend() -> String {
@@ -262,10 +353,71 @@ impl ComfyConfig {
             "controlnet" => &self.models.controlnet,
             "upscale_models" => &self.models.upscale,
             "embeddings" => &self.models.embeddings,
-            _ => "misc",
+            "diffusion_models" => &self.models.diffusion_models,
+            "clip_vision" => &self.models.clip_vision,
+            "style_models" => &self.models.style_models,
+            "diffusers" => &self.models.diffusers,
+            "vae_approx" => &self.models.vae_approx,
+            "gligen" => &self.models.gligen,
+            "latent_upscale_models" => &self.models.latent_upscale_models,
+            "hypernetworks" => &self.models.hypernetworks,
+            "photomarker" => &self.models.photomarker,
+            "classifiers" => &self.models.classifiers,
+            "model_patches" => &self.models.model_patches,
+            "audio_encoders" => &self.models.audio_encoders,
+            _ => model_type,
         };
 
         PathBuf::from(&self.models.base_dir).join(sub_dir).join(filename)
+    }
+
+    pub fn get_model_type_dir(&self, model_type: &str) -> String {
+        match model_type {
+            "checkpoints" => self.models.checkpoints.clone(),
+            "clip" | "text_encoders" => self.models.clip.clone(),
+            "vae" => self.models.vae.clone(),
+            "loras" => self.models.lora.clone(),
+            "controlnet" => self.models.controlnet.clone(),
+            "upscale_models" => self.models.upscale.clone(),
+            "embeddings" => self.models.embeddings.clone(),
+            "diffusion_models" => self.models.diffusion_models.clone(),
+            "clip_vision" => self.models.clip_vision.clone(),
+            "style_models" => self.models.style_models.clone(),
+            "diffusers" => self.models.diffusers.clone(),
+            "vae_approx" => self.models.vae_approx.clone(),
+            "gligen" => self.models.gligen.clone(),
+            "latent_upscale_models" => self.models.latent_upscale_models.clone(),
+            "hypernetworks" => self.models.hypernetworks.clone(),
+            "photomarker" => self.models.photomarker.clone(),
+            "classifiers" => self.models.classifiers.clone(),
+            "model_patches" => self.models.model_patches.clone(),
+            "audio_encoders" => self.models.audio_encoders.clone(),
+            _ => model_type.to_string(),
+        }
+    }
+
+    pub fn model_types() -> Vec<&'static str> {
+        vec![
+            "checkpoints",
+            "loras",
+            "vae",
+            "text_encoders",
+            "diffusion_models",
+            "clip_vision",
+            "style_models",
+            "embeddings",
+            "diffusers",
+            "vae_approx",
+            "controlnet",
+            "gligen",
+            "upscale_models",
+            "latent_upscale_models",
+            "hypernetworks",
+            "photomarker",
+            "classifiers",
+            "model_patches",
+            "audio_encoders",
+        ]
     }
 
     pub fn address(&self) -> String {

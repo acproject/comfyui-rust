@@ -7,13 +7,14 @@ import { NodePanel } from '@/components/sidebar/NodePanel';
 import { PropertyPanel } from '@/components/sidebar/PropertyPanel';
 import ImageGallery from '@/components/sidebar/ImageGallery';
 import WorkflowManager from '@/components/sidebar/WorkflowManager';
+import { ModelManager } from '@/components/sidebar/ModelManager';
 import { CustomNodePanel } from '@/components/custom/CustomNodePanel';
 import { AIAgent } from '@/components/agent/AIAgent';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useInitApp } from '@/hooks/useInitApp';
 import { useWorkflowStore } from '@/store/workflow';
 
-type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'custom';
+type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'models' | 'custom';
 
 const AppInner: FC = () => {
   useWebSocket();
@@ -47,25 +48,32 @@ const AppInner: FC = () => {
       <Toolbar />
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
         <div style={{ width: '260px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #2d3748', background: '#1a202c' }}>
-          <div style={{ display: 'flex', borderBottom: '1px solid #2d3748' }}>
-            {(['nodes', 'properties', 'images', 'workflows', 'custom'] as SidebarTab[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                style={{
-                  flex: 1,
-                  padding: '6px 0',
-                  fontSize: '11px',
-                  background: activeTab === tab ? '#2d3748' : 'transparent',
-                  border: 'none',
-                  borderBottom: activeTab === tab ? '2px solid #4a9eff' : '2px solid transparent',
-                  color: activeTab === tab ? '#e2e8f0' : '#718096',
-                  cursor: 'pointer',
-                  textTransform: 'capitalize',
-                }}
-              >
-                {tab === 'custom' ? '⚙' : tab}
-              </button>
+          <div style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #2d3748' }}>
+            {([
+              ['nodes', 'properties', 'images'],
+              ['workflows', 'models', 'custom'],
+            ] as SidebarTab[][]).map((row, rowIdx) => (
+              <div key={rowIdx} style={{ display: 'flex' }}>
+                {row.map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    style={{
+                      flex: 1,
+                      padding: '6px 0',
+                      fontSize: '11px',
+                      background: activeTab === tab ? '#2d3748' : 'transparent',
+                      border: 'none',
+                      borderBottom: activeTab === tab ? '2px solid #4a9eff' : '2px solid transparent',
+                      color: activeTab === tab ? '#e2e8f0' : '#718096',
+                      cursor: 'pointer',
+                      textTransform: 'capitalize',
+                    }}
+                  >
+                    {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab}
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
           <div style={{ flex: 1, overflow: 'auto' }}>
@@ -78,6 +86,7 @@ const AppInner: FC = () => {
                 getCurrentWorkflow={handleGetCurrentWorkflow}
               />
             )}
+            {activeTab === 'models' && <ModelManager />}
             {activeTab === 'custom' && <CustomNodePanel />}
           </div>
         </div>

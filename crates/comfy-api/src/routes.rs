@@ -1,4 +1,5 @@
 use crate::agent::{AgentConfig, ChatRequest};
+use crate::config::ComfyConfig;
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::ws::WsMessage;
@@ -224,6 +225,172 @@ pub async fn get_models(
     State(_state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(json!([])))
+}
+
+#[derive(Deserialize)]
+pub struct ModelListQuery {
+    pub model_type: Option<String>,
+}
+
+pub async fn list_model_files(
+    State(state): State<AppState>,
+    Query(query): Query<ModelListQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let models_dir = &state.models_dir;
+
+    let model_types: Vec<&str> = if let Some(ref mt) = query.model_type {
+        vec![mt.as_str()]
+    } else {
+        ComfyConfig::model_types()
+    };
+
+    let mut result = serde_json::Map::new();
+
+    for model_type in model_types {
+        let sub_dir = config.get_model_type_dir(model_type);
+        let dir_path = models_dir.join(&sub_dir);
+
+        let mut files: Vec<serde_json::Value> = Vec::new();
+
+        if dir_path.exists() {
+            scan_model_files(&dir_path, &dir_path, &mut files);
+        }
+
+        result.insert(
+            model_type.to_string(),
+            serde_json::Value::Array(files),
+        );
+    }
+
+    Ok(Json(serde_json::Value::Object(result)))
+}
+
+fn scan_model_files(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    results: &mut Vec<serde_json::Value>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_model_files(&path, base, results);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                let is_model = lower.ends_with(".safetensors")
+                    || lower.ends_with(".ckpt")
+                    || lower.ends_with(".pt")
+                    || lower.ends_with(".pth")
+                    || lower.ends_with(".bin")
+                    || lower.ends_with(".onnx")
+                    || lower.ends_with(".gguf")
+                    || lower.ends_with(".sft")
+                    || lower.ends_with(".json");
+
+                if is_model {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        let rel_path = rel.to_string_lossy().to_string();
+                        let metadata = std::fs::metadata(&path).ok();
+                        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+                        let modified = metadata
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs());
+
+                        results.push(json!({
+                            "name": name,
+                            "path": rel_path,
+                            "size": size,
+                            "modified": modified,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DeleteModelRequest {
+    pub model_type: String,
+    pub path: String,
+}
+
+pub async fn delete_model_file(
+    State(state): State<AppState>,
+    Json(body): Json<DeleteModelRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let sub_dir = config.get_model_type_dir(&body.model_type);
+    let file_path = state.models_dir.join(&sub_dir).join(&body.path);
+
+    if !file_path.exists() {
+        return Err(ApiError::NotFound(format!(
+            "Model file not found: {}",
+            body.path
+        )));
+    }
+
+    let canonical = file_path.canonicalize().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let models_canonical = state.models_dir.canonicalize().map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    if !canonical.starts_with(&models_canonical) {
+        return Err(ApiError::BadRequest("Invalid model path".to_string()));
+    }
+
+    std::fs::remove_file(&canonical).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(json!({ "success": true, "path": body.path })))
+}
+
+pub async fn upload_model_file(
+    State(state): State<AppState>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut model_type = String::new();
+    let mut filename = String::new();
+    let mut data = Vec::new();
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        ApiError::BadRequest(format!("Multipart error: {}", e))
+    })? {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "file" => {
+                filename = field.file_name().unwrap_or("model.safetensors").to_string();
+                data = field.bytes().await.map_err(|e| ApiError::BadRequest(format!("Read error: {}", e)))?.to_vec();
+            }
+            "model_type" => {
+                model_type = String::from_utf8(
+                    field.bytes().await.map_err(|e| ApiError::BadRequest(format!("Read error: {}", e)))?.to_vec(),
+                ).unwrap_or_default();
+            }
+            _ => {}
+        }
+    }
+
+    if data.is_empty() {
+        return Err(ApiError::BadRequest("No file data provided".to_string()));
+    }
+
+    if model_type.is_empty() {
+        return Err(ApiError::BadRequest("model_type is required".to_string()));
+    }
+
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let sub_dir = config.get_model_type_dir(&model_type);
+    let dir = state.models_dir.join(&sub_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let file_path = dir.join(&filename);
+    std::fs::write(&file_path, &data).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(json!({
+        "name": filename,
+        "model_type": model_type,
+        "path": filename,
+    })))
 }
 
 pub async fn get_input_images(
@@ -643,10 +810,25 @@ pub async fn get_list_workflows(
 }
 
 pub async fn get_config(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let config = crate::config::ComfyConfig::from_env();
-    Ok(Json(serde_json::to_value(config).unwrap_or(Value::Null)))
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(serde_json::to_value(&*config).unwrap_or(Value::Null)))
+}
+
+pub async fn post_config(
+    State(state): State<AppState>,
+    Json(body): Json<ComfyConfig>,
+) -> Result<impl IntoResponse, ApiError> {
+    {
+        let mut config = state.config.write().map_err(|e| ApiError::Internal(e.to_string()))?;
+        *config = body.clone();
+    }
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    config.save(&state.config_path)
+        .map_err(|e| ApiError::Internal(format!("Failed to save config: {}", e)))?;
+
+    Ok(Json(serde_json::to_value(&*config).unwrap_or(Value::Null)))
 }
 
 pub async fn list_custom_nodes(
