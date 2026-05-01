@@ -983,25 +983,29 @@ pub struct DownloadModelRequest {
 pub async fn post_download_model(
     State(state): State<AppState>,
     Json(body): Json<DownloadModelRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
-    let sub_dir = config.get_model_type_dir(&body.model_type);
-    let dir = state.models_dir.join(&sub_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (dir, filename) = {
+        let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+        let sub_dir = config.get_model_type_dir(&body.model_type);
+        let dir = state.models_dir.join(&sub_dir);
+        std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let filename = body.filename.clone().or_else(|| {
-        body.url
-            .split('/')
-            .next_back()
-            .map(|s| {
-                let s = s.to_string();
-                if s.contains('?') {
-                    s.split('?').next().unwrap_or(&s).to_string()
-                } else {
-                    s
-                }
-            })
-    }).unwrap_or_else(|| "model.bin".to_string());
+        let filename = body.filename.clone().or_else(|| {
+            body.url
+                .split('/')
+                .next_back()
+                .map(|s| {
+                    let s = s.to_string();
+                    if s.contains('?') {
+                        s.split('?').next().unwrap_or(&s).to_string()
+                    } else {
+                        s
+                    }
+                })
+        }).unwrap_or_else(|| "model.bin".to_string());
+
+        (dir, filename)
+    };
 
     let file_path = dir.join(&filename);
 
@@ -1009,53 +1013,99 @@ pub async fn post_download_model(
         return Err(ApiError::BadRequest(format!("File already exists: {}", filename)));
     }
 
+    let download_id = uuid::Uuid::new_v4().to_string();
+
+    {
+        let mut tracker = state.download_tracker.lock().await;
+        tracker.add(crate::download_tracker::DownloadProgress {
+            id: download_id.clone(),
+            url: body.url.clone(),
+            filename: filename.clone(),
+            model_type: body.model_type.clone(),
+            status: crate::download_tracker::DownloadStatus::Pending,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            error: None,
+        });
+    }
+
     let url = body.url.clone();
     let file_path_clone = file_path.clone();
     let filename_clone = filename.clone();
+    let tracker = state.download_tracker.clone();
+    let download_id_clone = download_id.clone();
 
     tokio::spawn(async move {
         match reqwest::get(&url).await {
             Ok(response) => {
-                if response.status().is_success() {
-                    use tokio::io::AsyncWriteExt;
-                    let mut file = match tokio::fs::File::create(&file_path_clone).await {
-                        Ok(f) => f,
-                        Err(e) => {
-                            tracing::error!("Failed to create file: {}", e);
-                            return;
-                        }
-                    };
-                    let mut stream = response.bytes_stream();
-                    let mut total: u64 = 0;
-                    use futures::StreamExt;
-                    while let Some(chunk) = stream.next().await {
-                        match chunk {
-                            Ok(bytes) => {
-                                total += bytes.len() as u64;
-                                if let Err(e) = file.write_all(&bytes).await {
-                                    tracing::error!("Failed to write chunk: {}", e);
-                                    let _ = tokio::fs::remove_file(&file_path_clone).await;
-                                    return;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to read chunk: {}", e);
+                if !response.status().is_success() {
+                    let mut t = tracker.lock().await;
+                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(format!("HTTP {}", response.status())));
+                    tracing::error!("Download failed with status: {}", response.status());
+                    return;
+                }
+
+                let total_size = response.content_length().unwrap_or(0);
+
+                use tokio::io::AsyncWriteExt;
+                let mut file = match tokio::fs::File::create(&file_path_clone).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        let mut t = tracker.lock().await;
+                        t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(e.to_string()));
+                        tracing::error!("Failed to create file: {}", e);
+                        return;
+                    }
+                };
+
+                {
+                    let mut t = tracker.lock().await;
+                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Downloading, 0, total_size, None);
+                }
+
+                let mut stream = response.bytes_stream();
+                let mut downloaded: u64 = 0;
+                let mut last_report: u64 = 0;
+                use futures::StreamExt;
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(bytes) => {
+                            downloaded += bytes.len() as u64;
+                            if let Err(e) = file.write_all(&bytes).await {
+                                let mut t = tracker.lock().await;
+                                t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
                                 let _ = tokio::fs::remove_file(&file_path_clone).await;
                                 return;
                             }
+                            if downloaded - last_report > 1024 * 1024 {
+                                let mut t = tracker.lock().await;
+                                t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Downloading, downloaded, total_size, None);
+                                last_report = downloaded;
+                            }
+                        }
+                        Err(e) => {
+                            let mut t = tracker.lock().await;
+                            t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
+                            let _ = tokio::fs::remove_file(&file_path_clone).await;
+                            return;
                         }
                     }
-                    if let Err(e) = file.flush().await {
-                        tracing::error!("Failed to flush file: {}", e);
-                        let _ = tokio::fs::remove_file(&file_path_clone).await;
-                        return;
-                    }
-                    tracing::info!("Downloaded model: {} ({} bytes)", filename_clone, total);
-                } else {
-                    tracing::error!("Download failed with status: {}", response.status());
                 }
+                if let Err(e) = file.flush().await {
+                    let mut t = tracker.lock().await;
+                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, downloaded, total_size, Some(e.to_string()));
+                    let _ = tokio::fs::remove_file(&file_path_clone).await;
+                    return;
+                }
+                {
+                    let mut t = tracker.lock().await;
+                    t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Completed, downloaded, total_size, None);
+                }
+                tracing::info!("Downloaded model: {} ({} bytes)", filename_clone, downloaded);
             }
             Err(e) => {
+                let mut t = tracker.lock().await;
+                t.update(&download_id_clone, crate::download_tracker::DownloadStatus::Failed, 0, 0, Some(e.to_string()));
                 tracing::error!("Download request failed: {}", e);
             }
         }
@@ -1063,8 +1113,25 @@ pub async fn post_download_model(
 
     Ok(Json(json!({
         "status": "downloading",
+        "download_id": download_id,
         "filename": filename,
         "model_type": body.model_type,
         "url": body.url,
     })))
+}
+
+pub async fn get_download_progress(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let tracker = state.download_tracker.lock().await;
+    let list = tracker.list();
+    Ok(Json(json!({ "downloads": list })))
+}
+
+pub async fn delete_download_progress(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut tracker = state.download_tracker.lock().await;
+    tracker.remove_completed();
+    Ok(Json(json!({ "status": "ok" })))
 }

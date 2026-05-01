@@ -22,6 +22,7 @@ import type {
   ModelDownloadEntry,
   DownloadModelRequest,
   DownloadModelResponse,
+  DownloadProgressResponse,
 } from '@/types/api';
 
 const API_BASE = '';
@@ -308,6 +309,16 @@ export const api = {
     return fetchJson<DownloadModelResponse>('/model_downloads/download', {
       method: 'POST',
       body: JSON.stringify(request),
+    });
+  },
+
+  async getDownloadProgress(): Promise<DownloadProgressResponse> {
+    return fetchJson<DownloadProgressResponse>('/model_downloads/progress');
+  },
+
+  async clearDownloadProgress(): Promise<void> {
+    await fetchJson<{ status: string }>('/model_downloads/progress', {
+      method: 'DELETE',
     });
   },
 };

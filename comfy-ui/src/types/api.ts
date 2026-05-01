@@ -332,7 +332,25 @@ export interface DownloadModelRequest {
 
 export interface DownloadModelResponse {
   status: string;
+  download_id: string;
   filename: string;
   model_type: string;
   url: string;
+}
+
+export type DownloadStatus = 'Pending' | 'Downloading' | 'Completed' | 'Failed';
+
+export interface DownloadProgress {
+  id: string;
+  url: string;
+  filename: string;
+  model_type: string;
+  status: DownloadStatus;
+  downloaded_bytes: number;
+  total_bytes: number;
+  error: string | null;
+}
+
+export interface DownloadProgressResponse {
+  downloads: DownloadProgress[];
 }

@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, type FC } from 'react';
-import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive, Settings, Save, CheckCircle, AlertCircle, Download, ExternalLink, Filter } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, type FC } from 'react';
+import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive, Settings, Save, CheckCircle, AlertCircle, Download, ExternalLink, Filter, X } from 'lucide-react';
 import { useModelManagerStore, MODEL_TYPES } from '@/store/models';
 import { api } from '@/api/client';
-import type { ModelFileInfo, ServerConfig, ModelDownloadEntry } from '@/types/api';
+import type { ModelFileInfo, ServerConfig, ModelDownloadEntry, DownloadProgress } from '@/types/api';
 
 const MODEL_TYPE_ICONS: Record<string, string> = {
   checkpoints: '🏛️',
@@ -79,6 +79,7 @@ const ModelManager: FC = () => {
   const [downloadCategory, setDownloadCategory] = useState<string>('all');
   const [downloadingUrls, setDownloadingUrls] = useState<Set<string>>(new Set());
   const [downloadSearch, setDownloadSearch] = useState('');
+  const [activeDownloads, setActiveDownloads] = useState<DownloadProgress[]>([]);
 
   const loadDownloadList = () => {
     setDownloadLoading(true);
@@ -89,6 +90,41 @@ const ModelManager: FC = () => {
       setDownloadLoading(false);
     });
   };
+
+  const pollDownloads = useCallback(async () => {
+    try {
+      const resp = await api.getDownloadProgress();
+      setActiveDownloads(resp.downloads);
+      const hasActive = resp.downloads.some(d => d.status === 'Pending' || d.status === 'Downloading');
+      if (!hasActive) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let active = true;
+    const startPolling = async () => {
+      const hasActive = await pollDownloads();
+      if (hasActive && active) {
+        timer = setInterval(async () => {
+          const stillActive = await pollDownloads();
+          if (!stillActive && timer) {
+            clearInterval(timer);
+            timer = null;
+            loadModels();
+          }
+        }, 2000);
+      }
+    };
+    startPolling();
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [pollDownloads, loadModels]);
 
   useEffect(() => {
     loadModels();
@@ -121,16 +157,14 @@ const ModelManager: FC = () => {
     setDownloadingUrls((prev) => new Set(prev).add(key));
     try {
       await api.downloadModel({ url, model_type: modelType, filename });
+      pollDownloads();
     } catch {
     } finally {
-      setTimeout(() => {
-        setDownloadingUrls((prev) => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
-        });
-        loadModels();
-      }, 2000);
+      setDownloadingUrls((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   };
 
@@ -298,6 +332,74 @@ const ModelManager: FC = () => {
       )}
 
       <div style={{ borderBottom: '1px solid #333' }}>
+        {activeDownloads.length > 0 && (
+          <div style={{ padding: '4px 10px' }}>
+            {activeDownloads.map((dl) => {
+              const percent = dl.total_bytes > 0 ? (dl.downloaded_bytes / dl.total_bytes) * 100 : 0;
+              const isFailed = dl.status === 'Failed';
+              const isCompleted = dl.status === 'Completed';
+              const isPending = dl.status === 'Pending';
+              const barColor = isFailed ? '#e53e3e' : isCompleted ? '#38a169' : '#3b5998';
+              const statusText = isPending ? '等待中...' :
+                isFailed ? `失败: ${dl.error || '未知错误'}` :
+                isCompleted ? '完成' :
+                dl.total_bytes > 0 ? `${percent.toFixed(1)}%` : '下载中...';
+              return (
+                <div key={dl.id} style={{ marginBottom: 4, padding: '4px 0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                    <span style={{ fontSize: 10, color: '#e2e8f0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {dl.filename}
+                    </span>
+                    <span style={{ fontSize: 8, color: isFailed ? '#fc8181' : isCompleted ? '#68d391' : '#718096', flexShrink: 0 }}>
+                      {statusText}
+                    </span>
+                    {(isCompleted || isFailed) && (
+                      <button
+                        onClick={() => {
+                          setActiveDownloads((prev) => prev.filter(d => d.id !== dl.id));
+                          if (activeDownloads.every(d => d.id === dl.id || d.status === 'Completed' || d.status === 'Failed')) {
+                            api.clearDownloadProgress().catch(() => {});
+                          }
+                        }}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: '#555',
+                          padding: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <X size={9} />
+                      </button>
+                    )}
+                  </div>
+                  <div style={{
+                    width: '100%',
+                    height: 3,
+                    background: '#2a2a3e',
+                    borderRadius: 2,
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      width: `${isPending ? 0 : isCompleted ? 100 : percent}%`,
+                      height: '100%',
+                      background: barColor,
+                      borderRadius: 2,
+                      transition: 'width 0.3s ease',
+                    }} />
+                  </div>
+                  <div style={{ fontSize: 8, color: '#555', marginTop: 1, display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{formatFileSize(dl.downloaded_bytes)}</span>
+                    {dl.total_bytes > 0 && <span>{formatFileSize(dl.total_bytes)}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div
           style={{
             padding: '6px 10px',

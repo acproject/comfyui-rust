@@ -1,5 +1,6 @@
 use crate::agent::{AgentConfig, AgentService};
 use crate::config::ComfyConfig;
+use crate::download_tracker::{DownloadTracker, SharedDownloadTracker};
 use crate::images::ImageStore;
 use crate::queue::PromptQueue;
 use crate::ws::WsBroadcaster;
@@ -25,11 +26,16 @@ pub struct AppState {
     pub config: Arc<std::sync::RwLock<ComfyConfig>>,
     pub config_path: Arc<PathBuf>,
     pub agent: Arc<AgentService>,
+    pub download_tracker: SharedDownloadTracker,
 }
 
 fn create_agent_service() -> Arc<AgentService> {
     let config = AgentConfig::from_env();
     Arc::new(AgentService::new(config))
+}
+
+fn create_download_tracker() -> SharedDownloadTracker {
+    Arc::new(Mutex::new(DownloadTracker::new()))
 }
 
 impl AppState {
@@ -80,6 +86,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: create_agent_service(),
+            download_tracker: create_download_tracker(),
         }
     }
 
@@ -121,6 +128,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: create_agent_service(),
+            download_tracker: create_download_tracker(),
         }
     }
 
@@ -177,6 +185,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: create_agent_service(),
+            download_tracker: create_download_tracker(),
         }
     }
 
@@ -233,6 +242,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: create_agent_service(),
+            download_tracker: create_download_tracker(),
         }
     }
 
@@ -278,6 +288,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: create_agent_service(),
+            download_tracker: create_download_tracker(),
         }
     }
 
@@ -302,6 +313,7 @@ impl Clone for AppState {
             config: self.config.clone(),
             config_path: self.config_path.clone(),
             agent: self.agent.clone(),
+            download_tracker: self.download_tracker.clone(),
         }
     }
 }

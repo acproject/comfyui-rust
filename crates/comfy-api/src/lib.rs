@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod config;
+pub mod download_tracker;
 pub mod error;
 pub mod images;
 pub mod model_downloads;
@@ -12,6 +13,7 @@ pub mod ws;
 
 pub use agent::{AgentConfig, AgentService, AgentError, ChatRequest, ChatResponse, ChatMessage, AgentAction};
 pub use config::ComfyConfig;
+pub use download_tracker::{DownloadProgress, DownloadStatus, DownloadTracker, SharedDownloadTracker};
 pub use error::ApiError;
 pub use images::ImageStore;
 pub use queue::{HistoryEntry, JobStatus, PromptQueue, QueueItem};

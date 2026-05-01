@@ -76,6 +76,8 @@ impl ComfyServer {
             .route("/agent/models", axum::routing::get(routes::get_agent_models))
             .route("/model_downloads", axum::routing::get(routes::get_model_download_list))
             .route("/model_downloads/download", axum::routing::post(routes::post_download_model))
+            .route("/model_downloads/progress", axum::routing::get(routes::get_download_progress))
+            .route("/model_downloads/progress", axum::routing::delete(routes::delete_download_progress))
             .with_state(self.state.clone());
 
         let mut router = Router::new().merge(api_routes);
