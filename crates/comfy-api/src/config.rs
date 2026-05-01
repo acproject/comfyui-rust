@@ -88,6 +88,8 @@ pub struct InferenceConfig {
     pub offload_params_to_cpu: bool,
     #[serde(default)]
     pub remote_url: Option<String>,
+    #[serde(default)]
+    pub sd_cli_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +164,7 @@ impl Default for InferenceConfig {
             flash_attn: false,
             offload_params_to_cpu: false,
             remote_url: None,
+            sd_cli_path: None,
         }
     }
 }
@@ -334,6 +337,9 @@ impl ComfyConfig {
         }
         if let Ok(url) = std::env::var("COMFY_REMOTE_URL") {
             config.inference.remote_url = Some(url);
+        }
+        if let Ok(path) = std::env::var("SD_CLI_PATH") {
+            config.inference.sd_cli_path = Some(path);
         }
         if let Ok(n) = std::env::var("COMFY_THREADS") {
             if let Ok(t) = n.parse() {

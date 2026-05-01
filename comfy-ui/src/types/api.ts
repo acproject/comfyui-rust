@@ -211,6 +211,7 @@ export interface ServerConfig {
     flash_attn: boolean;
     offload_params_to_cpu: boolean;
     remote_url: string | null;
+    sd_cli_path: string | null;
   };
   output: {
     dir: string;

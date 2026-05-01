@@ -184,8 +184,9 @@ impl AppState {
         let models_dir = PathBuf::from(&config.models.base_dir);
         std::fs::create_dir_all(&models_dir).ok();
 
-        let sd_cli_path = std::env::var("SD_CLI_PATH")
-            .unwrap_or_else(|_| "sd-cli".to_string());
+        let sd_cli_path = config.inference.sd_cli_path.clone()
+            .or_else(|| std::env::var("SD_CLI_PATH").ok())
+            .unwrap_or_else(|| "sd-cli".to_string());
 
         let cli_config = CliBackendConfig::new(&sd_cli_path)
             .with_threads(config.inference.n_threads as i32)

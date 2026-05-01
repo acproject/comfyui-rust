@@ -66,10 +66,7 @@ async fn main() {
 
 #[cfg(feature = "local")]
 fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
-    let backend_type = std::env::var("COMFY_BACKEND")
-        .unwrap_or_else(|_| "local".to_string());
-
-    match backend_type.as_str() {
+    match config.inference.backend.as_str() {
         "cli" => {
             tracing::info!("Using CLI inference backend (sd-cli subprocess)");
             AppState::with_cli_backend(registry, config, config_path)
@@ -83,10 +80,7 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
 
 #[cfg(not(feature = "local"))]
 fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
-    let backend_type = std::env::var("COMFY_BACKEND")
-        .unwrap_or_else(|_| "null".to_string());
-
-    match backend_type.as_str() {
+    match config.inference.backend.as_str() {
         "cli" => {
             tracing::info!("Using CLI inference backend (sd-cli subprocess)");
             AppState::with_cli_backend(registry, config, config_path)

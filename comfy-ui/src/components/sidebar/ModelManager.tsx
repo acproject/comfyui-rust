@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, type FC } from 'react';
-import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive } from 'lucide-react';
+import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive, Settings, Save, CheckCircle, AlertCircle } from 'lucide-react';
 import { useModelManagerStore, MODEL_TYPES } from '@/store/models';
-import type { ModelFileInfo } from '@/types/api';
+import { api } from '@/api/client';
+import type { ModelFileInfo, ServerConfig } from '@/types/api';
 
 const MODEL_TYPE_ICONS: Record<string, string> = {
   checkpoints: '🏛️',
@@ -51,9 +52,72 @@ const ModelManager: FC = () => {
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [showSettings, setShowSettings] = useState(false);
+  const [inferenceConfig, setInferenceConfig] = useState<{
+    backend: string;
+    sd_cli_path: string;
+    n_threads: number;
+    flash_attn: boolean;
+    offload_params_to_cpu: boolean;
+    enable_mmap: boolean;
+  }>({
+    backend: 'local',
+    sd_cli_path: '',
+    n_threads: 4,
+    flash_attn: false,
+    offload_params_to_cpu: false,
+    enable_mmap: true,
+  });
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [saveResult, setSaveResult] = useState<'success' | 'error' | null>(null);
+
   useEffect(() => {
     loadModels();
   }, [loadModels]);
+
+  useEffect(() => {
+    if (!configLoaded) {
+      api.getConfig().then((config) => {
+        setInferenceConfig({
+          backend: config.inference.backend,
+          sd_cli_path: config.inference.sd_cli_path || '',
+          n_threads: config.inference.n_threads,
+          flash_attn: config.inference.flash_attn,
+          offload_params_to_cpu: config.inference.offload_params_to_cpu,
+          enable_mmap: config.inference.enable_mmap,
+        });
+        setConfigLoaded(true);
+      }).catch(() => {});
+    }
+  }, [configLoaded]);
+
+  const handleSaveConfig = async () => {
+    setSavingConfig(true);
+    setSaveResult(null);
+    try {
+      const currentConfig = await api.getConfig();
+      const updatedConfig: ServerConfig = {
+        ...currentConfig,
+        inference: {
+          ...currentConfig.inference,
+          backend: inferenceConfig.backend,
+          sd_cli_path: inferenceConfig.sd_cli_path || null,
+          n_threads: inferenceConfig.n_threads,
+          flash_attn: inferenceConfig.flash_attn,
+          offload_params_to_cpu: inferenceConfig.offload_params_to_cpu,
+          enable_mmap: inferenceConfig.enable_mmap,
+        },
+      };
+      await api.updateConfig(updatedConfig);
+      setSaveResult('success');
+      setTimeout(() => setSaveResult(null), 3000);
+    } catch {
+      setSaveResult('error');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
 
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => ({ ...prev, [cat]: !prev[cat] }));
@@ -190,6 +254,162 @@ const ModelManager: FC = () => {
           {error}
         </div>
       )}
+
+      <div style={{ borderBottom: '1px solid #333' }}>
+        <div
+          style={{
+            padding: '6px 10px',
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#a0aec0',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            userSelect: 'none',
+          }}
+          onClick={() => setShowSettings(!showSettings)}
+        >
+          {showSettings ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <Settings size={12} />
+          <span>推理设置</span>
+          <span style={{ fontSize: 9, color: '#555', marginLeft: 'auto' }}>
+            {inferenceConfig.backend === 'cli' ? 'CLI' : inferenceConfig.backend === 'local' ? 'FFI' : inferenceConfig.backend}
+          </span>
+        </div>
+
+        {showSettings && (
+          <div style={{ padding: '6px 10px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div>
+              <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>
+                推理后端
+              </label>
+              <select
+                value={inferenceConfig.backend}
+                onChange={(e) => setInferenceConfig({ ...inferenceConfig, backend: e.target.value })}
+                style={{
+                  width: '100%',
+                  background: '#2a2a3e',
+                  border: '1px solid #444',
+                  borderRadius: 4,
+                  color: '#e2e8f0',
+                  fontSize: 11,
+                  padding: '4px 6px',
+                  outline: 'none',
+                }}
+              >
+                <option value="local">Local (FFI - stable-diffusion.cpp)</option>
+                <option value="cli">CLI (sd-cli 子进程)</option>
+                <option value="null">Null (无推理)</option>
+              </select>
+            </div>
+
+            {inferenceConfig.backend === 'cli' && (
+              <div>
+                <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>
+                  sd-cli 路径
+                </label>
+                <input
+                  type="text"
+                  value={inferenceConfig.sd_cli_path}
+                  onChange={(e) => setInferenceConfig({ ...inferenceConfig, sd_cli_path: e.target.value })}
+                  placeholder="/path/to/sd-cli"
+                  style={{
+                    width: '100%',
+                    background: '#2a2a3e',
+                    border: '1px solid #444',
+                    borderRadius: 4,
+                    color: '#e2e8f0',
+                    fontSize: 11,
+                    padding: '4px 6px',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                />
+                <div style={{ fontSize: 9, color: '#555', marginTop: 2 }}>
+                  sd-cli 可执行文件的路径，留空则使用 PATH 中的 sd-cli
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>
+                线程数: {inferenceConfig.n_threads}
+              </label>
+              <input
+                type="range"
+                min={1}
+                max={32}
+                value={inferenceConfig.n_threads}
+                onChange={(e) => setInferenceConfig({ ...inferenceConfig, n_threads: parseInt(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 10, color: '#718096', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={inferenceConfig.flash_attn}
+                  onChange={(e) => setInferenceConfig({ ...inferenceConfig, flash_attn: e.target.checked })}
+                />
+                Flash Attention
+              </label>
+              <label style={{ fontSize: 10, color: '#718096', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={inferenceConfig.offload_params_to_cpu}
+                  onChange={(e) => setInferenceConfig({ ...inferenceConfig, offload_params_to_cpu: e.target.checked })}
+                />
+                CPU Offload
+              </label>
+              <label style={{ fontSize: 10, color: '#718096', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={inferenceConfig.enable_mmap}
+                  onChange={(e) => setInferenceConfig({ ...inferenceConfig, enable_mmap: e.target.checked })}
+                />
+                Memory Map (mmap)
+              </label>
+            </div>
+
+            <button
+              onClick={handleSaveConfig}
+              disabled={savingConfig}
+              style={{
+                background: savingConfig ? '#2a2a3e' : '#3b5998',
+                border: 'none',
+                borderRadius: 4,
+                color: '#e2e8f0',
+                fontSize: 11,
+                padding: '5px 10px',
+                cursor: savingConfig ? 'wait' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+                transition: 'background 0.2s',
+              }}
+            >
+              <Save size={12} />
+              {savingConfig ? '保存中...' : '保存设置'}
+              {saveResult === 'success' && <CheckCircle size={12} style={{ color: '#68d391' }} />}
+              {saveResult === 'error' && <AlertCircle size={12} style={{ color: '#fc8181' }} />}
+            </button>
+
+            {saveResult === 'success' && (
+              <div style={{ fontSize: 9, color: '#68d391', textAlign: 'center' }}>
+                设置已保存，重启服务后生效
+              </div>
+            )}
+            {saveResult === 'error' && (
+              <div style={{ fontSize: 9, color: '#fc8181', textAlign: 'center' }}>
+                保存失败，请重试
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {filteredTypes.map((type) => {
