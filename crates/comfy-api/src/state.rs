@@ -236,6 +236,17 @@ impl AppState {
 
         let sd_cli_path = config.inference.sd_cli_path.clone()
             .or_else(|| std::env::var("SD_CLI_PATH").ok())
+            .or_else(|| {
+                let manifest_dir = config_path.parent()?;
+                let workspace_root = manifest_dir.parent()?;
+                let cli_path = workspace_root.join("cpp/stable-diffusion-cpp/build/bin/sd-cli");
+                if cli_path.exists() {
+                    tracing::info!("Auto-detected sd-cli at {}", cli_path.display());
+                    Some(cli_path.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
             .unwrap_or_else(|| "sd-cli".to_string());
 
         let cli_config = CliBackendConfig::new(&sd_cli_path)

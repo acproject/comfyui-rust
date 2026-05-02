@@ -87,7 +87,9 @@ pub struct CliBackend {
 impl CliBackend {
     pub fn new(config: CliBackendConfig) -> InferenceResult<Self> {
         let cli_path = Path::new(&config.sd_cli_path);
-        if !cli_path.exists() {
+        if cli_path.exists() {
+            Self::ensure_executable(cli_path);
+        } else {
             let which_output = Command::new("which")
                 .arg(&config.sd_cli_path)
                 .output()
@@ -100,6 +102,32 @@ impl CliBackend {
             }
         }
         Ok(Self { config })
+    }
+
+    fn ensure_executable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = path.metadata() {
+                let mut perms = metadata.permissions();
+                let mode = perms.mode();
+                if (mode & 0o111) == 0 {
+                    perms.set_mode(mode | 0o755);
+                    if let Err(e) = std::fs::set_permissions(path, perms) {
+                        tracing::warn!("Failed to set execute permission on {:?}: {}", path, e);
+                    } else {
+                        tracing::info!("Set execute permission on {:?}", path);
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let _ = Command::new("xattr")
+                .args(["-cr", &path.to_string_lossy()])
+                .output();
+        }
     }
 
     fn build_context_args(&self, model_config: &ModelConfig, args: &mut Vec<String>) {
@@ -212,12 +240,26 @@ impl CliBackend {
     fn run_sd_cli(&self, args: &[String]) -> InferenceResult<std::process::Output> {
         tracing::debug!("Running: {} {}", self.config.sd_cli_path, args.join(" "));
 
+        let cli_path = Path::new(&self.config.sd_cli_path);
+        if cli_path.exists() {
+            Self::ensure_executable(cli_path);
+        }
+
         let output = Command::new(&self.config.sd_cli_path)
             .args(args)
             .output()
-            .map_err(|e| InferenceError::BackendNotAvailable(format!(
-                "Failed to execute sd-cli: {}", e
-            )))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    InferenceError::BackendNotAvailable(format!(
+                        "Permission denied executing sd-cli at '{}'. Try: chmod +x '{}' or xattr -cr '{}'",
+                        self.config.sd_cli_path, self.config.sd_cli_path, self.config.sd_cli_path
+                    ))
+                } else {
+                    InferenceError::BackendNotAvailable(format!(
+                        "Failed to execute sd-cli: {}", e
+                    ))
+                }
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);

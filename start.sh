@@ -24,6 +24,13 @@ fi
 
 echo "1/2 启动 Rust 后端服务器 (端口 8188)..."
 cd "$PROJECT_DIR"
+
+SD_CLI="$PROJECT_DIR/cpp/stable-diffusion-cpp/build/bin/sd-cli"
+if [ -f "$SD_CLI" ]; then
+    chmod +x "$SD_CLI" 2>/dev/null || true
+    xattr -cr "$SD_CLI" 2>/dev/null || true
+fi
+
 cargo run -p comfy-api --features local &
 SERVER_PID=$!
 echo "  ✓ 后端 PID: $SERVER_PID"
