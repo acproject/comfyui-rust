@@ -357,7 +357,7 @@ pub type SdLogCb = Option<unsafe extern "C" fn(level: u32, text: *const c_char, 
 pub type SdProgressCb = Option<unsafe extern "C" fn(step: c_int, steps: c_int, time: c_float, data: *mut c_void)>;
 pub type SdPreviewCb = Option<unsafe extern "C" fn(step: c_int, frame_count: c_int, frames: *mut CSdImage, is_noisy: bool, data: *mut c_void)>;
 
-#[cfg(feature = "local")]
+#[cfg(feature = "local-ffi")]
 #[link(name = "stable-diffusion")]
 extern "C" {
     pub fn sd_set_log_callback(cb: SdLogCb, data: *mut c_void);

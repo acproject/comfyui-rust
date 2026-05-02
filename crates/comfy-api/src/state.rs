@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-#[cfg(feature = "local")]
+#[cfg(feature = "local-ffi")]
 use comfy_inference::{LocalBackend, ContextConfig};
 use comfy_inference::{CliBackend, CliBackendConfig};
 
@@ -168,7 +168,7 @@ impl AppState {
         }
     }
 
-    #[cfg(feature = "local")]
+    #[cfg(feature = "local-ffi")]
     pub fn with_local_backend(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
         let models_dir = PathBuf::from(&config.models.base_dir);
         std::fs::create_dir_all(&models_dir).ok();

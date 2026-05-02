@@ -2,7 +2,7 @@ use crate::error::ExecutorError;
 use crate::registry::NodeRegistry;
 use comfy_core::{IoType, NodeClassDef, NodeInputTypes, InputTypeSpec};
 use comfy_inference::{ImageGenParams, ModelConfig, SampleMethod, Scheduler};
-#[cfg(feature = "local")]
+#[cfg(feature = "local-ffi")]
 use comfy_inference::{ConvertParams, convert_model, SdType};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -1139,7 +1139,7 @@ fn register_convert_model(registry: &mut NodeRegistry) {
         let tensor_type_rules = tensor_type_rules.map(|s| s.to_string());
 
         Box::pin(async move {
-            #[cfg(feature = "local")]
+            #[cfg(feature = "local-ffi")]
             {
                 let sd_type = parse_sd_type(&output_type_str);
                 let mut params = ConvertParams::new(&input_path, &output_path)
@@ -1160,19 +1160,19 @@ fn register_convert_model(registry: &mut NodeRegistry) {
                     Err(e) => Err(ExecutorError::Inference(e)),
                 }
             }
-            #[cfg(not(feature = "local"))]
+            #[cfg(not(feature = "local-ffi"))]
             {
                 let _ = (input_path, output_path, output_type_str, vae_path, tensor_type_rules);
                 Err(ExecutorError::NodeExecutionFailed {
                     node_id: String::new(),
-                    message: "Model conversion requires local feature".to_string(),
+                    message: "Model conversion requires local-ffi feature".to_string(),
                 })
             }
         })
     }));
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "local-ffi")]
 fn parse_sd_type(name: &str) -> SdType {
     match name {
         "f32" => SdType::F32,

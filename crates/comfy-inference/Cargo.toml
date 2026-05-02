@@ -22,7 +22,8 @@ cmake = "0.1"
 [features]
 default = []
 local = []
-local-build = ["local"]
+local-ffi = ["local"]
+local-build = ["local-ffi"]
 remote = ["reqwest", "base64"]
 
 [dev-dependencies]

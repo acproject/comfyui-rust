@@ -16,6 +16,8 @@ tracing = "0.1"
 [features]
 default = []
 local = ["comfy-inference/local"]
+local-ffi = ["local", "comfy-inference/local-ffi"]
+local-build = ["local-ffi", "comfy-inference/local-build"]
 remote = ["comfy-inference/remote"]
 
 [dev-dependencies]

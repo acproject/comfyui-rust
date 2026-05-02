@@ -1,8 +1,9 @@
 fn main() {
     let local_enabled = std::env::var("CARGO_FEATURE_LOCAL").is_ok();
+    let local_ffi_enabled = std::env::var("CARGO_FEATURE_LOCAL_FFI").is_ok();
     let local_build_enabled = std::env::var("CARGO_FEATURE_LOCAL_BUILD").is_ok();
 
-    if !local_enabled {
+    if !local_enabled || !local_ffi_enabled {
         return;
     }
 
@@ -30,15 +31,16 @@ fn main() {
         println!("cargo:error=  1. Build the C++ library first: cd cpp/stable-diffusion-cpp && mkdir build && cd build && cmake .. && make -j$(nproc)");
         println!("cargo:error=  2. Use --features local-build to auto-build: cargo build --features local-build");
         println!("cargo:error=  3. Set SD_LIB_DIR env var to the directory containing libstable-diffusion.a");
-        println!("cargo:error=  4. Use without local inference: cargo build (no --features local)");
-        panic!("Pre-built stable-diffusion library not found. Use --features local-build to build from source.");
+        println!("cargo:error=  4. Use CLI backend only: cargo build --features local (no FFI, uses sd-cli subprocess)");
+        panic!("Pre-built stable-diffusion library not found. Use --features local-build to build from source, or --features local for CLI-only mode.");
     } else {
         println!("cargo:warning=stable-diffusion-cpp not found at {:?}", sd_cpp_dir);
         println!("cargo:warning=Clone the submodule first: git submodule update --init --recursive");
         println!("cargo:warning=Or set SD_LIB_DIR to link a pre-built library.");
+        println!("cargo:warning=Or use --features local for CLI-only mode (no FFI).");
         panic!(
             "stable-diffusion-cpp not found at {:?}. \
-             Clone the submodule or set SD_LIB_DIR.",
+             Clone the submodule, set SD_LIB_DIR, or use --features local for CLI-only mode.",
             sd_cpp_dir
         );
     }

@@ -81,7 +81,7 @@ async fn main() {
     }
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "local-ffi")]
 fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
     match config.inference.backend.as_str() {
         "cli" => {
@@ -93,6 +93,12 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
             AppState::with_local_backend(registry, config, config_path)
         }
     }
+}
+
+#[cfg(all(feature = "local", not(feature = "local-ffi")))]
+fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
+    tracing::info!("Using CLI inference backend (sd-cli subprocess, FFI not available)");
+    AppState::with_cli_backend(registry, config, config_path)
 }
 
 #[cfg(not(feature = "local"))]
