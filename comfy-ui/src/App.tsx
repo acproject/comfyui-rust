@@ -16,11 +16,18 @@ import { useWorkflowStore } from '@/store/workflow';
 
 type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'models' | 'custom';
 
+export interface PanelVisibility {
+  showSidebar: boolean;
+  showAgent: boolean;
+}
+
 const AppInner: FC = () => {
   useWebSocket();
   useInitApp();
 
   const [activeTab, setActiveTab] = useState<SidebarTab>('nodes');
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [showAgent, setShowAgent] = useState(true);
   const loadWorkflowFromJson = useWorkflowStore((s) => s.loadWorkflowFromJson);
   const getWorkflowAsJson = useWorkflowStore((s) => s.getWorkflowAsJson);
 
@@ -45,58 +52,65 @@ const AppInner: FC = () => {
         color: '#e2e8f0',
       }}
     >
-      <Toolbar />
+      <Toolbar
+        showSidebar={showSidebar}
+        showAgent={showAgent}
+        onToggleSidebar={() => setShowSidebar((v) => !v)}
+        onToggleAgent={() => setShowAgent((v) => !v)}
+      />
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
-        <div style={{ width: '260px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #2d3748', background: '#1a202c' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #2d3748' }}>
-            {([
-              ['nodes', 'properties', 'images'],
-              ['workflows', 'models', 'custom'],
-            ] as SidebarTab[][]).map((row, rowIdx) => (
-              <div key={rowIdx} style={{ display: 'flex' }}>
-                {row.map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    style={{
-                      flex: 1,
-                      padding: '6px 0',
-                      fontSize: '11px',
-                      background: activeTab === tab ? '#2d3748' : 'transparent',
-                      border: 'none',
-                      borderBottom: activeTab === tab ? '2px solid #4a9eff' : '2px solid transparent',
-                      color: activeTab === tab ? '#e2e8f0' : '#718096',
-                      cursor: 'pointer',
-                      textTransform: 'capitalize',
-                    }}
-                  >
-                    {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab}
-                  </button>
-                ))}
-              </div>
-            ))}
+        {showSidebar && (
+          <div style={{ width: '260px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #2d3748', background: '#1a202c' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #2d3748' }}>
+              {([
+                ['nodes', 'properties', 'images'],
+                ['workflows', 'models', 'custom'],
+              ] as SidebarTab[][]).map((row, rowIdx) => (
+                <div key={rowIdx} style={{ display: 'flex' }}>
+                  {row.map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      style={{
+                        flex: 1,
+                        padding: '6px 0',
+                        fontSize: '11px',
+                        background: activeTab === tab ? '#2d3748' : 'transparent',
+                        border: 'none',
+                        borderBottom: activeTab === tab ? '2px solid #4a9eff' : '2px solid transparent',
+                        color: activeTab === tab ? '#e2e8f0' : '#718096',
+                        cursor: 'pointer',
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              {activeTab === 'nodes' && <NodePanel />}
+              {activeTab === 'properties' && <PropertyPanel />}
+              {activeTab === 'images' && <ImageGallery />}
+              {activeTab === 'workflows' && (
+                <WorkflowManager
+                  onLoadWorkflow={handleLoadWorkflow}
+                  getCurrentWorkflow={handleGetCurrentWorkflow}
+                />
+              )}
+              {activeTab === 'models' && <ModelManager />}
+              {activeTab === 'custom' && <CustomNodePanel />}
+            </div>
           </div>
-          <div style={{ flex: 1, overflow: 'auto' }}>
-            {activeTab === 'nodes' && <NodePanel />}
-            {activeTab === 'properties' && <PropertyPanel />}
-            {activeTab === 'images' && <ImageGallery />}
-            {activeTab === 'workflows' && (
-              <WorkflowManager
-                onLoadWorkflow={handleLoadWorkflow}
-                getCurrentWorkflow={handleGetCurrentWorkflow}
-              />
-            )}
-            {activeTab === 'models' && <ModelManager />}
-            {activeTab === 'custom' && <CustomNodePanel />}
-          </div>
-        </div>
+        )}
 
         <div style={{ flex: 1, position: 'relative' }}>
           <GraphEditor />
           <ProgressBar />
         </div>
 
-        <AIAgent />
+        {showAgent && <AIAgent />}
       </div>
     </div>
   );

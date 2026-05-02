@@ -177,13 +177,118 @@ pub async fn get_object_info(
 ) -> Result<impl IntoResponse, ApiError> {
     let registry = state.registry.lock().await;
     let info = registry.get_all_class_defs();
+
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let models_dir = &state.models_dir;
+
+    let mut model_cache: HashMap<String, Vec<String>> = HashMap::new();
+    for model_type in ComfyConfig::model_types() {
+        let sub_dir = config.get_model_type_dir(model_type);
+        let dir_path = models_dir.join(&sub_dir);
+        let mut files: Vec<String> = Vec::new();
+        if dir_path.exists() {
+            collect_model_filenames(&dir_path, &dir_path, &mut files);
+        }
+        model_cache.insert(model_type.to_string(), files);
+    }
+
+    let input_to_model_type: HashMap<&str, &str> = {
+        let mut m = HashMap::new();
+        m.insert("ckpt_name", "checkpoints");
+        m.insert("unet_name", "diffusion_models");
+        m.insert("model_name", "checkpoints");
+        m.insert("vae_name", "vae");
+        m.insert("lora_name", "loras");
+        m.insert("clip_name", "text_encoders");
+        m.insert("clip_name1", "text_encoders");
+        m.insert("clip_name2", "text_encoders");
+        m.insert("clip_vision_name", "clip_vision");
+        m.insert("control_net_name", "controlnet");
+        m.insert("upscale_model_name", "upscale_models");
+        m.insert("embedding_name", "embeddings");
+        m.insert("style_model_name", "style_models");
+        m.insert("image", "input_images");
+        m
+    };
+
+    let sampler_choices: Vec<String> = vec![
+        "euler".into(), "euler_ancestral".into(), "heun".into(),
+        "heunpp2".into(), "dpm_2".into(), "dpm_2_ancestral".into(),
+        "lms".into(), "dpm_fast".into(), "dpm_adaptive".into(),
+        "dpmpp_2s_ancestral".into(), "dpmpp_sde".into(),
+        "dpmpp_sde_gpu".into(), "dpmpp_2m".into(),
+        "dpmpp_2m_sde".into(), "dpmpp_2m_sde_gpu".into(),
+        "dpmpp_3m_sde".into(), "dpmpp_3m_sde_gpu".into(),
+        "ddpm".into(), "lcm".into(), "ddim".into(),
+        "uni_pc".into(), "uni_pc_bh2".into(),
+    ];
+
+    let scheduler_choices: Vec<String> = vec![
+        "normal".into(), "karras".into(), "exponential".into(),
+        "sgm_uniform".into(), "simple".into(), "ddim_uniform".into(),
+        "beta".into(),
+    ];
+
+    let weight_dtype_choices: Vec<String> = vec![
+        "default".into(), "fp8_e4m3fn".into(), "fp8_e5m2".into(),
+        "fp16".into(), "bf16".into(),
+    ];
+
     let mut result = HashMap::new();
 
     for (class_type, class_def) in info {
-        result.insert(
-            class_type.to_string(),
-            serde_json::to_value(class_def).unwrap_or(Value::Null),
-        );
+        let mut val = serde_json::to_value(class_def).unwrap_or(Value::Null);
+
+        if let Some(obj) = val.as_object_mut() {
+            if let Some(input_types) = obj.get_mut("input_types").and_then(|v| v.as_object_mut()) {
+                for section in ["required", "optional"] {
+                    if let Some(inputs) = input_types.get_mut(section).and_then(|v| v.as_object_mut()) {
+                        for (input_name, spec) in inputs.iter_mut() {
+                            if let Some(spec_obj) = spec.as_object_mut() {
+                                if spec_obj.get("type_name").and_then(|v| v.as_str()) == Some("COMBO") {
+                                    let extra = spec_obj
+                                        .entry("extra")
+                                        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+                                        .as_object_mut();
+
+                                    if let Some(extra_obj) = extra {
+                                        if !extra_obj.contains_key("choices") {
+                                            let choices: Vec<String> = if input_name == "sampler_name" {
+                                                sampler_choices.clone()
+                                            } else if input_name == "scheduler" {
+                                                scheduler_choices.clone()
+                                            } else if input_name == "weight_dtype" {
+                                                weight_dtype_choices.clone()
+                                            } else if let Some(&model_type) = input_to_model_type.get(input_name.as_str()) {
+                                                if model_type == "input_images" {
+                                                    let input_dir = &state.input_dir;
+                                                    let mut images: Vec<String> = Vec::new();
+                                                    if input_dir.exists() {
+                                                        collect_image_filenames(input_dir, input_dir, &mut images);
+                                                    }
+                                                    images
+                                                } else {
+                                                    model_cache.get(model_type).cloned().unwrap_or_default()
+                                                }
+                                            } else {
+                                                vec![]
+                                            };
+
+                                            extra_obj.insert(
+                                                "choices".to_string(),
+                                                Value::Array(choices.into_iter().map(Value::String).collect()),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result.insert(class_type.to_string(), val);
     }
 
     Ok(Json(json!(result)))
@@ -304,6 +409,66 @@ fn scan_model_files(
                             "size": size,
                             "modified": modified,
                         }));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_model_filenames(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    results: &mut Vec<String>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_model_filenames(&path, base, results);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                let is_model = lower.ends_with(".safetensors")
+                    || lower.ends_with(".ckpt")
+                    || lower.ends_with(".pt")
+                    || lower.ends_with(".pth")
+                    || lower.ends_with(".bin")
+                    || lower.ends_with(".onnx")
+                    || lower.ends_with(".gguf")
+                    || lower.ends_with(".sft");
+
+                if is_model {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        results.push(rel.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_image_filenames(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    results: &mut Vec<String>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_image_filenames(&path, base, results);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                let is_image = lower.ends_with(".png")
+                    || lower.ends_with(".jpg")
+                    || lower.ends_with(".jpeg")
+                    || lower.ends_with(".webp")
+                    || lower.ends_with(".gif")
+                    || lower.ends_with(".bmp");
+
+                if is_image {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        results.push(rel.to_string_lossy().to_string());
                     }
                 }
             }

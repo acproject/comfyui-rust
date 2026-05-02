@@ -1,9 +1,16 @@
 import { type FC } from 'react';
-import { Play, Square, Trash2, Save, FolderOpen } from 'lucide-react';
+import { Play, Square, Trash2, Save, FolderOpen, PanelLeftClose, PanelLeftOpen, MessageSquare, MessageSquareOff } from 'lucide-react';
 import { useWorkflowStore } from '@/store/workflow';
 import { api } from '@/api/client';
 
-const Toolbar: FC = () => {
+interface ToolbarProps {
+  showSidebar: boolean;
+  showAgent: boolean;
+  onToggleSidebar: () => void;
+  onToggleAgent: () => void;
+}
+
+const Toolbar: FC<ToolbarProps> = ({ showSidebar, showAgent, onToggleSidebar, onToggleAgent }) => {
   const getPrompt = useWorkflowStore((s) => s.getPrompt);
   const clientId = useWorkflowStore((s) => s.clientId);
   const clearWorkflow = useWorkflowStore((s) => s.clearWorkflow);
@@ -113,6 +120,18 @@ const Toolbar: FC = () => {
       <ToolbarButton icon={<Save size={14} />} label="Save" onClick={handleSave} />
       <ToolbarButton icon={<FolderOpen size={14} />} label="Load" onClick={handleLoad} />
       <ToolbarButton icon={<Trash2 size={14} />} label="Clear" onClick={handleClear} />
+
+      <div style={{ width: 1, height: 18, background: '#333', margin: '0 4px' }} />
+      <ToolbarButton
+        icon={showSidebar ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+        label={showSidebar ? 'Hide Sidebar' : 'Show Sidebar'}
+        onClick={onToggleSidebar}
+      />
+      <ToolbarButton
+        icon={showAgent ? <MessageSquareOff size={14} /> : <MessageSquare size={14} />}
+        label={showAgent ? 'Hide Agent' : 'Show Agent'}
+        onClick={onToggleAgent}
+      />
 
       <div style={{ flex: 1 }} />
 
