@@ -1,5 +1,6 @@
 use crate::agent::{AgentConfig, AgentService};
 use crate::config::ComfyConfig;
+use crate::database::{Database, SharedDatabase};
 use crate::download_tracker::{DownloadTracker, SharedDownloadTracker};
 use crate::images::ImageStore;
 use crate::queue::PromptQueue;
@@ -27,15 +28,42 @@ pub struct AppState {
     pub config_path: Arc<PathBuf>,
     pub agent: Arc<AgentService>,
     pub download_tracker: SharedDownloadTracker,
-}
-
-fn create_agent_service() -> Arc<AgentService> {
-    let config = AgentConfig::from_env();
-    Arc::new(AgentService::new(config))
+    pub db: SharedDatabase,
 }
 
 fn create_download_tracker() -> SharedDownloadTracker {
     Arc::new(Mutex::new(DownloadTracker::new()))
+}
+
+fn create_database(config_dir: &str) -> SharedDatabase {
+    let db_path = std::path::Path::new(config_dir).join("comfyui.db");
+    match Database::open(&db_path) {
+        Ok(db) => Arc::new(db),
+        Err(e) => {
+            tracing::error!("Failed to open database at {}: {}, using in-memory", db_path.display(), e);
+            Arc::new(Database::open_in_memory().expect("Failed to create in-memory database"))
+        }
+    }
+}
+
+fn load_agent_config_from_db(db: &Database) -> AgentConfig {
+    match db.get::<AgentConfig>("agent_config") {
+        Ok(Some(config)) => {
+            tracing::info!("Loaded agent config from database");
+            config
+        }
+        Ok(None) => AgentConfig::from_env(),
+        Err(e) => {
+            tracing::warn!("Failed to load agent config from database: {}, using defaults", e);
+            AgentConfig::from_env()
+        }
+    }
+}
+
+fn config_dir_from_path(config_path: &PathBuf) -> String {
+    config_path.parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "config".to_string())
 }
 
 impl AppState {
@@ -68,6 +96,9 @@ impl AppState {
         std::fs::create_dir_all(&models_dir).ok();
 
         let config_path = Self::default_config_path();
+        let config_dir = config_dir_from_path(&config_path);
+        let db = create_database(&config_dir);
+        let agent_config = load_agent_config_from_db(&db);
 
         let registry = Arc::new(Mutex::new(registry));
         let queue = Arc::new(PromptQueue::new());
@@ -85,8 +116,9 @@ impl AppState {
             models_dir,
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
-            agent: create_agent_service(),
+            agent: Arc::new(AgentService::new(agent_config)),
             download_tracker: create_download_tracker(),
+            db,
         }
     }
 
@@ -115,6 +147,9 @@ impl AppState {
         let images = Arc::new(ImageStore::new(output_dir));
 
         let config_path = Self::default_config_path();
+        let config_dir = config_dir_from_path(&config_path);
+        let db = create_database(&config_dir);
+        let agent_config = load_agent_config_from_db(&db);
 
         Self {
             executor,
@@ -127,8 +162,9 @@ impl AppState {
             models_dir,
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
-            agent: create_agent_service(),
+            agent: Arc::new(AgentService::new(agent_config)),
             download_tracker: create_download_tracker(),
+            db,
         }
     }
 
@@ -173,6 +209,10 @@ impl AppState {
         let broadcaster = WsBroadcaster::new();
         let images = Arc::new(ImageStore::new(output_dir));
 
+        let config_dir = config_dir_from_path(&config_path);
+        let db = create_database(&config_dir);
+        let agent_config = load_agent_config_from_db(&db);
+
         Self {
             executor,
             queue,
@@ -184,8 +224,9 @@ impl AppState {
             models_dir,
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
-            agent: create_agent_service(),
+            agent: Arc::new(AgentService::new(agent_config)),
             download_tracker: create_download_tracker(),
+            db,
         }
     }
 
@@ -230,6 +271,10 @@ impl AppState {
         let broadcaster = WsBroadcaster::new();
         let images = Arc::new(ImageStore::new(output_dir));
 
+        let config_dir = config_dir_from_path(&config_path);
+        let db = create_database(&config_dir);
+        let agent_config = load_agent_config_from_db(&db);
+
         Self {
             executor,
             queue,
@@ -241,8 +286,9 @@ impl AppState {
             models_dir,
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
-            agent: create_agent_service(),
+            agent: Arc::new(AgentService::new(agent_config)),
             download_tracker: create_download_tracker(),
+            db,
         }
     }
 
@@ -276,6 +322,10 @@ impl AppState {
         let broadcaster = WsBroadcaster::new();
         let images = Arc::new(ImageStore::new(output_dir));
 
+        let config_dir = config_dir_from_path(&config_path);
+        let db = create_database(&config_dir);
+        let agent_config = load_agent_config_from_db(&db);
+
         Self {
             executor,
             queue,
@@ -287,8 +337,9 @@ impl AppState {
             models_dir,
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
-            agent: create_agent_service(),
+            agent: Arc::new(AgentService::new(agent_config)),
             download_tracker: create_download_tracker(),
+            db,
         }
     }
 
@@ -314,6 +365,7 @@ impl Clone for AppState {
             config_path: self.config_path.clone(),
             agent: self.agent.clone(),
             download_tracker: self.download_tracker.clone(),
+            db: self.db.clone(),
         }
     }
 }

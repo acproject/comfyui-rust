@@ -1,4 +1,4 @@
-use comfy_api::{AppState, ComfyConfig, ComfyServer};
+use comfy_api::{AppState, ComfyConfig, ComfyServer, Database};
 use comfy_executor::builtin_nodes;
 use comfy_executor::NodeRegistry;
 use std::net::SocketAddr;
@@ -14,11 +14,28 @@ async fn main() {
 
     std::fs::create_dir_all(&config_dir).ok();
 
-    let config = ComfyConfig::load(&config_path)
-        .unwrap_or_else(|e| {
-            tracing::warn!("Failed to load config from {}: {}, using defaults + env", config_path.display(), e);
-            ComfyConfig::from_env()
-        });
+    let db_path = Path::new(&config_dir).join("comfyui.db");
+    let db = match Database::open(&db_path) {
+        Ok(d) => {
+            tracing::info!("Database opened at {}", db_path.display());
+            d
+        }
+        Err(e) => {
+            tracing::error!("Failed to open database at {}: {}, using in-memory", db_path.display(), e);
+            Database::open_in_memory().expect("Failed to create in-memory database")
+        }
+    };
+
+    let config = if let Ok(Some(db_config)) = db.get::<ComfyConfig>("comfy_config") {
+        tracing::info!("Loaded config from database");
+        db_config
+    } else if let Ok(file_config) = ComfyConfig::load(&config_path) {
+        tracing::info!("Loaded config from {}", config_path.display());
+        file_config
+    } else {
+        tracing::warn!("No saved config found, using defaults + env");
+        ComfyConfig::from_env()
+    };
 
     if !config_path.exists() {
         if let Err(e) = config.save(&config_path) {

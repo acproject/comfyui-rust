@@ -375,7 +375,6 @@ pub async fn upload_model_file(
                 let mut f = tokio::fs::File::create(&dest).await
                     .map_err(|e| ApiError::Internal(format!("Failed to create file: {}", e)))?;
                 use tokio::io::AsyncWriteExt;
-                use futures::StreamExt;
 
                 let mut stream = field;
                 while let Some(chunk) = stream.chunk().await.map_err(|e| ApiError::BadRequest(format!("Read error: {}", e)))? {
@@ -846,6 +845,10 @@ pub async fn post_config(
     config.save(&state.config_path)
         .map_err(|e| ApiError::Internal(format!("Failed to save config: {}", e)))?;
 
+    if let Err(e) = state.db.set("comfy_config", &*config) {
+        tracing::warn!("Failed to persist config to database: {}", e);
+    }
+
     Ok(Json(serde_json::to_value(&*config).unwrap_or(Value::Null)))
 }
 
@@ -958,7 +961,12 @@ pub async fn post_agent_config(
         let existing = state.agent.get_config().await;
         body.api_key = existing.api_key;
     }
-    state.agent.set_config(body).await;
+    state.agent.set_config(body.clone()).await;
+
+    if let Err(e) = state.db.set("agent_config", &body) {
+        tracing::warn!("Failed to persist agent config to database: {}", e);
+    }
+
     let config = state.agent.get_config().await;
     let safe_config = AgentConfig {
         api_key: config.api_key.as_ref().map(|_| "********".to_string()),

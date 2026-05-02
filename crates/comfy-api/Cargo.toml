@@ -20,6 +20,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 regex = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [features]
 default = []
