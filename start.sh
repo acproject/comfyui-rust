@@ -24,7 +24,7 @@ fi
 
 echo "1/2 启动 Rust 后端服务器 (端口 8188)..."
 cd "$PROJECT_DIR"
-cargo run -p comfy-api --no-default-features &
+cargo run -p comfy-api --features local &
 SERVER_PID=$!
 echo "  ✓ 后端 PID: $SERVER_PID"
 

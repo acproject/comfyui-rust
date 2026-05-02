@@ -328,12 +328,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   loadWorkflowFromJson: (workflow) => {
     const { objectInfo } = get();
     const workflowNodes = (workflow.nodes as Array<Record<string, unknown>>) || [];
-    const workflowLinks = (workflow.links as Array<unknown[]>) || [];
+    const workflowLinks = workflow.links;
 
     _nodeIdCounter = 0;
     const nodeIdMap: Record<string, string> = {};
     const newNodes: ComfyNode[] = [];
     const newEdges: Edge[] = [];
+
+    const nodeOutputsMap: Record<string, Array<{ name: string; type: string }>> = {};
+    const nodeInputsMap: Record<string, Array<{ name: string; type: string }>> = {};
 
     for (const wn of workflowNodes) {
       const classType = (wn.type as string) || '';
@@ -342,92 +345,90 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const newId = nextNodeId();
       nodeIdMap[oldId] = newId;
 
-      const pos = wn.pos as number[] || [0, 0];
-      const widgetsValues = (wn.widgets_values as unknown[]) || [];
+      const rawPos = wn.pos;
+      let posX = 0, posY = 0;
+      if (Array.isArray(rawPos)) {
+        posX = rawPos[0] || 0;
+        posY = rawPos[1] || 0;
+      } else if (rawPos && typeof rawPos === 'object') {
+        posX = (rawPos as Record<string, number>)['0'] || 0;
+        posY = (rawPos as Record<string, number>)['1'] || 0;
+      }
+
+      const widgetsValues = Array.isArray(wn.widgets_values)
+        ? (wn.widgets_values as unknown[])
+        : [];
+
+      const wnOutputs = (wn.outputs as Array<{ name: string; type: string | string[] }>) || [];
+      const wnInputs = (wn.inputs as Array<{ name: string; type: string | string[]; link?: number | null }>) || [];
+
+      const outputs = classDef?.output_names.map((name, i) => ({
+        name,
+        type: classDef.output_types[i] || '*',
+      })) || wnOutputs.map((o) => ({
+        name: o.name,
+        type: Array.isArray(o.type) ? o.type[0] : (o.type || '*'),
+      }));
+
+      const allInputNames: Array<{ name: string; typeName: string }> = [];
+      if (classDef?.input_types.required) {
+        for (const [key, spec] of Object.entries(classDef.input_types.required)) {
+          allInputNames.push({ name: key, typeName: spec.type_name });
+        }
+      }
+      if (classDef?.input_types.optional) {
+        for (const [key, spec] of Object.entries(classDef.input_types.optional)) {
+          allInputNames.push({ name: key, typeName: spec.type_name });
+        }
+      }
+
+      nodeOutputsMap[oldId] = outputs;
+      nodeInputsMap[oldId] = wnInputs.map((inp) => ({
+        name: inp.name,
+        type: Array.isArray(inp.type) ? inp.type[0] : (inp.type || '*'),
+      }));
 
       const inputs: Record<string, unknown> = {};
       let widgetIdx = 0;
 
-      if (classDef?.input_types.required) {
-        for (const [key, spec] of Object.entries(classDef.input_types.required)) {
+      for (const { name, typeName } of allInputNames) {
+        if (widgetIdx < widgetsValues.length) {
+          inputs[name] = widgetsValues[widgetIdx];
+          widgetIdx++;
+        } else if (typeName === 'INT') {
+          inputs[name] = 0;
+          widgetIdx++;
+        } else if (typeName === 'FLOAT') {
+          inputs[name] = 0.0;
+          widgetIdx++;
+        } else if (typeName === 'STRING') {
+          inputs[name] = '';
+          widgetIdx++;
+        } else if (typeName === 'BOOLEAN') {
+          inputs[name] = false;
+          widgetIdx++;
+        } else if (typeName === 'COMBO') {
+          const spec = classDef?.input_types.required?.[name] || classDef?.input_types.optional?.[name];
+          const choices = (spec?.extra?.choices as string[]) || [];
+          inputs[name] = choices.length > 0 ? choices[0] : '';
+          widgetIdx++;
+        } else {
           if (widgetIdx < widgetsValues.length) {
-            inputs[key] = widgetsValues[widgetIdx];
-            widgetIdx++;
-          } else if (spec.type_name === 'INT') {
-            inputs[key] = 0;
-            widgetIdx++;
-          } else if (spec.type_name === 'FLOAT') {
-            inputs[key] = 0.0;
-            widgetIdx++;
-          } else if (spec.type_name === 'STRING') {
-            inputs[key] = '';
-            widgetIdx++;
-          } else if (spec.type_name === 'BOOLEAN') {
-            inputs[key] = false;
-            widgetIdx++;
-          } else if (spec.type_name === 'COMBO') {
-            const choices = (spec.extra?.choices as string[]) || [];
-            if (widgetIdx < widgetsValues.length) {
-              inputs[key] = widgetsValues[widgetIdx];
-            } else {
-              inputs[key] = choices.length > 0 ? choices[0] : '';
-            }
-            widgetIdx++;
-          } else {
-            if (widgetIdx < widgetsValues.length) {
-              inputs[key] = widgetsValues[widgetIdx];
-            }
-            widgetIdx++;
+            inputs[name] = widgetsValues[widgetIdx];
           }
-        }
-      }
-
-      if (classDef?.input_types.optional) {
-        for (const [key, spec] of Object.entries(classDef.input_types.optional)) {
-          if (widgetIdx < widgetsValues.length) {
-            inputs[key] = widgetsValues[widgetIdx];
-            widgetIdx++;
-          } else if (spec.type_name === 'INT') {
-            inputs[key] = 0;
-            widgetIdx++;
-          } else if (spec.type_name === 'FLOAT') {
-            inputs[key] = 0.0;
-            widgetIdx++;
-          } else if (spec.type_name === 'STRING') {
-            inputs[key] = '';
-            widgetIdx++;
-          } else if (spec.type_name === 'BOOLEAN') {
-            inputs[key] = false;
-            widgetIdx++;
-          } else if (spec.type_name === 'COMBO') {
-            const choices = (spec.extra?.choices as string[]) || [];
-            if (widgetIdx < widgetsValues.length) {
-              inputs[key] = widgetsValues[widgetIdx];
-            } else {
-              inputs[key] = choices.length > 0 ? choices[0] : '';
-            }
-            widgetIdx++;
-          } else {
-            if (widgetIdx < widgetsValues.length) {
-              inputs[key] = widgetsValues[widgetIdx];
-            }
-            widgetIdx++;
-          }
+          widgetIdx++;
         }
       }
 
       newNodes.push({
         id: newId,
         type: 'comfyNode',
-        position: { x: pos[0] || 0, y: pos[1] || 0 },
+        position: { x: posX, y: posY },
         data: {
           classType,
           title: (wn.title as string) || classDef?.display_name || classType,
           inputs,
-          outputs: classDef?.output_names.map((name, i) => ({
-            name,
-            type: classDef.output_types[i] || '*',
-          })) || [],
+          outputs,
           isOutputNode: classDef?.is_output_node || false,
           category: classDef?.category || '',
         },
@@ -438,27 +439,49 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       }
     }
 
-    for (const link of workflowLinks) {
-      if (!Array.isArray(link) || link.length < 6) continue;
-      const [, originId, originSlot, targetId, targetSlot] = link as [number, number, number, number, number, string];
-      const newSourceId = nodeIdMap[String(originId)];
-      const newTargetId = nodeIdMap[String(targetId)];
-      if (!newSourceId || !newTargetId) continue;
+    if (Array.isArray(workflowLinks)) {
+      for (const link of workflowLinks) {
+        let originId: number | string, originSlot: number, targetId: number | string, targetSlot: number;
 
-      const sourceNode = newNodes.find((n) => n.id === newSourceId);
-      const targetNode = newNodes.find((n) => n.id === newTargetId);
-      if (!sourceNode || !targetNode) continue;
+        if (Array.isArray(link) && link.length >= 5) {
+          [, originId, originSlot, targetId, targetSlot] = link as [number, number, number, number, number, string];
+        } else if (link && typeof link === 'object' && !Array.isArray(link)) {
+          const obj = link as Record<string, unknown>;
+          originId = obj.origin_id as number;
+          originSlot = obj.origin_slot as number;
+          targetId = obj.target_id as number;
+          targetSlot = obj.target_slot as number;
+        } else {
+          continue;
+        }
 
-      const sourceHandle = sourceNode.data.outputs[originSlot]?.name || String(originSlot);
-      const targetHandle = targetNode.data.inputs ? Object.keys(targetNode.data.inputs)[targetSlot] || String(targetSlot) : String(targetSlot);
+        const newSourceId = nodeIdMap[String(originId)];
+        const newTargetId = nodeIdMap[String(targetId)];
+        if (!newSourceId || !newTargetId) continue;
 
-      newEdges.push({
-        id: `e-${newSourceId}-${sourceHandle}-${newTargetId}-${targetHandle}`,
-        source: newSourceId,
-        sourceHandle,
-        target: newTargetId,
-        targetHandle,
-      });
+        const sourceNode = newNodes.find((n) => n.id === newSourceId);
+        const targetNode = newNodes.find((n) => n.id === newTargetId);
+        if (!sourceNode || !targetNode) continue;
+
+        const sourceHandle = sourceNode.data.outputs[originSlot]?.name || String(originSlot);
+
+        const targetInputList = nodeInputsMap[String(targetId)];
+        let targetHandle: string;
+        if (targetInputList && targetInputList[targetSlot]) {
+          targetHandle = targetInputList[targetSlot].name;
+        } else {
+          const inputKeys = Object.keys(targetNode.data.inputs);
+          targetHandle = inputKeys[targetSlot] || String(targetSlot);
+        }
+
+        newEdges.push({
+          id: `e-${newSourceId}-${sourceHandle}-${newTargetId}-${targetHandle}`,
+          source: newSourceId,
+          sourceHandle,
+          target: newTargetId,
+          targetHandle,
+        });
+      }
     }
 
     set({ nodes: newNodes, edges: newEdges, selectedNodeId: null });
