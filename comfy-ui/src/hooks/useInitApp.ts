@@ -26,6 +26,8 @@ export function useInitApp() {
         }
 
         setObjectInfo(merged);
+        console.log('[useInitApp] objectInfo loaded, keys count:', Object.keys(merged).length);
+        console.log('[useInitApp] objectInfo keys:', Object.keys(merged).join(', '));
       } catch (err) {
         console.error('Failed to initialize app:', err);
       }

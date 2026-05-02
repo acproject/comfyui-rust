@@ -330,6 +330,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const workflowNodes = (workflow.nodes as Array<Record<string, unknown>>) || [];
     const workflowLinks = workflow.links;
 
+    console.log('[loadWorkflowFromJson] Starting...');
+    console.log('[loadWorkflowFromJson] objectInfo keys count:', Object.keys(objectInfo).length);
+    console.log('[loadWorkflowFromJson] workflowNodes count:', workflowNodes.length);
+    console.log('[loadWorkflowFromJson] workflowLinks:', workflowLinks ? (Array.isArray(workflowLinks) ? `${workflowLinks.length} links` : 'not array') : 'undefined');
+
     _nodeIdCounter = 0;
     const nodeIdMap: Record<string, string> = {};
     const newNodes: ComfyNode[] = [];
@@ -344,6 +349,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const oldId = String(wn.id);
       const newId = nextNodeId();
       nodeIdMap[oldId] = newId;
+
+      if (!classDef) {
+        console.warn(`[loadWorkflowFromJson] No classDef for classType "${classType}" (node id=${oldId}). Available types:`, Object.keys(objectInfo).slice(0, 10));
+      }
 
       const rawPos = wn.pos;
       let posX = 0, posY = 0;
@@ -482,6 +491,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           targetHandle,
         });
       }
+    }
+
+    console.log('[loadWorkflowFromJson] Created', newNodes.length, 'nodes and', newEdges.length, 'edges');
+    console.log('[loadWorkflowFromJson] nodeIdMap:', nodeIdMap);
+    if (newNodes.length > 0) {
+      console.log('[loadWorkflowFromJson] First node:', JSON.stringify(newNodes[0].data).substring(0, 200));
+    }
+    if (newEdges.length > 0) {
+      console.log('[loadWorkflowFromJson] First edge:', newEdges[0]);
     }
 
     set({ nodes: newNodes, edges: newEdges, selectedNodeId: null });

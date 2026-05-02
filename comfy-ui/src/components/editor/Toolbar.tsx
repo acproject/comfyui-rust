@@ -3,6 +3,80 @@ import { Play, Square, Trash2, Save, FolderOpen, PanelLeftClose, PanelLeftOpen, 
 import { useWorkflowStore } from '@/store/workflow';
 import { api } from '@/api/client';
 
+function convertApiFormatToWorkflow(apiFormat: Record<string, unknown>): Record<string, unknown> {
+  const nodes: Record<string, unknown>[] = [];
+  const links: unknown[] = [];
+  let nodeId = 0;
+  let linkId = 0;
+  const idMap: Record<string, number> = {};
+
+  for (const [id, nodeData] of Object.entries(apiFormat)) {
+    if (!nodeData || typeof nodeData !== 'object') continue;
+    const data = nodeData as Record<string, unknown>;
+    if (!data.class_type) continue;
+
+    nodeId++;
+    idMap[id] = nodeId;
+
+    const inputs = (data.inputs as Record<string, unknown>) || {};
+    const widgetsValues: unknown[] = [];
+    const nodeInputs: Record<string, unknown>[] = [];
+
+    for (const [key, value] of Object.entries(inputs)) {
+      if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && typeof value[1] === 'number') {
+        nodeInputs.push({ name: key, type: '*', link: null });
+      } else {
+        widgetsValues.push(value);
+      }
+    }
+
+    nodes.push({
+      id: nodeId,
+      type: data.class_type,
+      pos: [nodeId * 250, 100],
+      size: [200, 100],
+      flags: {},
+      order: nodeId,
+      mode: 0,
+      inputs: nodeInputs,
+      outputs: [],
+      properties: {},
+      widgets_values: widgetsValues,
+    });
+  }
+
+  for (const [id, nodeData] of Object.entries(apiFormat)) {
+    if (!nodeData || typeof nodeData !== 'object') continue;
+    const data = nodeData as Record<string, unknown>;
+    const inputs = (data.inputs as Record<string, unknown>) || {};
+    const targetNodeId = idMap[id];
+    if (!targetNodeId) continue;
+
+    let inputSlot = 0;
+    for (const [, value] of Object.entries(inputs)) {
+      if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && typeof value[1] === 'number') {
+        const sourceNodeId = idMap[value[0] as string];
+        if (sourceNodeId) {
+          linkId++;
+          links.push([linkId, sourceNodeId, value[1] as number, targetNodeId, inputSlot, '']);
+        }
+      }
+      inputSlot++;
+    }
+  }
+
+  return {
+    last_node_id: nodeId,
+    last_link_id: linkId,
+    nodes,
+    links,
+    groups: [],
+    config: {},
+    extra: {},
+    version: 0.4,
+  };
+}
+
 interface ToolbarProps {
   showSidebar: boolean;
   showAgent: boolean;
@@ -69,15 +143,51 @@ const Toolbar: FC<ToolbarProps> = ({ showSidebar, showAgent, onToggleSidebar, on
     input.accept = '.json';
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
+      if (!file) {
+        console.warn('[Load] No file selected');
+        return;
+      }
+      console.log('[Load] File selected:', file.name, 'size:', file.size);
       const text = await file.text();
+      console.log('[Load] File text length:', text.length);
       try {
         const workflow = JSON.parse(text);
-        if (workflow.nodes && Array.isArray(workflow.nodes)) {
-          loadWorkflowFromJson(workflow);
+        console.log('[Load] Parsed JSON keys:', Object.keys(workflow));
+        console.log('[Load] workflow.nodes type:', typeof workflow.nodes, Array.isArray(workflow.nodes));
+        if (workflow.nodes) {
+          console.log('[Load] workflow.nodes count:', workflow.nodes.length);
+          console.log('[Load] workflow.nodes[0]:', workflow.nodes[0]);
         }
-      } catch {
-        console.error('Invalid workflow JSON');
+        if (workflow.links) {
+          console.log('[Load] workflow.links type:', typeof workflow.links, Array.isArray(workflow.links));
+          if (Array.isArray(workflow.links) && workflow.links.length > 0) {
+            console.log('[Load] workflow.links count:', workflow.links.length);
+            console.log('[Load] workflow.links[0]:', workflow.links[0]);
+          }
+        }
+        if (workflow.nodes && Array.isArray(workflow.nodes)) {
+          console.log('[Load] Workflow format: node-link format. Calling loadWorkflowFromJson...');
+          loadWorkflowFromJson(workflow);
+          console.log('[Load] loadWorkflowFromJson completed');
+        } else if (workflow.last_node_id !== undefined || workflow.version !== undefined) {
+          console.log('[Load] Workflow format: detected ComfyUI format but nodes is missing/invalid');
+          console.log('[Load] workflow keys:', Object.keys(workflow));
+          console.error('[Load] ComfyUI workflow format detected but no valid nodes array. Full JSON (first 500 chars):', JSON.stringify(workflow).substring(0, 500));
+        } else {
+          const keys = Object.keys(workflow);
+          const hasClassType = keys.length > 0 && keys.every((k) => workflow[k]?.class_type);
+          if (hasClassType) {
+            console.log('[Load] Workflow format: API format. Converting to node-link format...');
+            const converted = convertApiFormatToWorkflow(workflow);
+            loadWorkflowFromJson(converted);
+            console.log('[Load] API format conversion completed');
+          } else {
+            console.error('[Load] Invalid workflow format: no nodes array found. Keys:', Object.keys(workflow));
+            console.error('[Load] Full workflow:', JSON.stringify(workflow).substring(0, 500));
+          }
+        }
+      } catch (err) {
+        console.error('[Load] Invalid workflow JSON:', err);
       }
     };
     input.click();
