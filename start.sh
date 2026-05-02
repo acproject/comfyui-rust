@@ -31,7 +31,15 @@ if [ -f "$SD_CLI" ]; then
     xattr -cr "$SD_CLI" 2>/dev/null || true
 fi
 
-cargo run -p comfy-api --features local &
+SD_LIB="$PROJECT_DIR/cpp/stable-diffusion-cpp/build/libstable-diffusion.a"
+if [ -f "$SD_LIB" ]; then
+    CARGO_FEATURES="local"
+else
+    CARGO_FEATURES="local-build"
+    echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢)..."
+fi
+
+cargo run -p comfy-api --features "$CARGO_FEATURES" &
 SERVER_PID=$!
 echo "  ✓ 后端 PID: $SERVER_PID"
 

@@ -25,6 +25,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 [features]
 default = []
 local = ["comfy-inference/local", "comfy-executor/local"]
+local-build = ["comfy-inference/local-build", "comfy-executor/local"]
 remote = ["comfy-inference/remote", "comfy-executor/remote"]
 
 [dev-dependencies]

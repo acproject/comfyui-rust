@@ -1,5 +1,11 @@
-#[cfg(feature = "local-build")]
 fn main() {
+    let local_enabled = std::env::var("CARGO_FEATURE_LOCAL").is_ok();
+    let local_build_enabled = std::env::var("CARGO_FEATURE_LOCAL_BUILD").is_ok();
+
+    if !local_enabled {
+        return;
+    }
+
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let workspace_root = std::path::Path::new(&manifest_dir)
         .parent()
@@ -8,19 +14,75 @@ fn main() {
         .unwrap();
     let sd_cpp_dir = workspace_root.join("cpp/stable-diffusion-cpp");
 
-    if !sd_cpp_dir.exists() {
+    let sd_lib_dir_env = std::env::var("SD_LIB_DIR").ok();
+
+    let has_prebuilt = sd_lib_dir_env.is_some()
+        || sd_cpp_dir.join("build/libstable-diffusion.a").exists()
+        || sd_cpp_dir.join("build/lib/libstable-diffusion.a").exists();
+
+    if has_prebuilt {
+        link_prebuilt_library(&sd_cpp_dir, sd_lib_dir_env.as_deref());
+    } else if sd_cpp_dir.exists() && local_build_enabled {
+        build_and_link_cpp_library(&sd_cpp_dir);
+    } else if sd_cpp_dir.exists() {
+        println!("cargo:error=Pre-built stable-diffusion library not found.");
+        println!("cargo:error=Either:");
+        println!("cargo:error=  1. Build the C++ library first: cd cpp/stable-diffusion-cpp && mkdir build && cd build && cmake .. && make -j$(nproc)");
+        println!("cargo:error=  2. Use --features local-build to auto-build: cargo build --features local-build");
+        println!("cargo:error=  3. Set SD_LIB_DIR env var to the directory containing libstable-diffusion.a");
+        println!("cargo:error=  4. Use without local inference: cargo build (no --features local)");
+        panic!("Pre-built stable-diffusion library not found. Use --features local-build to build from source.");
+    } else {
         println!("cargo:warning=stable-diffusion-cpp not found at {:?}", sd_cpp_dir);
-        println!("cargo:warning=Skipping C++ library build. Set SD_LIB_DIR to link pre-built library.");
-        return;
+        println!("cargo:warning=Clone the submodule first: git submodule update --init --recursive");
+        println!("cargo:warning=Or set SD_LIB_DIR to link a pre-built library.");
+        panic!(
+            "stable-diffusion-cpp not found at {:?}. \
+             Clone the submodule or set SD_LIB_DIR.",
+            sd_cpp_dir
+        );
     }
 
+    println!("cargo:rerun-if-env-changed=SD_LIB_DIR");
+}
+
+fn link_prebuilt_library(sd_cpp_dir: &std::path::Path, sd_lib_dir_env: Option<&str>) {
+    if let Some(sd_lib_dir) = sd_lib_dir_env {
+        println!("cargo:rustc-link-search=native={}", sd_lib_dir);
+    } else {
+        let build_dir = sd_cpp_dir.join("build");
+        if build_dir.exists() {
+            println!("cargo:rustc-link-search=native={}", build_dir.display());
+        }
+        let build_lib_dir = sd_cpp_dir.join("build/lib");
+        if build_lib_dir.exists() {
+            println!("cargo:rustc-link-search=native={}", build_lib_dir.display());
+        }
+        let ggml_dir = sd_cpp_dir.join("build/ggml/src");
+        if ggml_dir.exists() {
+            println!("cargo:rustc-link-search=native={}", ggml_dir.display());
+        }
+        let ggml_metal_dir = sd_cpp_dir.join("build/ggml/src/ggml-metal");
+        if ggml_metal_dir.exists() {
+            println!("cargo:rustc-link-search=native={}", ggml_metal_dir.display());
+        }
+        let ggml_blas_dir = sd_cpp_dir.join("build/ggml/src/ggml-blas");
+        if ggml_blas_dir.exists() {
+            println!("cargo:rustc-link-search=native={}", ggml_blas_dir.display());
+        }
+    }
+
+    emit_link_libs();
+}
+
+fn build_and_link_cpp_library(sd_cpp_dir: &std::path::Path) {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_path = std::path::Path::new(&out_dir);
 
     let sd_metal = cfg!(target_os = "macos");
-    let sd_cuda = cfg!(target_feature = "cuda");
+    let sd_cuda = std::env::var("CARGO_CFG_SD_CUDA").is_ok();
 
-    let mut config = cmake::Config::new(&sd_cpp_dir);
+    let mut config = cmake::Config::new(sd_cpp_dir);
 
     config
         .define("SD_BUILD_EXAMPLES", "OFF")
@@ -64,75 +126,12 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", out_path.display());
 
-    println!("cargo:rustc-link-lib=static=stable-diffusion");
-    println!("cargo:rustc-link-lib=static=ggml");
-    println!("cargo:rustc-link-lib=static=ggml-base");
-    println!("cargo:rustc-link-lib=static=ggml-cpu");
-    println!("cargo:rustc-link-lib=static=ggml-blas");
+    emit_link_libs();
 
-    if cfg!(target_os = "macos") {
-        println!("cargo:rustc-link-lib=static=ggml-metal");
-        println!("cargo:rustc-link-lib=framework=Metal");
-        println!("cargo:rustc-link-lib=framework=MetalKit");
-        println!("cargo:rustc-link-lib=framework=Foundation");
-        println!("cargo:rustc-link-lib=framework=Accelerate");
-        println!("cargo:rustc-link-lib=c++");
-    }
-
-    if cfg!(target_os = "linux") {
-        println!("cargo:rustc-link-lib=stdc++");
-        println!("cargo:rustc-link-lib=m");
-        println!("cargo:rustc-link-lib=pthread");
-        println!("cargo:rustc-link-lib=dl");
-    }
-
-    println!("cargo:rerun-if-env-changed=SD_LIB_DIR");
     println!("cargo:rerun-if-changed={}", sd_cpp_dir.join("CMakeLists.txt").display());
 }
 
-#[cfg(all(feature = "local", not(feature = "local-build")))]
-fn main() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let workspace_root = std::path::Path::new(&manifest_dir)
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
-    let sd_cpp_dir = workspace_root.join("cpp/stable-diffusion-cpp");
-
-    if let Ok(sd_lib_dir) = std::env::var("SD_LIB_DIR") {
-        println!("cargo:rustc-link-search=native={}", sd_lib_dir);
-    } else if sd_cpp_dir.exists() {
-        let build_dir = sd_cpp_dir.join("build");
-        if build_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", build_dir.display());
-        }
-        let build_lib_dir = sd_cpp_dir.join("build/lib");
-        if build_lib_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", build_lib_dir.display());
-        }
-        let ggml_dir = sd_cpp_dir.join("build/ggml/src");
-        if ggml_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", ggml_dir.display());
-        }
-        let ggml_cpu_dir = sd_cpp_dir.join("build/ggml/src");
-        if ggml_cpu_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", ggml_cpu_dir.display());
-        }
-        let ggml_metal_dir = sd_cpp_dir.join("build/ggml/src/ggml-metal");
-        if ggml_metal_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", ggml_metal_dir.display());
-        }
-        let ggml_blas_dir = sd_cpp_dir.join("build/ggml/src/ggml-blas");
-        if ggml_blas_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", ggml_blas_dir.display());
-        }
-    } else {
-        println!("cargo:warning=stable-diffusion-cpp not found at {:?}", sd_cpp_dir);
-        println!("cargo:warning=Set SD_LIB_DIR to link pre-built library.");
-        return;
-    }
-
+fn emit_link_libs() {
     println!("cargo:rustc-link-lib=static=stable-diffusion");
     println!("cargo:rustc-link-lib=static=ggml");
     println!("cargo:rustc-link-lib=static=ggml-base");
@@ -154,9 +153,4 @@ fn main() {
         println!("cargo:rustc-link-lib=pthread");
         println!("cargo:rustc-link-lib=dl");
     }
-
-    println!("cargo:rerun-if-env-changed=SD_LIB_DIR");
 }
-
-#[cfg(not(feature = "local"))]
-fn main() {}
