@@ -69,6 +69,16 @@ const GraphEditor: FC = () => {
     [disconnectNode]
   );
 
+  const onNodesDelete = useCallback(
+    (deletedNodes: Array<{ id: string }>) => {
+      for (const node of deletedNodes) {
+        removeNode(node.id);
+      }
+      setSelectedNodeId(null);
+    },
+    [removeNode, setSelectedNodeId]
+  );
+
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -167,6 +177,7 @@ const GraphEditor: FC = () => {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
+        onNodesDelete={onNodesDelete}
         onDragOver={onDragOver}
         onDrop={onDrop}
         onNodeClick={onNodeClick}
@@ -193,7 +204,7 @@ const GraphEditor: FC = () => {
         maxZoom={4}
         selectionOnDrag
         selectNodesOnDrag
-        deleteKeyCode={null}
+        deleteKeyCode="Delete"
         snapToGrid
         snapGrid={[10, 10]}
       >

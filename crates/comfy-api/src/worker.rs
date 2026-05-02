@@ -47,11 +47,55 @@ pub async fn run_executor(state: AppState) {
                         .send(WsMessage::executing(&prompt_id, Some(node_id)));
                 }
 
-                let output_json = serde_json::to_value(&result.outputs).unwrap_or(serde_json::json!({}));
+                let mut output_json = serde_json::Map::new();
+                for (node_id, node_output) in &result.outputs {
+                    let mut node_output_json = serde_json::Map::new();
+
+                    if let Some(ui) = &node_output.ui {
+                        if let Some(ui_obj) = ui.as_object() {
+                            for (key, value) in ui_obj {
+                                node_output_json.insert(key.clone(), value.clone());
+                            }
+                        }
+                    }
+
+                    for (i, value) in node_output.values.iter().enumerate() {
+                        if let Some(images) = value.get("images").and_then(|v| v.as_array()) {
+                            node_output_json.insert(
+                                "images".to_string(),
+                                serde_json::Value::Array(images.clone()),
+                            );
+                        } else if let Some(obj) = value.as_object() {
+                            if obj.contains_key("filename") {
+                                let images = node_output_json
+                                    .entry("images".to_string())
+                                    .or_insert_with(|| serde_json::Value::Array(vec![]));
+                                if let Some(arr) = images.as_array_mut() {
+                                    arr.push(value.clone());
+                                }
+                            } else {
+                                node_output_json.insert(
+                                    format!("output_{}", i),
+                                    value.clone(),
+                                );
+                            }
+                        } else {
+                            node_output_json.insert(
+                                format!("output_{}", i),
+                                value.clone(),
+                            );
+                        }
+                    }
+
+                    output_json.insert(
+                        node_id.clone(),
+                        serde_json::Value::Object(node_output_json),
+                    );
+                }
 
                 state
                     .broadcaster
-                    .send(WsMessage::execution_success(&prompt_id, &output_json));
+                    .send(WsMessage::execution_success(&prompt_id, &serde_json::Value::Object(output_json)));
 
                 state
                     .queue
