@@ -214,6 +214,8 @@ const GraphEditor: FC = () => {
           position="bottom-right"
         />
         <MiniMap
+          pannable
+          zoomable
           style={{ background: '#1e1e2e', border: '1px solid #333' }}
           nodeColor={(node) => {
             const data = node.data as ComfyNodeData;
