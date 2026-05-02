@@ -350,7 +350,7 @@ pub async fn upload_model_file(
 ) -> Result<impl IntoResponse, ApiError> {
     let mut model_type = String::new();
     let mut filename = String::new();
-    let mut data = Vec::new();
+    let mut file_path: Option<std::path::PathBuf> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         ApiError::BadRequest(format!("Multipart error: {}", e))
@@ -359,7 +359,33 @@ pub async fn upload_model_file(
         match name.as_str() {
             "file" => {
                 filename = field.file_name().unwrap_or("model.safetensors").to_string();
-                data = field.bytes().await.map_err(|e| ApiError::BadRequest(format!("Read error: {}", e)))?.to_vec();
+
+                if model_type.is_empty() {
+                    return Err(ApiError::BadRequest("model_type must come before file in multipart form".to_string()));
+                }
+
+                let dir = {
+                    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+                    let sub_dir = config.get_model_type_dir(&model_type);
+                    state.models_dir.join(&sub_dir)
+                };
+                std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+                let dest = dir.join(&filename);
+                let mut f = tokio::fs::File::create(&dest).await
+                    .map_err(|e| ApiError::Internal(format!("Failed to create file: {}", e)))?;
+                use tokio::io::AsyncWriteExt;
+                use futures::StreamExt;
+
+                let mut stream = field;
+                while let Some(chunk) = stream.chunk().await.map_err(|e| ApiError::BadRequest(format!("Read error: {}", e)))? {
+                    f.write_all(&chunk).await
+                        .map_err(|e| ApiError::Internal(format!("Write error: {}", e)))?;
+                }
+                f.flush().await
+                    .map_err(|e| ApiError::Internal(format!("Flush error: {}", e)))?;
+
+                file_path = Some(dest);
             }
             "model_type" => {
                 model_type = String::from_utf8(
@@ -370,21 +396,13 @@ pub async fn upload_model_file(
         }
     }
 
-    if data.is_empty() {
+    if file_path.is_none() {
         return Err(ApiError::BadRequest("No file data provided".to_string()));
     }
 
     if model_type.is_empty() {
         return Err(ApiError::BadRequest("model_type is required".to_string()));
     }
-
-    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
-    let sub_dir = config.get_model_type_dir(&model_type);
-    let dir = state.models_dir.join(&sub_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let file_path = dir.join(&filename);
-    std::fs::write(&file_path, &data).map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(Json(json!({
         "name": filename,

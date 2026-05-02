@@ -53,15 +53,12 @@ impl ComfyServer {
             .route("/models", axum::routing::get(routes::get_models))
             .route("/model_manager/list", axum::routing::get(routes::list_model_files))
             .route("/model_manager/delete", axum::routing::post(routes::delete_model_file))
-            .route("/model_manager/upload", axum::routing::post(routes::upload_model_file).layer(DefaultBodyLimit::max(10 * 1024 * 1024 * 1024)))
             .route("/extensions", axum::routing::get(routes::get_extensions))
             .route("/ws", axum::routing::get(routes::ws_handler))
             .route("/view", axum::routing::get(routes::get_image))
             .route("/view", axum::routing::post(routes::get_image))
             .route("/view_input", axum::routing::get(routes::get_view_input_image))
             .route("/list_images", axum::routing::get(routes::get_image_list))
-            .route("/upload/image", axum::routing::post(routes::post_upload_image).layer(DefaultBodyLimit::max(100 * 1024 * 1024)))
-            .route("/upload/input_image", axum::routing::post(routes::post_upload_input_image).layer(DefaultBodyLimit::max(100 * 1024 * 1024)))
             .route("/input_images", axum::routing::get(routes::get_input_images))
             .route("/workflow", axum::routing::post(routes::post_save_workflow))
             .route("/workflow", axum::routing::get(routes::get_load_workflow))
@@ -81,7 +78,14 @@ impl ComfyServer {
             .route("/model_downloads/progress", axum::routing::delete(routes::delete_download_progress))
             .with_state(self.state.clone());
 
-        let mut router = Router::new().merge(api_routes);
+        let upload_routes = Router::new()
+            .route("/model_manager/upload", axum::routing::post(routes::upload_model_file))
+            .route("/upload/image", axum::routing::post(routes::post_upload_image))
+            .route("/upload/input_image", axum::routing::post(routes::post_upload_input_image))
+            .layer(DefaultBodyLimit::disable())
+            .with_state(self.state.clone());
+
+        let mut router = Router::new().merge(api_routes).merge(upload_routes);
 
         if let Some(ref static_dir) = self.static_dir {
             router = router.fallback_service(ServeDir::new(static_dir));

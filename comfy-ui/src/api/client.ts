@@ -285,8 +285,8 @@ export const api = {
 
   async uploadModelFile(file: File, modelType: string): Promise<UploadModelResponse> {
     const formData = new FormData();
-    formData.append('file', file);
     formData.append('model_type', modelType);
+    formData.append('file', file);
 
     const response = await fetch(`${API_BASE}/model_manager/upload`, {
       method: 'POST',
