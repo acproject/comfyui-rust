@@ -163,8 +163,8 @@ const GraphEditor: FC = () => {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange as never}
-        onEdgesChange={onEdgesChange as never}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
         onDragOver={onDragOver}

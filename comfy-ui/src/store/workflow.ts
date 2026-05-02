@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { ObjectInfoMap, QueueInfo } from '@/types/api';
-import type { Node, Edge } from '@xyflow/react';
+import { applyNodeChanges, applyEdgeChanges, type Node, type Edge, type NodeChange, type EdgeChange } from '@xyflow/react';
 import {
   validateConnection,
   validatePrompt,
@@ -51,8 +51,8 @@ interface WorkflowState {
 
   setNodes: (nodes: ComfyNode[]) => void;
   setEdges: (edges: Edge[]) => void;
-  onNodesChange: (changes: unknown[]) => void;
-  onEdgesChange: (changes: unknown[]) => void;
+  onNodesChange: (changes: NodeChange<ComfyNode>[]) => void;
+  onEdgesChange: (changes: EdgeChange<Edge>[]) => void;
   addNode: (classType: string, position: { x: number; y: number }) => void;
   removeNode: (nodeId: string) => void;
   updateNodeInput: (nodeId: string, inputName: string, value: unknown) => void;
@@ -140,6 +140,23 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     if (classDef.input_types.required) {
       for (const [key, spec] of Object.entries(classDef.input_types.required)) {
+        if (spec.type_name === 'INT') {
+          newNode.data.inputs[key] = 0;
+        } else if (spec.type_name === 'FLOAT') {
+          newNode.data.inputs[key] = 0.0;
+        } else if (spec.type_name === 'STRING') {
+          newNode.data.inputs[key] = '';
+        } else if (spec.type_name === 'BOOLEAN') {
+          newNode.data.inputs[key] = false;
+        } else if (spec.type_name === 'COMBO') {
+          const choices = (spec.extra?.choices as string[]) || [];
+          newNode.data.inputs[key] = choices.length > 0 ? choices[0] : '';
+        }
+      }
+    }
+
+    if (classDef.input_types.optional) {
+      for (const [key, spec] of Object.entries(classDef.input_types.optional)) {
         if (spec.type_name === 'INT') {
           newNode.data.inputs[key] = 0;
         } else if (spec.type_name === 'FLOAT') {
@@ -329,20 +346,72 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const widgetsValues = (wn.widgets_values as unknown[]) || [];
 
       const inputs: Record<string, unknown> = {};
+      let widgetIdx = 0;
+
       if (classDef?.input_types.required) {
-        let widgetIdx = 0;
         for (const [key, spec] of Object.entries(classDef.input_types.required)) {
           if (widgetIdx < widgetsValues.length) {
             inputs[key] = widgetsValues[widgetIdx];
             widgetIdx++;
           } else if (spec.type_name === 'INT') {
             inputs[key] = 0;
+            widgetIdx++;
           } else if (spec.type_name === 'FLOAT') {
             inputs[key] = 0.0;
+            widgetIdx++;
           } else if (spec.type_name === 'STRING') {
             inputs[key] = '';
+            widgetIdx++;
           } else if (spec.type_name === 'BOOLEAN') {
             inputs[key] = false;
+            widgetIdx++;
+          } else if (spec.type_name === 'COMBO') {
+            const choices = (spec.extra?.choices as string[]) || [];
+            if (widgetIdx < widgetsValues.length) {
+              inputs[key] = widgetsValues[widgetIdx];
+            } else {
+              inputs[key] = choices.length > 0 ? choices[0] : '';
+            }
+            widgetIdx++;
+          } else {
+            if (widgetIdx < widgetsValues.length) {
+              inputs[key] = widgetsValues[widgetIdx];
+            }
+            widgetIdx++;
+          }
+        }
+      }
+
+      if (classDef?.input_types.optional) {
+        for (const [key, spec] of Object.entries(classDef.input_types.optional)) {
+          if (widgetIdx < widgetsValues.length) {
+            inputs[key] = widgetsValues[widgetIdx];
+            widgetIdx++;
+          } else if (spec.type_name === 'INT') {
+            inputs[key] = 0;
+            widgetIdx++;
+          } else if (spec.type_name === 'FLOAT') {
+            inputs[key] = 0.0;
+            widgetIdx++;
+          } else if (spec.type_name === 'STRING') {
+            inputs[key] = '';
+            widgetIdx++;
+          } else if (spec.type_name === 'BOOLEAN') {
+            inputs[key] = false;
+            widgetIdx++;
+          } else if (spec.type_name === 'COMBO') {
+            const choices = (spec.extra?.choices as string[]) || [];
+            if (widgetIdx < widgetsValues.length) {
+              inputs[key] = widgetsValues[widgetIdx];
+            } else {
+              inputs[key] = choices.length > 0 ? choices[0] : '';
+            }
+            widgetIdx++;
+          } else {
+            if (widgetIdx < widgetsValues.length) {
+              inputs[key] = widgetsValues[widgetIdx];
+            }
+            widgetIdx++;
           }
         }
       }
@@ -533,42 +602,5 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setValidationErrors: (errors) => set({ validationErrors: errors }),
   clearValidationErrors: () => set({ validationErrors: [] }),
 }));
-
-function applyNodeChanges(changes: unknown[], nodes: ComfyNode[]): ComfyNode[] {
-  let result = [...nodes];
-  for (const change of changes as Array<{ type: string; id?: string; item?: ComfyNode; position?: { x: number; y: number } }>) {
-    switch (change.type) {
-      case 'add':
-        if (change.item) result.push(change.item);
-        break;
-      case 'remove':
-        if (change.id) result = result.filter((n) => n.id !== change.id);
-        break;
-      case 'position':
-        if (change.id && change.position) {
-          result = result.map((n) =>
-            n.id === change.id ? { ...n, position: change.position! } : n
-          );
-        }
-        break;
-    }
-  }
-  return result;
-}
-
-function applyEdgeChanges(changes: unknown[], edges: Edge[]): Edge[] {
-  let result = [...edges];
-  for (const change of changes as Array<{ type: string; id?: string; item?: Edge }>) {
-    switch (change.type) {
-      case 'add':
-        if (change.item) result.push(change.item);
-        break;
-      case 'remove':
-        if (change.id) result = result.filter((e) => e.id !== change.id);
-        break;
-    }
-  }
-  return result;
-}
 
 export type { ComfyNodeData, ComfyNode };
