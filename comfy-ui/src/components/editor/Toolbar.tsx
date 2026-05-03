@@ -10,6 +10,12 @@ function convertApiFormatToWorkflow(apiFormat: Record<string, unknown>): Record<
   let linkId = 0;
   const idMap: Record<string, number> = {};
 
+  const objectInfo = useWorkflowStore.getState().objectInfo;
+  const isPrimitive = (typeName: string) =>
+    ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
+
+  const nodeLinkSlots: Record<string, Record<string, number>> = {};
+
   for (const [id, nodeData] of Object.entries(apiFormat)) {
     if (!nodeData || typeof nodeData !== 'object') continue;
     const data = nodeData as Record<string, unknown>;
@@ -19,16 +25,50 @@ function convertApiFormatToWorkflow(apiFormat: Record<string, unknown>): Record<
     idMap[id] = nodeId;
 
     const inputs = (data.inputs as Record<string, unknown>) || {};
-    const widgetsValues: unknown[] = [];
-    const nodeInputs: Record<string, unknown>[] = [];
+    const classDef = objectInfo[data.class_type as string];
 
-    for (const [key, value] of Object.entries(inputs)) {
-      if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && typeof value[1] === 'number') {
-        nodeInputs.push({ name: key, type: '*', link: null });
-      } else {
-        widgetsValues.push(value);
+    const allInputNames: string[] = [];
+    const allInputTypes: string[] = [];
+    if (classDef?.input_types?.required) {
+      for (const [key, spec] of Object.entries(classDef.input_types.required)) {
+        allInputNames.push(key);
+        allInputTypes.push(spec.type_name);
       }
     }
+    if (classDef?.input_types?.optional) {
+      for (const [key, spec] of Object.entries(classDef.input_types.optional)) {
+        allInputNames.push(key);
+        allInputTypes.push(spec.type_name);
+      }
+    }
+
+    const nodeInputs: Record<string, unknown>[] = [];
+    const widgetsValues: unknown[] = [];
+    const linkInputSlots: Record<string, number> = {};
+
+    for (let i = 0; i < allInputNames.length; i++) {
+      const inputName = allInputNames[i];
+      const inputType = allInputTypes[i];
+      const value = inputs[inputName];
+      const isLink = Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && typeof value[1] === 'number';
+
+      if (!isPrimitive(inputType)) {
+        nodeInputs.push({ name: inputName, type: inputType, link: isLink ? 0 : null });
+        if (isLink) {
+          linkInputSlots[inputName] = i;
+        }
+      } else {
+        if (isLink) {
+          linkInputSlots[inputName] = i;
+        } else if (value !== undefined) {
+          widgetsValues.push(value);
+        } else {
+          widgetsValues.push(null);
+        }
+      }
+    }
+
+    nodeLinkSlots[id] = linkInputSlots;
 
     nodes.push({
       id: nodeId,
@@ -52,16 +92,17 @@ function convertApiFormatToWorkflow(apiFormat: Record<string, unknown>): Record<
     const targetNodeId = idMap[id];
     if (!targetNodeId) continue;
 
-    let inputSlot = 0;
-    for (const [, value] of Object.entries(inputs)) {
+    const linkInputSlots = nodeLinkSlots[id] || {};
+
+    for (const [inputName, value] of Object.entries(inputs)) {
       if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && typeof value[1] === 'number') {
         const sourceNodeId = idMap[value[0] as string];
-        if (sourceNodeId) {
+        const targetSlot = linkInputSlots[inputName];
+        if (sourceNodeId !== undefined && targetSlot !== undefined) {
           linkId++;
-          links.push([linkId, sourceNodeId, value[1] as number, targetNodeId, inputSlot, '']);
+          links.push([linkId, sourceNodeId, value[1] as number, targetNodeId, targetSlot, '']);
         }
       }
-      inputSlot++;
     }
   }
 

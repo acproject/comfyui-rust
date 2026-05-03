@@ -637,13 +637,12 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                 match backend.generate_image(params) {
                     Ok(images) => {
                         let image_data: Vec<Value> = images.iter().map(|img| {
-                            json!({
+                            serde_json::to_value(img).unwrap_or_else(|_| json!({
                                 "type": "image",
                                 "width": img.width,
                                 "height": img.height,
                                 "channel": img.channel,
-                                "data_len": img.data.len(),
-                            })
+                            }))
                         }).collect();
                         Ok(vec![json!({
                             "type": "latent",
@@ -719,12 +718,29 @@ fn register_save_image(registry: &mut NodeRegistry) {
             let prefix = filename_prefix.as_str().unwrap_or("ComfyUI");
             tracing::info!("SaveImage: saving image with prefix {}", prefix);
 
+            let output_path = std::path::PathBuf::from(&output_dir);
+            std::fs::create_dir_all(&output_path).ok();
+
             if let Some(samples) = images.get("samples").and_then(|v| v.as_array()) {
                 for (i, sample) in samples.iter().enumerate() {
-                    if sample.get("type").and_then(|v| v.as_str()) == Some("image") {
+                    if let Ok(sd_image) = serde_json::from_value::<comfy_inference::SdImage>(sample.clone()) {
                         let filename = format!("{}_{:05}.png", prefix, i);
-                        let filepath = std::path::Path::new(&output_dir).join(&filename);
-                        tracing::info!("SaveImage: would save to {}", filepath.display());
+                        let filepath = output_path.join(&filename);
+                        match sd_image.to_png_bytes() {
+                            Ok(png_bytes) => {
+                                match std::fs::write(&filepath, &png_bytes) {
+                                    Ok(_) => {
+                                        tracing::info!("SaveImage: saved to {}", filepath.display());
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("SaveImage: failed to write {}: {}", filepath.display(), e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("SaveImage: failed to encode PNG for image {}: {}", i, e);
+                            }
+                        }
                     }
                 }
             }
