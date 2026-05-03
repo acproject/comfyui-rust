@@ -21,6 +21,10 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const [collapsed, setCollapsed] = useState(false);
 
   const objectInfo = useWorkflowStore((s) => s.objectInfo[data.classType]);
+  const executingNodeId = useWorkflowStore((s) => s.executingNodeId);
+  const cachedNodeIds = useWorkflowStore((s) => s.cachedNodeIds);
+  const isExecuting = executingNodeId === id;
+  const isCached = cachedNodeIds.includes(id);
 
   const allInputSpecs: Array<{
     name: string;
@@ -91,14 +95,25 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
       style={{
         background: '#1e1e2e',
         borderRadius: 6,
-        border: selected ? '2px solid #fff' : '1px solid #333',
+        border: isExecuting
+          ? '2px solid #f59e0b'
+          : isCached
+            ? '2px solid #22c55e'
+            : selected
+              ? '2px solid #fff'
+              : '1px solid #333',
         minWidth: 220,
         maxWidth: 280,
         fontSize: 12,
         color: '#e2e8f0',
-        boxShadow: selected
-          ? '0 0 12px rgba(100, 150, 255, 0.4)'
-          : '0 2px 8px rgba(0,0,0,0.3)',
+        boxShadow: isExecuting
+          ? '0 0 16px rgba(245, 158, 11, 0.6), 0 0 4px rgba(245, 158, 11, 0.3)'
+          : isCached
+            ? '0 0 12px rgba(34, 197, 94, 0.4)'
+            : selected
+              ? '0 0 12px rgba(100, 150, 255, 0.4)'
+              : '0 2px 8px rgba(0,0,0,0.3)',
+        transition: 'border-color 0.3s, box-shadow 0.3s',
       }}
     >
       {nonPrimitiveInputs.map((spec) => (
@@ -154,6 +169,29 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           {title}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {isExecuting && (
+            <span style={{
+              fontSize: 8,
+              background: 'rgba(245, 158, 11, 0.3)',
+              color: '#f59e0b',
+              padding: '1px 4px',
+              borderRadius: 3,
+              animation: 'pulse 1.5s ease-in-out infinite',
+            }}>
+              ●
+            </span>
+          )}
+          {isCached && !isExecuting && (
+            <span style={{
+              fontSize: 8,
+              background: 'rgba(34, 197, 94, 0.3)',
+              color: '#22c55e',
+              padding: '1px 4px',
+              borderRadius: 3,
+            }}>
+              ✓
+            </span>
+          )}
           {isCustomNode(classType) && (
             <span style={{
               fontSize: 8,

@@ -7,6 +7,7 @@ export function useWebSocket() {
   const wsRef = useRef<ReturnType<typeof getWsClient> | null>(null);
 
   const setExecuting = useWorkflowStore((s) => s.setExecuting);
+  const setCachedNodes = useWorkflowStore((s) => s.setCachedNodes);
   const setProgress = useWorkflowStore((s) => s.setProgress);
   const clearProgress = useWorkflowStore((s) => s.clearProgress);
   const setQueueInfo = useWorkflowStore((s) => s.setQueueInfo);
@@ -49,6 +50,9 @@ export function useWebSocket() {
       ws.on('execution_cached', (msg: WsMessage) => {
         const data = msg.data as ExecutionCachedData;
         console.log('Cached nodes:', data.nodes);
+        if (data.nodes && Array.isArray(data.nodes)) {
+          setCachedNodes(data.nodes.map(String));
+        }
       })
     );
 
@@ -95,5 +99,5 @@ export function useWebSocket() {
       unsubs.forEach((unsub) => unsub());
       ws.disconnect();
     };
-  }, [setExecuting, setProgress, clearProgress, setQueueInfo, setOutputImages]);
+  }, [setExecuting, setCachedNodes, setProgress, clearProgress, setQueueInfo, setOutputImages]);
 }

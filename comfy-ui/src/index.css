@@ -67,3 +67,8 @@ button {
 .react-flow__handle:hover {
   background: #5a6abf !important;
 }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

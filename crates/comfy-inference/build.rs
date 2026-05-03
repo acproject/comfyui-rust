@@ -30,10 +30,10 @@ fn main() {
         || sd_cpp_dir.join("build/libstable-diffusion.a").exists()
         || sd_cpp_dir.join("build/lib/libstable-diffusion.a").exists();
 
-    if has_prebuilt {
-        link_prebuilt_library(&sd_cpp_dir, sd_lib_dir_env.as_deref());
+    let search_dirs = if has_prebuilt {
+        link_prebuilt_library(&sd_cpp_dir, sd_lib_dir_env.as_deref())
     } else if sd_cpp_dir.exists() && local_build_enabled {
-        build_and_link_cpp_library(&sd_cpp_dir);
+        build_and_link_cpp_library(&sd_cpp_dir)
     } else if sd_cpp_dir.exists() {
         println!("cargo:error=Pre-built stable-diffusion library not found.");
         println!("cargo:error=Either:");
@@ -52,41 +52,43 @@ fn main() {
              Clone the submodule, set SD_LIB_DIR, or use --features local for CLI-only mode.",
             sd_cpp_dir
         );
-    }
+    };
+
+    emit_link_libs(&search_dirs);
 
     println!("cargo:rerun-if-env-changed=SD_LIB_DIR");
 }
 
-fn link_prebuilt_library(sd_cpp_dir: &std::path::Path, sd_lib_dir_env: Option<&str>) {
+fn link_prebuilt_library(sd_cpp_dir: &std::path::Path, sd_lib_dir_env: Option<&str>) -> Vec<std::path::PathBuf> {
+    let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+
     if let Some(sd_lib_dir) = sd_lib_dir_env {
+        let p = std::path::PathBuf::from(sd_lib_dir);
         println!("cargo:rustc-link-search=native={}", sd_lib_dir);
+        search_dirs.push(p);
     } else {
-        let build_dir = sd_cpp_dir.join("build");
-        if build_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", build_dir.display());
-        }
-        let build_lib_dir = sd_cpp_dir.join("build/lib");
-        if build_lib_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", build_lib_dir.display());
-        }
-        let ggml_dir = sd_cpp_dir.join("build/ggml/src");
-        if ggml_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", ggml_dir.display());
-        }
-        let ggml_metal_dir = sd_cpp_dir.join("build/ggml/src/ggml-metal");
-        if ggml_metal_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", ggml_metal_dir.display());
-        }
-        let ggml_blas_dir = sd_cpp_dir.join("build/ggml/src/ggml-blas");
-        if ggml_blas_dir.exists() {
-            println!("cargo:rustc-link-search=native={}", ggml_blas_dir.display());
+        let dirs_to_check = [
+            sd_cpp_dir.join("build"),
+            sd_cpp_dir.join("build/lib"),
+            sd_cpp_dir.join("build/ggml/src"),
+            sd_cpp_dir.join("build/ggml/src/ggml-metal"),
+            sd_cpp_dir.join("build/ggml/src/ggml-blas"),
+            sd_cpp_dir.join("build/ggml/src/ggml-cuda"),
+        ];
+        for dir in &dirs_to_check {
+            if dir.exists() {
+                println!("cargo:rustc-link-search=native={}", dir.display());
+                search_dirs.push(dir.clone());
+            }
         }
     }
 
-    emit_link_libs();
+    search_dirs
 }
 
-fn build_and_link_cpp_library(sd_cpp_dir: &std::path::Path) {
+fn build_and_link_cpp_library(sd_cpp_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_path = std::path::Path::new(&out_dir);
 
@@ -110,47 +112,56 @@ fn build_and_link_cpp_library(sd_cpp_dir: &std::path::Path) {
 
     let dst = config.build();
 
-    let lib_dir = dst.join("lib");
-    if lib_dir.exists() {
-        println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    }
-
-    let build_lib_dir = dst.join("build/lib");
-    if build_lib_dir.exists() {
-        println!("cargo:rustc-link-search=native={}", build_lib_dir.display());
-    }
-
-    let ggml_dir = dst.join("build/ggml/src");
-    if ggml_dir.exists() {
-        println!("cargo:rustc-link-search=native={}", ggml_dir.display());
-    }
-
-    let ggml_metal_dir = dst.join("build/ggml/src/ggml-metal");
-    if ggml_metal_dir.exists() {
-        println!("cargo:rustc-link-search=native={}", ggml_metal_dir.display());
-    }
-
-    let ggml_blas_dir = dst.join("build/ggml/src/ggml-blas");
-    if ggml_blas_dir.exists() {
-        println!("cargo:rustc-link-search=native={}", ggml_blas_dir.display());
+    let dirs_to_check = [
+        dst.join("lib"),
+        dst.join("build/lib"),
+        dst.join("build/ggml/src"),
+        dst.join("build/ggml/src/ggml-metal"),
+        dst.join("build/ggml/src/ggml-blas"),
+        dst.join("build/ggml/src/ggml-cuda"),
+    ];
+    for dir in &dirs_to_check {
+        if dir.exists() {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            search_dirs.push(dir.clone());
+        }
     }
 
     println!("cargo:rustc-link-search=native={}", out_path.display());
-
-    emit_link_libs();
+    search_dirs.push(out_path.to_path_buf());
 
     println!("cargo:rerun-if-changed={}", sd_cpp_dir.join("CMakeLists.txt").display());
+
+    search_dirs
 }
 
-fn emit_link_libs() {
-    println!("cargo:rustc-link-lib=static=stable-diffusion");
-    println!("cargo:rustc-link-lib=static=ggml");
-    println!("cargo:rustc-link-lib=static=ggml-base");
-    println!("cargo:rustc-link-lib=static=ggml-cpu");
-    println!("cargo:rustc-link-lib=static=ggml-blas");
+fn lib_exists(search_dirs: &[std::path::PathBuf], lib_name: &str) -> bool {
+    let lib_file = format!("lib{}.a", lib_name);
+    search_dirs.iter().any(|d| d.join(&lib_file).exists())
+}
+
+fn emit_link_libs(search_dirs: &[std::path::PathBuf]) {
+    let required_libs = ["stable-diffusion", "ggml", "ggml-base", "ggml-cpu"];
+    let optional_libs = ["ggml-blas", "ggml-cuda"];
+
+    for lib in &required_libs {
+        if lib_exists(search_dirs, lib) {
+            println!("cargo:rustc-link-lib=static={}", lib);
+        } else {
+            println!("cargo:warning=Required library lib{}.a not found in search paths", lib);
+        }
+    }
+
+    for lib in &optional_libs {
+        if lib_exists(search_dirs, lib) {
+            println!("cargo:rustc-link-lib=static={}", lib);
+        }
+    }
 
     if cfg!(target_os = "macos") {
-        println!("cargo:rustc-link-lib=static=ggml-metal");
+        if lib_exists(search_dirs, "ggml-metal") {
+            println!("cargo:rustc-link-lib=static=ggml-metal");
+        }
         println!("cargo:rustc-link-lib=framework=Metal");
         println!("cargo:rustc-link-lib=framework=MetalKit");
         println!("cargo:rustc-link-lib=framework=Foundation");

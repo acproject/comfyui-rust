@@ -41,6 +41,7 @@ interface WorkflowState {
 
   executingPromptId: string | null;
   executingNodeId: string | null;
+  cachedNodeIds: string[];
   progress: { value: number; max: number } | null;
 
   clientId: string;
@@ -65,6 +66,7 @@ interface WorkflowState {
   setQueueInfo: (info: QueueInfo) => void;
 
   setExecuting: (promptId: string | null, nodeId: string | null) => void;
+  setCachedNodes: (nodeIds: string[]) => void;
   setProgress: (value: number, max: number) => void;
   clearProgress: () => void;
   setOutputImages: (nodeId: string, images: OutputImage[]) => void;
@@ -95,6 +97,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   queueInfo: null,
   executingPromptId: null,
   executingNodeId: null,
+  cachedNodeIds: [],
   progress: null,
   clientId: crypto.randomUUID(),
   outputImages: {},
@@ -277,7 +280,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setQueueInfo: (info) => set({ queueInfo: info }),
 
   setExecuting: (promptId, nodeId) =>
-    set({ executingPromptId: promptId, executingNodeId: nodeId }),
+    set({ executingPromptId: promptId, executingNodeId: nodeId, cachedNodeIds: nodeId ? [] : get().cachedNodeIds }),
+  setCachedNodes: (nodeIds) => set({ cachedNodeIds: nodeIds }),
   setProgress: (value, max) => set({ progress: { value, max } }),
   clearProgress: () => set({ progress: null }),
 
@@ -322,7 +326,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   clearWorkflow: () => {
     _nodeIdCounter = 0;
-    set({ nodes: [], edges: [], selectedNodeId: null, executingPromptId: null, executingNodeId: null, progress: null });
+    set({ nodes: [], edges: [], selectedNodeId: null, executingPromptId: null, executingNodeId: null, cachedNodeIds: [], progress: null });
   },
 
   loadWorkflowFromJson: (workflow) => {
