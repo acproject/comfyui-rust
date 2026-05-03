@@ -41,6 +41,7 @@ interface WorkflowState {
 
   executingPromptId: string | null;
   executingNodeId: string | null;
+  executedNodeIds: string[];
   cachedNodeIds: string[];
   progress: { value: number; max: number } | null;
 
@@ -66,6 +67,7 @@ interface WorkflowState {
   setQueueInfo: (info: QueueInfo) => void;
 
   setExecuting: (promptId: string | null, nodeId: string | null) => void;
+  setExecutedNodes: (nodeIds: string[]) => void;
   setCachedNodes: (nodeIds: string[]) => void;
   setProgress: (value: number, max: number) => void;
   clearProgress: () => void;
@@ -97,6 +99,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   queueInfo: null,
   executingPromptId: null,
   executingNodeId: null,
+  executedNodeIds: [],
   cachedNodeIds: [],
   progress: null,
   clientId: crypto.randomUUID(),
@@ -279,8 +282,19 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setObjectInfo: (info) => set({ objectInfo: info, objectInfoLoaded: true }),
   setQueueInfo: (info) => set({ queueInfo: info }),
 
-  setExecuting: (promptId, nodeId) =>
-    set({ executingPromptId: promptId, executingNodeId: nodeId, cachedNodeIds: nodeId ? [] : get().cachedNodeIds }),
+  setExecuting: (promptId, nodeId) => {
+    const current = get();
+    if (promptId === null && nodeId === null) {
+      set({ executingPromptId: null, executingNodeId: null, executedNodeIds: [], cachedNodeIds: [] });
+    } else if (nodeId && current.executingNodeId && current.executingNodeId !== nodeId) {
+      const prev = current.executingNodeId;
+      const executed = current.executedNodeIds.includes(prev) ? current.executedNodeIds : [...current.executedNodeIds, prev];
+      set({ executingPromptId: promptId, executingNodeId: nodeId, executedNodeIds: executed });
+    } else {
+      set({ executingPromptId: promptId, executingNodeId: nodeId });
+    }
+  },
+  setExecutedNodes: (nodeIds) => set({ executedNodeIds: nodeIds }),
   setCachedNodes: (nodeIds) => set({ cachedNodeIds: nodeIds }),
   setProgress: (value, max) => set({ progress: { value, max } }),
   clearProgress: () => set({ progress: null }),

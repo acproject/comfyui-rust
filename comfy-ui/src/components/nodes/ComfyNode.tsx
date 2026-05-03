@@ -22,9 +22,12 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
 
   const objectInfo = useWorkflowStore((s) => s.objectInfo[data.classType]);
   const executingNodeId = useWorkflowStore((s) => s.executingNodeId);
+  const executedNodeIds = useWorkflowStore((s) => s.executedNodeIds);
   const cachedNodeIds = useWorkflowStore((s) => s.cachedNodeIds);
   const isExecuting = executingNodeId === id;
+  const isExecuted = executedNodeIds.includes(id);
   const isCached = cachedNodeIds.includes(id);
+  const isCompleted = isExecuted || isCached;
 
   const allInputSpecs: Array<{
     name: string;
@@ -97,7 +100,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         borderRadius: 6,
         border: isExecuting
           ? '2px solid #f59e0b'
-          : isCached
+          : isCompleted
             ? '2px solid #22c55e'
             : selected
               ? '2px solid #fff'
@@ -108,7 +111,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         color: '#e2e8f0',
         boxShadow: isExecuting
           ? '0 0 16px rgba(245, 158, 11, 0.6), 0 0 4px rgba(245, 158, 11, 0.3)'
-          : isCached
+          : isCompleted
             ? '0 0 12px rgba(34, 197, 94, 0.4)'
             : selected
               ? '0 0 12px rgba(100, 150, 255, 0.4)'
@@ -181,7 +184,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
               ●
             </span>
           )}
-          {isCached && !isExecuting && (
+          {isCompleted && !isExecuting && (
             <span style={{
               fontSize: 8,
               background: 'rgba(34, 197, 94, 0.3)',
@@ -396,7 +399,6 @@ ImagePreview.displayName = 'ImagePreview';
 const OutputPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
   const outputImages = useWorkflowStore((s) => s.outputImages);
   const images = outputImages[nodeId];
-  console.log('[OutputPreview] nodeId:', nodeId, 'images:', images, 'allOutputImages:', JSON.stringify(outputImages));
 
   if (!images || images.length === 0) {
     return (

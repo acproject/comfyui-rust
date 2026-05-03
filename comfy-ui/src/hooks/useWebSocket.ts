@@ -24,6 +24,7 @@ export function useWebSocket() {
         const data = msg.data as { prompt_id: string };
         setExecuting(data.prompt_id, null);
         clearProgress();
+        setCachedNodes([]);
       })
     );
 
@@ -68,13 +69,10 @@ export function useWebSocket() {
     unsubs.push(
       ws.on('execution_success', (msg: WsMessage) => {
         const data = msg.data as { prompt_id: string; output?: Record<string, unknown> };
-        console.log('Execution success:', data.prompt_id, 'output:', JSON.stringify(data.output));
         if (data.output && typeof data.output === 'object') {
           for (const [nodeId, nodeOutput] of Object.entries(data.output)) {
-            console.log('Output node:', nodeId, 'output:', JSON.stringify(nodeOutput));
             if (nodeOutput && typeof nodeOutput === 'object' && 'images' in nodeOutput) {
               const images = (nodeOutput as { images: Array<{ filename: string; subfolder: string; type: string }> }).images;
-              console.log('Setting output images for node:', nodeId, 'images:', JSON.stringify(images));
               if (Array.isArray(images)) {
                 setOutputImages(nodeId, images);
               }

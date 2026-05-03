@@ -2,6 +2,7 @@ use crate::queue::JobStatus;
 use crate::state::AppState;
 use crate::ws::WsMessage;
 use comfy_core::NodeDefinition;
+use comfy_executor::NodeEventCallback;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -39,14 +40,20 @@ pub async fn run_executor(state: AppState) {
 
         let dynprompt = Arc::new(comfy_core::DynamicPrompt::new(prompt));
 
-        match state.executor.execute(dynprompt, &prompt_id).await {
-            Ok(result) => {
-                for node_id in &result.executed {
-                    state
-                        .broadcaster
-                        .send(WsMessage::executing(&prompt_id, Some(node_id)));
-                }
+        let broadcaster = state.broadcaster.clone();
+        let pid = prompt_id.clone();
+        let on_node_event: NodeEventCallback = Arc::new(move |prompt_id: &str, node_id: &str| {
+            broadcaster.send(WsMessage::executing(prompt_id, Some(node_id)));
+        });
 
+        let executor = comfy_executor::Executor::new(
+            state.executor.registry().clone(),
+            state.executor.backend().clone(),
+        )
+        .with_node_event_callback(on_node_event);
+
+        match executor.execute(dynprompt, &prompt_id).await {
+            Ok(result) => {
                 let mut output_json = serde_json::Map::new();
                 for (node_id, node_output) in &result.outputs {
                     let mut node_output_json = serde_json::Map::new();
@@ -92,6 +99,10 @@ pub async fn run_executor(state: AppState) {
                         serde_json::Value::Object(node_output_json),
                     );
                 }
+
+                state
+                    .broadcaster
+                    .send(WsMessage::executing(&pid, None));
 
                 state
                     .broadcaster

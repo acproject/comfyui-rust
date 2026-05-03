@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type FC } from 'react';
+import { useCallback, useMemo, useRef, useState, type FC } from 'react';
 import {
   ReactFlow,
   Background,
@@ -6,6 +6,7 @@ import {
   MiniMap,
   type Connection,
   type Node,
+  type Edge,
   BackgroundVariant,
   useReactFlow,
 } from '@xyflow/react';
@@ -28,12 +29,53 @@ const GraphEditor: FC = () => {
   const removeNode = useWorkflowStore((s) => s.removeNode);
   const setSelectedNodeId = useWorkflowStore((s) => s.setSelectedNodeId);
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId);
+  const executingNodeId = useWorkflowStore((s) => s.executingNodeId);
+  const executedNodeIds = useWorkflowStore((s) => s.executedNodeIds);
+  const cachedNodeIds = useWorkflowStore((s) => s.cachedNodeIds);
   const getWorkflowAsJson = useWorkflowStore((s) => s.getWorkflowAsJson);
   const disconnectNode = useWorkflowStore((s) => s.disconnectNode);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  const styledEdges = useMemo(() => {
+    const completedIds = new Set([...executedNodeIds, ...cachedNodeIds]);
+    return edges.map((edge) => {
+      const sourceCompleted = completedIds.has(edge.source);
+      const targetExecuting = executingNodeId === edge.target;
+      const sourceExecuting = executingNodeId === edge.source;
+      const isActive = sourceCompleted && targetExecuting;
+      const isDone = sourceCompleted && completedIds.has(edge.target);
+
+      if (isActive) {
+        return {
+          ...edge,
+          animated: true,
+          style: { stroke: '#f59e0b', strokeWidth: 2.5 },
+        };
+      }
+      if (isDone) {
+        return {
+          ...edge,
+          animated: false,
+          style: { stroke: '#22c55e', strokeWidth: 2 },
+        };
+      }
+      if (sourceExecuting) {
+        return {
+          ...edge,
+          animated: true,
+          style: { stroke: '#f59e0b', strokeWidth: 2, opacity: 0.5 },
+        };
+      }
+      return {
+        ...edge,
+        animated: false,
+        style: { stroke: '#555', strokeWidth: 2 },
+      };
+    });
+  }, [edges, executingNodeId, executedNodeIds, cachedNodeIds]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -172,7 +214,7 @@ const GraphEditor: FC = () => {
     >
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={styledEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}

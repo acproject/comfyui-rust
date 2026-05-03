@@ -7,10 +7,13 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub type NodeEventCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 pub struct Executor {
     registry: Arc<NodeRegistry>,
     backend: Arc<dyn InferenceBackend>,
     cache: Arc<dyn CacheView>,
+    on_node_event: Option<NodeEventCallback>,
 }
 
 impl Executor {
@@ -22,6 +25,7 @@ impl Executor {
             registry: Arc::new(registry),
             backend,
             cache: Arc::new(NullCacheView),
+            on_node_event: None,
         }
     }
 
@@ -30,8 +34,17 @@ impl Executor {
         self
     }
 
+    pub fn with_node_event_callback(mut self, callback: NodeEventCallback) -> Self {
+        self.on_node_event = Some(callback);
+        self
+    }
+
     pub fn registry(&self) -> &NodeRegistry {
         &self.registry
+    }
+
+    pub fn backend(&self) -> &Arc<dyn InferenceBackend> {
+        &self.backend
     }
 
     pub fn validate_prompt(
@@ -168,6 +181,10 @@ impl Executor {
                 node_id,
                 node.class_type
             );
+
+            if let Some(ref callback) = self.on_node_event {
+                callback(&prompt_id, &node_id);
+            }
 
             match execute_fn(&ctx, node, &node_id).await {
                 Ok(outputs) => {
