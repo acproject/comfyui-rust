@@ -25,20 +25,29 @@ fi
 echo "1/2 启动 Rust 后端服务器 (端口 8188)..."
 cd "$PROJECT_DIR"
 
-SD_CLI="$PROJECT_DIR/cpp/stable-diffusion-cpp/build/bin/sd-cli"
-if [ -f "$SD_CLI" ]; then
-    chmod +x "$SD_CLI" 2>/dev/null || true
-    xattr -cr "$SD_CLI" 2>/dev/null || true
-fi
+SD_CPP_DIR=""
+for dir in "$PROJECT_DIR/cpp/stable-diffusion-cpp" "$PROJECT_DIR/cpp/stable-diffusion.cpp"; do
+    if [ -d "$dir" ]; then
+        SD_CPP_DIR="$dir"
+        break
+    fi
+done
 
-SD_LIB="$PROJECT_DIR/cpp/stable-diffusion-cpp/build/libstable-diffusion.a"
-SD_CPP_DIR="$PROJECT_DIR/cpp/stable-diffusion-cpp"
-if [ -f "$SD_LIB" ]; then
-    CARGO_FEATURES="local-ffi"
-    echo "  使用 FFI + CLI 后端 (预编译库已就绪)"
-elif [ -d "$SD_CPP_DIR" ]; then
-    CARGO_FEATURES="local-build"
-    echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢)..."
+if [ -n "$SD_CPP_DIR" ]; then
+    SD_CLI="$SD_CPP_DIR/build/bin/sd-cli"
+    if [ -f "$SD_CLI" ]; then
+        chmod +x "$SD_CLI" 2>/dev/null || true
+        xattr -cr "$SD_CLI" 2>/dev/null || true
+    fi
+
+    SD_LIB="$SD_CPP_DIR/build/libstable-diffusion.a"
+    if [ -f "$SD_LIB" ]; then
+        CARGO_FEATURES="local-ffi"
+        echo "  使用 FFI + CLI 后端 (预编译库已就绪)"
+    else
+        CARGO_FEATURES="local-build"
+        echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢)..."
+    fi
 else
     CARGO_FEATURES="local"
     echo "  stable-diffusion-cpp 未找到，使用 CLI 后端 (需要 sd-cli 可执行文件)"

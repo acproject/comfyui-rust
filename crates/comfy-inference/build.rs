@@ -13,7 +13,16 @@ fn main() {
         .unwrap()
         .parent()
         .unwrap();
-    let sd_cpp_dir = workspace_root.join("cpp/stable-diffusion-cpp");
+
+    let possible_dirs = [
+        "cpp/stable-diffusion-cpp",
+        "cpp/stable-diffusion.cpp",
+    ];
+    let sd_cpp_dir = possible_dirs
+        .iter()
+        .map(|d| workspace_root.join(d))
+        .find(|d| d.exists())
+        .unwrap_or_else(|| workspace_root.join("cpp/stable-diffusion-cpp"));
 
     let sd_lib_dir_env = std::env::var("SD_LIB_DIR").ok();
 

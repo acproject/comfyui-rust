@@ -239,13 +239,18 @@ impl AppState {
             .or_else(|| {
                 let manifest_dir = config_path.parent()?;
                 let workspace_root = manifest_dir.parent()?;
-                let cli_path = workspace_root.join("cpp/stable-diffusion-cpp/build/bin/sd-cli");
-                if cli_path.exists() {
-                    tracing::info!("Auto-detected sd-cli at {}", cli_path.display());
-                    Some(cli_path.to_string_lossy().to_string())
-                } else {
-                    None
+                let possible_dirs = [
+                    "cpp/stable-diffusion-cpp",
+                    "cpp/stable-diffusion.cpp",
+                ];
+                for dir in &possible_dirs {
+                    let cli_path = workspace_root.join(dir).join("build/bin/sd-cli");
+                    if cli_path.exists() {
+                        tracing::info!("Auto-detected sd-cli at {}", cli_path.display());
+                        return Some(cli_path.to_string_lossy().to_string());
+                    }
                 }
+                None
             })
             .unwrap_or_else(|| "sd-cli".to_string());
 

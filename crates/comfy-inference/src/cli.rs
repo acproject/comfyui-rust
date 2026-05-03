@@ -85,7 +85,20 @@ pub struct CliBackend {
 }
 
 impl CliBackend {
-    pub fn new(config: CliBackendConfig) -> InferenceResult<Self> {
+    pub fn new(mut config: CliBackendConfig) -> InferenceResult<Self> {
+        let cli_path = Path::new(&config.sd_cli_path);
+        if cli_path.is_dir() {
+            let resolved = cli_path.join("sd-cli");
+            if resolved.exists() {
+                tracing::info!(
+                    "sd-cli path '{}' is a directory, resolved to '{}'",
+                    config.sd_cli_path,
+                    resolved.display()
+                );
+                config.sd_cli_path = resolved.to_string_lossy().to_string();
+            }
+        }
+
         let cli_path = Path::new(&config.sd_cli_path);
         if cli_path.exists() {
             Self::ensure_executable(cli_path);
