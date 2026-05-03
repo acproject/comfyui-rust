@@ -70,7 +70,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   let y = HEADER_H;
   if (!collapsed) {
     if (isImageNode && data.inputs['image']) y += 80;
-    if (isSaveImageNode && data.inputs['images']) y += 80;
+    if (isSaveImageNode) y += 80;
   }
 
   const inputHandleY: Record<string, number> = {};
@@ -223,7 +223,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           {(isImageNode && data.inputs['image']) && (
             <ImagePreview filename={String(data.inputs['image'])} type="input" />
           )}
-          {(isSaveImageNode && data.inputs['images']) && (
+          {(isSaveImageNode) && (
             <OutputPreview nodeId={id} />
           )}
 
@@ -379,7 +379,23 @@ const OutputPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
   const outputImages = useWorkflowStore((s) => s.outputImages);
   const images = outputImages[nodeId];
 
-  if (!images || images.length === 0) return null;
+  if (!images || images.length === 0) {
+    return (
+      <div style={{
+        padding: '4px 6px',
+        borderBottom: '1px solid #333',
+        height: 72,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#111',
+        borderRadius: 3,
+        margin: '4px 6px',
+      }}>
+        <span style={{ fontSize: 10, color: '#666' }}>Preview</span>
+      </div>
+    );
+  }
 
   return (
     <div style={{
