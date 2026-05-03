@@ -341,7 +341,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const newEdges: Edge[] = [];
 
     const nodeOutputsMap: Record<string, Array<{ name: string; type: string }>> = {};
-    const nodeInputsMap: Record<string, Array<{ name: string; type: string }>> = {};
+
+    const isPrimitive = (typeName: string) =>
+      ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
 
     for (const wn of workflowNodes) {
       const classType = (wn.type as string) || '';
@@ -369,7 +371,6 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         : [];
 
       const wnOutputs = (wn.outputs as Array<{ name: string; type: string | string[] }>) || [];
-      const wnInputs = (wn.inputs as Array<{ name: string; type: string | string[]; link?: number | null }>) || [];
 
       const outputs = classDef?.output_names.map((name, i) => ({
         name,
@@ -378,6 +379,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         name: o.name,
         type: Array.isArray(o.type) ? o.type[0] : (o.type || '*'),
       }));
+
+      nodeOutputsMap[oldId] = outputs;
 
       const allInputNames: Array<{ name: string; typeName: string }> = [];
       if (classDef?.input_types.required) {
@@ -391,39 +394,43 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         }
       }
 
-      nodeOutputsMap[oldId] = outputs;
-      nodeInputsMap[oldId] = wnInputs.map((inp) => ({
-        name: inp.name,
-        type: Array.isArray(inp.type) ? inp.type[0] : (inp.type || '*'),
-      }));
+      const wnInputs = (wn.inputs as Array<{ name: string; type: string | string[]; link?: number | null }>) || [];
+      const wnInputMap: Record<string, { type: string; link: number | null }> = {};
+      for (const inp of wnInputs) {
+        wnInputMap[inp.name] = {
+          type: Array.isArray(inp.type) ? inp.type[0] : (inp.type || '*'),
+          link: inp.link ?? null,
+        };
+      }
 
       const inputs: Record<string, unknown> = {};
       let widgetIdx = 0;
 
       for (const { name, typeName } of allInputNames) {
-        if (widgetIdx < widgetsValues.length) {
-          inputs[name] = widgetsValues[widgetIdx];
-          widgetIdx++;
-        } else if (typeName === 'INT') {
-          inputs[name] = 0;
-          widgetIdx++;
-        } else if (typeName === 'FLOAT') {
-          inputs[name] = 0.0;
-          widgetIdx++;
-        } else if (typeName === 'STRING') {
-          inputs[name] = '';
-          widgetIdx++;
-        } else if (typeName === 'BOOLEAN') {
-          inputs[name] = false;
-          widgetIdx++;
-        } else if (typeName === 'COMBO') {
-          const spec = classDef?.input_types.required?.[name] || classDef?.input_types.optional?.[name];
-          const choices = (spec?.extra?.choices as string[]) || [];
-          inputs[name] = choices.length > 0 ? choices[0] : '';
-          widgetIdx++;
+        const primitive = isPrimitive(typeName);
+        const wnInput = wnInputMap[name];
+        const isConnected = wnInput && wnInput.link !== null && wnInput.link !== undefined;
+
+        if (!primitive) {
+          if (isConnected) {
+            inputs[name] = null;
+          }
         } else {
           if (widgetIdx < widgetsValues.length) {
-            inputs[name] = widgetsValues[widgetIdx];
+            const wv = widgetsValues[widgetIdx];
+            inputs[name] = wv;
+          } else if (typeName === 'INT') {
+            inputs[name] = 0;
+          } else if (typeName === 'FLOAT') {
+            inputs[name] = 0.0;
+          } else if (typeName === 'STRING') {
+            inputs[name] = '';
+          } else if (typeName === 'BOOLEAN') {
+            inputs[name] = false;
+          } else if (typeName === 'COMBO') {
+            const spec = classDef?.input_types.required?.[name] || classDef?.input_types.optional?.[name];
+            const choices = (spec?.extra?.choices as string[]) || [];
+            inputs[name] = choices.length > 0 ? choices[0] : '';
           }
           widgetIdx++;
         }
@@ -474,10 +481,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
         const sourceHandle = sourceNode.data.outputs[originSlot]?.name || String(originSlot);
 
-        const targetInputList = nodeInputsMap[String(targetId)];
+        const targetClassDef = objectInfo[targetNode.data.classType];
         let targetHandle: string;
-        if (targetInputList && targetInputList[targetSlot]) {
-          targetHandle = targetInputList[targetSlot].name;
+        if (targetClassDef) {
+          const allInputNames: string[] = [];
+          if (targetClassDef.input_types.required) {
+            allInputNames.push(...Object.keys(targetClassDef.input_types.required));
+          }
+          if (targetClassDef.input_types.optional) {
+            allInputNames.push(...Object.keys(targetClassDef.input_types.optional));
+          }
+          targetHandle = allInputNames[targetSlot] || String(targetSlot);
         } else {
           const inputKeys = Object.keys(targetNode.data.inputs);
           targetHandle = inputKeys[targetSlot] || String(targetSlot);
@@ -490,6 +504,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           target: newTargetId,
           targetHandle,
         });
+
+        if (targetNode.data.inputs.hasOwnProperty(targetHandle)) {
+          const sourceOutputIdx = sourceNode.data.outputs.findIndex(
+            (o) => o.name === sourceHandle
+          );
+          if (sourceOutputIdx >= 0) {
+            targetNode.data.inputs[targetHandle] = [newSourceId, sourceOutputIdx];
+          }
+        }
       }
     }
 
@@ -506,9 +529,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   getWorkflowAsJson: () => {
-    const { nodes, edges } = get();
+    const { nodes, edges, objectInfo } = get();
     const links: unknown[] = [];
     let linkId = 0;
+
+    const edgeLinkMap: Record<string, number> = {};
 
     for (const edge of edges) {
       linkId++;
@@ -519,51 +544,148 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const originSlot = sourceNode.data.outputs.findIndex(
         (o) => o.name === edge.sourceHandle
       );
-      const targetSlot = targetNode.data.inputs
-        ? Object.keys(targetNode.data.inputs).indexOf(edge.targetHandle || '')
-        : -1;
+      if (originSlot < 0) continue;
+
+      const sourceOutputType = sourceNode.data.outputs[originSlot]?.type || '*';
+
+      const targetClassDef = objectInfo[targetNode.data.classType];
+      let targetSlot = -1;
+      if (targetClassDef) {
+        const allInputNames: string[] = [];
+        if (targetClassDef.input_types.required) {
+          allInputNames.push(...Object.keys(targetClassDef.input_types.required));
+        }
+        if (targetClassDef.input_types.optional) {
+          allInputNames.push(...Object.keys(targetClassDef.input_types.optional));
+        }
+        targetSlot = allInputNames.indexOf(edge.targetHandle || '');
+      }
+      if (targetSlot < 0) {
+        targetSlot = Object.keys(targetNode.data.inputs).indexOf(edge.targetHandle || '');
+      }
 
       links.push([
         linkId,
         Number(edge.source),
-        Math.max(0, originSlot),
+        originSlot,
         Number(edge.target),
         Math.max(0, targetSlot),
-        '',
+        sourceOutputType,
       ]);
+
+      edgeLinkMap[`${edge.source}-${originSlot}`] = linkId;
     }
 
     const workflowNodes = nodes.map((n) => {
+      const classDef = objectInfo[n.data.classType];
+
+      const allInputNames: string[] = [];
+      const allInputTypes: string[] = [];
+      if (classDef?.input_types.required) {
+        for (const [key, spec] of Object.entries(classDef.input_types.required)) {
+          allInputNames.push(key);
+          allInputTypes.push(spec.type_name);
+        }
+      }
+      if (classDef?.input_types.optional) {
+        for (const [key, spec] of Object.entries(classDef.input_types.optional)) {
+          allInputNames.push(key);
+          allInputTypes.push(spec.type_name);
+        }
+      }
+
+      const isPrimitive = (typeName: string) =>
+        ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
+
+      const nodeInputs: Array<{ name: string; type: string; link: number | null }> = [];
       const widgetsValues: unknown[] = [];
-      if (n.data.inputs) {
-        for (const value of Object.values(n.data.inputs)) {
-          if (!Array.isArray(value)) {
-            widgetsValues.push(value);
+      let widgetCount = 0;
+
+      for (let i = 0; i < allInputNames.length; i++) {
+        const inputName = allInputNames[i];
+        const inputType = allInputTypes[i];
+        const value = n.data.inputs[inputName];
+        const primitive = isPrimitive(inputType);
+
+        const connectedEdge = edges.find(
+          (e) => e.target === n.id && e.targetHandle === inputName
+        );
+
+        if (connectedEdge) {
+          const sourceNode = nodes.find((sn) => sn.id === connectedEdge.source);
+          const originSlot = sourceNode
+            ? sourceNode.data.outputs.findIndex((o) => o.name === connectedEdge.sourceHandle)
+            : -1;
+          const linkIdx = originSlot >= 0
+            ? edgeLinkMap[`${connectedEdge.source}-${originSlot}`]
+            : undefined;
+
+          if (!primitive) {
+            nodeInputs.push({
+              name: inputName,
+              type: inputType,
+              link: linkIdx ?? null,
+            });
+          } else {
+            if (value !== undefined && !Array.isArray(value)) {
+              widgetsValues.push(value);
+            } else {
+              widgetsValues.push(null);
+            }
+            widgetCount++;
+          }
+        } else {
+          if (!primitive) {
+            nodeInputs.push({
+              name: inputName,
+              type: inputType,
+              link: null,
+            });
+          } else {
+            if (value !== undefined && !Array.isArray(value)) {
+              widgetsValues.push(value);
+            } else {
+              widgetsValues.push(null);
+            }
+            widgetCount++;
           }
         }
       }
+
+      const nodeOutputs = n.data.outputs.map((o, i) => {
+        const connectedLinks = links
+          .filter((l) => {
+            const linkArr = l as unknown[];
+            return linkArr[1] === Number(n.id) && linkArr[2] === i;
+          })
+          .map((l) => (l as unknown[])[0] as number);
+
+        return {
+          name: o.name,
+          type: o.type,
+          links: connectedLinks.length > 0 ? connectedLinks : null,
+          slot_index: i,
+        };
+      });
+
       return {
         id: Number(n.id),
         type: n.data.classType,
         pos: [n.position.x, n.position.y],
-        size: [200, 100],
+        size: { '0': 220, '1': 100 },
         flags: { collapsed: false },
         order: 0,
         mode: 0,
-        inputs: [],
-        outputs: n.data.outputs.map((o, i) => ({
-          name: o.name,
-          type: o.type,
-          links: [],
-          slot_index: i,
-        })),
+        inputs: nodeInputs,
+        outputs: nodeOutputs,
         properties: {},
         widgets_values: widgetsValues,
+        title: n.data.title !== n.data.classType ? n.data.title : undefined,
       };
     });
 
     return {
-      last_node_id: nodes.length,
+      last_node_id: Math.max(0, ...nodes.map((n) => Number(n.id))),
       last_link_id: linkId,
       nodes: workflowNodes,
       links,
