@@ -97,17 +97,96 @@ fn register_checkpoint_loader(registry: &mut NodeRegistry) {
         let model_path = resolve_model_path("checkpoints", ckpt_name);
 
         Box::pin(async move {
-            let model_config = json!({
-                "model_path": model_path,
-            });
-            let clip_config = json!({
+            let is_gguf = model_path.to_lowercase().ends_with(".gguf");
+
+            let mut model_config = if is_gguf {
+                json!({
+                    "diffusion_model_path": model_path,
+                })
+            } else {
+                json!({
+                    "model_path": model_path,
+                })
+            };
+
+            let base = std::env::var("COMFY_MODELS_DIR").unwrap_or_else(|_| "models".to_string());
+            let base_path = std::path::Path::new(&base);
+            let abs_base = if base_path.is_relative() {
+                std::env::current_dir().unwrap_or_default().join(base_path)
+            } else {
+                base_path.to_path_buf()
+            };
+            let te_dir = abs_base.join("text_encoders");
+
+            let clip_l_path = if te_dir.join("clip_l.safetensors").exists() {
+                te_dir.join("clip_l.safetensors").to_string_lossy().to_string()
+            } else {
+                String::new()
+            };
+            let clip_g_path = if te_dir.join("clip_g.safetensors").exists() {
+                te_dir.join("clip_g.safetensors").to_string_lossy().to_string()
+            } else {
+                String::new()
+            };
+            let t5xxl_path = if te_dir.join("t5xxl_fp8_e4m3fn.safetensors").exists() {
+                te_dir.join("t5xxl_fp8_e4m3fn.safetensors").to_string_lossy().to_string()
+            } else if te_dir.join("t5xxl_fp16.safetensors").exists() {
+                te_dir.join("t5xxl_fp16.safetensors").to_string_lossy().to_string()
+            } else {
+                String::new()
+            };
+
+            let vae_dir = abs_base.join("vae");
+            let vae_path = if vae_dir.join("sd3_vae.safetensors").exists() {
+                vae_dir.join("sd3_vae.safetensors").to_string_lossy().to_string()
+            } else {
+                String::new()
+            };
+
+            if !clip_l_path.is_empty() {
+                model_config.as_object_mut().unwrap().insert("clip_l_path".to_string(), json!(clip_l_path));
+            }
+            if !clip_g_path.is_empty() {
+                model_config.as_object_mut().unwrap().insert("clip_g_path".to_string(), json!(clip_g_path));
+            }
+            if !t5xxl_path.is_empty() {
+                model_config.as_object_mut().unwrap().insert("t5xxl_path".to_string(), json!(t5xxl_path));
+            }
+            if !vae_path.is_empty() {
+                model_config.as_object_mut().unwrap().insert("vae_path".to_string(), json!(vae_path));
+            }
+
+            tracing::info!("CheckpointLoader: model_config = {}", serde_json::to_string_pretty(&model_config).unwrap_or_default());
+
+            let mut clip_config = json!({
                 "type": "clip",
                 "source_model": model_path,
             });
-            let vae_config = json!({
+            if !clip_l_path.is_empty() {
+                clip_config.as_object_mut().unwrap().insert("clip_l_path".to_string(), json!(clip_l_path));
+            }
+            if !clip_g_path.is_empty() {
+                clip_config.as_object_mut().unwrap().insert("clip_g_path".to_string(), json!(clip_g_path));
+            }
+            if !t5xxl_path.is_empty() {
+                clip_config.as_object_mut().unwrap().insert("t5xxl_path".to_string(), json!(t5xxl_path));
+            }
+
+            let vae_dir = std::path::Path::new(&base).join("vae");
+            let vae_path = if vae_dir.join("sd3_vae.safetensors").exists() {
+                vae_dir.join("sd3_vae.safetensors").to_string_lossy().to_string()
+            } else {
+                String::new()
+            };
+
+            let mut vae_config = json!({
                 "type": "vae",
                 "source_model": model_path,
             });
+            if !vae_path.is_empty() {
+                vae_config.as_object_mut().unwrap().insert("vae_path".to_string(), json!(vae_path));
+            }
+
             Ok(vec![model_config, clip_config, vae_config])
         })
     }));
@@ -527,7 +606,14 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                 });
                 m
             },
-            optional: HashMap::new(),
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("vae".to_string(), InputTypeSpec {
+                    type_name: "VAE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
             hidden: HashMap::new(),
         },
         output_types: vec![IoType::Latent],
@@ -552,6 +638,7 @@ fn register_ksampler(registry: &mut NodeRegistry) {
         let positive = ctx.resolve_input(node_id, "positive").unwrap_or_else(|_| json!(null));
         let negative = ctx.resolve_input(node_id, "negative").unwrap_or_else(|_| json!(null));
         let latent_image = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!(null));
+        let vae = ctx.resolve_input(node_id, "vae").ok();
 
         let backend = ctx.backend();
         let supports_img_gen = backend.supports_image_generation();
@@ -600,6 +687,29 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                 }
                 if let Some(path) = model.get("control_net_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_control_net(path);
+                }
+
+                for cond in [&positive, &negative] {
+                    if let Some(clip) = cond.get("clip") {
+                        if let Some(path) = clip.get("clip_l_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_clip_l(path);
+                        }
+                        if let Some(path) = clip.get("clip_g_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_clip_g(path);
+                        }
+                        if let Some(path) = clip.get("t5xxl_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_t5xxl(path);
+                        }
+                    }
+                }
+
+                if let Some(vae_val) = &vae {
+                    if let Some(path) = vae_val.get("vae_path").and_then(|v| v.as_str()) {
+                        model_config = model_config.with_vae(path);
+                    }
+                }
+                if let Some(path) = model.get("vae_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_vae(path);
                 }
 
                 let mut width = 512i32;
@@ -721,8 +831,12 @@ fn register_save_image(registry: &mut NodeRegistry) {
             let output_path = std::path::PathBuf::from(&output_dir);
             std::fs::create_dir_all(&output_path).ok();
 
-            if let Some(samples) = images.get("samples").and_then(|v| v.as_array()) {
-                for (i, sample) in samples.iter().enumerate() {
+            let image_list = images.get("images")
+                .and_then(|v| v.as_array())
+                .or_else(|| images.get("samples").and_then(|v| v.as_array()));
+
+            if let Some(img_arr) = image_list {
+                for (i, sample) in img_arr.iter().enumerate() {
                     if let Ok(sd_image) = serde_json::from_value::<comfy_inference::SdImage>(sample.clone()) {
                         let filename = format!("{}_{:05}.png", prefix, i);
                         let filepath = output_path.join(&filename);
@@ -841,15 +955,23 @@ fn register_vae_decode(registry: &mut NodeRegistry) {
     registry.register(class_def, Arc::new(|ctx, _node, node_id| {
         let samples = ctx.resolve_input(node_id, "samples")
             .unwrap_or_else(|_| json!(null));
-        let vae = ctx.resolve_input(node_id, "vae")
+        let _vae = ctx.resolve_input(node_id, "vae")
             .unwrap_or_else(|_| json!(null));
 
         Box::pin(async move {
+            if let Some(sample_arr) = samples.get("samples").and_then(|v| v.as_array()) {
+                if !sample_arr.is_empty() {
+                    return Ok(vec![json!({
+                        "type": "image",
+                        "images": sample_arr,
+                    })]);
+                }
+            }
+
             Ok(vec![json!({
                 "type": "image",
                 "source": "vae_decode",
                 "latent": samples,
-                "vae": vae,
             })])
         })
     }));

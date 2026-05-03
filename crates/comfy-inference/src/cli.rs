@@ -251,7 +251,7 @@ impl CliBackend {
     }
 
     fn run_sd_cli(&self, args: &[String]) -> InferenceResult<std::process::Output> {
-        tracing::debug!("Running: {} {}", self.config.sd_cli_path, args.join(" "));
+        tracing::info!("Running: {} {}", self.config.sd_cli_path, args.join(" "));
 
         let cli_path = Path::new(&self.config.sd_cli_path);
         if cli_path.exists() {
