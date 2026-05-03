@@ -69,7 +69,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
 
   let y = HEADER_H;
   if (!collapsed) {
-    if (isImageNode && data.inputs['image']) y += 80;
+    if (isImageNode) y += 80;
     if (isSaveImageNode) y += 80;
   }
 
@@ -220,8 +220,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
 
       {!collapsed && (
         <>
-          {(isImageNode && data.inputs['image']) && (
-            <ImagePreview filename={String(data.inputs['image'])} type="input" />
+          {(isImageNode) && (
+            <ImagePreview filename={data.inputs['image'] ? String(data.inputs['image']) : ''} type="input" />
           )}
           {(isSaveImageNode) && (
             <OutputPreview nodeId={id} />
@@ -344,7 +344,23 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
 ComfyNodeComponent.displayName = 'ComfyNode';
 
 const ImagePreview: FC<{ filename: string; type: string }> = memo(({ filename, type }) => {
-  if (!filename) return null;
+  if (!filename) {
+    return (
+      <div style={{
+        padding: '4px 6px',
+        borderBottom: '1px solid #333',
+        height: 72,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#111',
+        borderRadius: 3,
+        margin: '4px 6px',
+      }}>
+        <span style={{ fontSize: 10, color: '#666' }}>Preview</span>
+      </div>
+    );
+  }
   const url = type === 'input'
     ? api.getInputImageUrl(filename)
     : `${window.location.origin}/view?filename=${encodeURIComponent(filename)}`;
@@ -353,13 +369,15 @@ const ImagePreview: FC<{ filename: string; type: string }> = memo(({ filename, t
     <div style={{
       padding: '4px 6px',
       borderBottom: '1px solid #333',
+      height: 80,
+      overflow: 'hidden',
     }}>
       <img
         src={url}
         alt={filename}
         style={{
           width: '100%',
-          maxHeight: 160,
+          height: '100%',
           objectFit: 'contain',
           borderRadius: 3,
           background: '#111',
@@ -378,6 +396,7 @@ ImagePreview.displayName = 'ImagePreview';
 const OutputPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
   const outputImages = useWorkflowStore((s) => s.outputImages);
   const images = outputImages[nodeId];
+  console.log('[OutputPreview] nodeId:', nodeId, 'images:', images, 'allOutputImages:', JSON.stringify(outputImages));
 
   if (!images || images.length === 0) {
     return (
@@ -401,6 +420,8 @@ const OutputPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
     <div style={{
       padding: '4px 6px',
       borderBottom: '1px solid #333',
+      height: 80,
+      overflow: 'hidden',
     }}>
       {images.map((img, i) => (
         <img
@@ -409,12 +430,11 @@ const OutputPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
           alt={img.filename}
           style={{
             width: '100%',
-            maxHeight: 160,
+            height: '100%',
             objectFit: 'contain',
             borderRadius: 3,
             background: '#111',
             display: 'block',
-            marginBottom: i < images.length - 1 ? 4 : 0,
           }}
           onError={(e) => {
             (e.target as HTMLImageElement).style.display = 'none';

@@ -835,31 +835,40 @@ fn register_save_image(registry: &mut NodeRegistry) {
                 .and_then(|v| v.as_array())
                 .or_else(|| images.get("samples").and_then(|v| v.as_array()));
 
+            let mut saved_images = serde_json::Value::Array(vec![]);
+
             if let Some(img_arr) = image_list {
-                for (i, sample) in img_arr.iter().enumerate() {
-                    if let Ok(sd_image) = serde_json::from_value::<comfy_inference::SdImage>(sample.clone()) {
-                        let filename = format!("{}_{:05}.png", prefix, i);
-                        let filepath = output_path.join(&filename);
-                        match sd_image.to_png_bytes() {
-                            Ok(png_bytes) => {
-                                match std::fs::write(&filepath, &png_bytes) {
-                                    Ok(_) => {
-                                        tracing::info!("SaveImage: saved to {}", filepath.display());
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("SaveImage: failed to write {}: {}", filepath.display(), e);
+                if let Some(arr) = saved_images.as_array_mut() {
+                    for (i, sample) in img_arr.iter().enumerate() {
+                        if let Ok(sd_image) = serde_json::from_value::<comfy_inference::SdImage>(sample.clone()) {
+                            let filename = format!("{}_{:05}.png", prefix, i);
+                            let filepath = output_path.join(&filename);
+                            match sd_image.to_png_bytes() {
+                                Ok(png_bytes) => {
+                                    match std::fs::write(&filepath, &png_bytes) {
+                                        Ok(_) => {
+                                            arr.push(json!({
+                                                "filename": filename,
+                                                "subfolder": "",
+                                                "type": "output"
+                                            }));
+                                            tracing::info!("SaveImage: saved to {}", filepath.display());
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("SaveImage: failed to write {}: {}", filepath.display(), e);
+                                        }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                tracing::error!("SaveImage: failed to encode PNG for image {}: {}", i, e);
+                                Err(e) => {
+                                    tracing::error!("SaveImage: failed to encode PNG for image {}: {}", i, e);
+                                }
                             }
                         }
                     }
                 }
             }
 
-            Ok(vec![images.clone()])
+            Ok(vec![json!({ "images": saved_images })])
         })
     }));
 }

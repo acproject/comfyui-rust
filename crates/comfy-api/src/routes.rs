@@ -762,7 +762,32 @@ pub async fn get_image(
 
     match state.images.get_image(&image_id).await {
         Some((data, content_type)) => {
-            let _cache_control = header::HeaderValue::from_static("public, max-age=31536000");
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, &content_type)
+                .header(header::CACHE_CONTROL, "public, max-age=31536000")
+                .body(Body::from(data))
+                .map_err(|e| ApiError::Internal(e.to_string()))
+        }
+        None => {
+            let output_dir = state.images.output_dir();
+            let abs_output_dir = if output_dir.is_relative() {
+                std::env::current_dir().unwrap_or_default().join(output_dir)
+            } else {
+                output_dir.to_path_buf()
+            };
+            let path = if subfolder.is_empty() {
+                abs_output_dir.join(&filename)
+            } else {
+                abs_output_dir.join(&subfolder).join(&filename)
+            };
+
+            if !path.exists() {
+                return Err(ApiError::NotFound(format!("Image not found: {}", image_id)));
+            }
+
+            let data = std::fs::read(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
+            let content_type = guess_content_type_from_path(std::path::Path::new(&filename));
 
             Response::builder()
                 .status(StatusCode::OK)
@@ -771,7 +796,6 @@ pub async fn get_image(
                 .body(Body::from(data))
                 .map_err(|e| ApiError::Internal(e.to_string()))
         }
-        None => Err(ApiError::NotFound(format!("Image not found: {}", image_id))),
     }
 }
 
