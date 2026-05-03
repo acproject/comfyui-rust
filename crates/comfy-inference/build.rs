@@ -152,9 +152,14 @@ fn emit_link_libs(search_dirs: &[std::path::PathBuf]) {
         }
     }
 
+    let mut has_cuda = false;
+
     for lib in &optional_libs {
         if lib_exists(search_dirs, lib) {
             println!("cargo:rustc-link-lib=static={}", lib);
+            if *lib == "ggml-cuda" {
+                has_cuda = true;
+            }
         }
     }
 
@@ -174,5 +179,30 @@ fn emit_link_libs(search_dirs: &[std::path::PathBuf]) {
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=pthread");
         println!("cargo:rustc-link-lib=dl");
+        println!("cargo:rustc-link-lib=gomp");
+
+        if has_cuda {
+            if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+                let cuda_lib_dir = std::path::Path::new(&cuda_path).join("lib64");
+                if cuda_lib_dir.exists() {
+                    println!("cargo:rustc-link-search=native={}", cuda_lib_dir.display());
+                }
+            } else {
+                for cuda_dir in &[
+                    "/usr/local/cuda/lib64",
+                    "/usr/local/cuda/lib",
+                    "/usr/lib/x86_64-linux-gnu",
+                ] {
+                    if std::path::Path::new(cuda_dir).exists() {
+                        println!("cargo:rustc-link-search=native={}", cuda_dir);
+                    }
+                }
+            }
+            println!("cargo:rustc-link-lib=cudart");
+            println!("cargo:rustc-link-lib=cublas");
+            println!("cargo:rustc-link-lib=cublasLt");
+            println!("cargo:rustc-link-lib=culibos");
+            println!("cargo:rustc-link-lib=cuda");
+        }
     }
 }
