@@ -233,6 +233,19 @@ export interface AgentConfig {
   system_prompt: string;
 }
 
+export interface LlmConfig {
+  mode: string;
+  cli_path: string;
+  extra_args: string;
+  api_url: string;
+  api_key: string | null;
+  model: string;
+  max_tokens: number;
+  temperature: number;
+  top_p: number;
+  system_prompt: string;
+}
+
 export interface AgentChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;

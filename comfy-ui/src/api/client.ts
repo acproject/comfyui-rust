@@ -12,6 +12,7 @@ import type {
   WorkflowListResponse,
   ServerConfig,
   AgentConfig,
+  LlmConfig,
   AgentChatRequest,
   AgentChatResponse,
   AgentModelsResponse,
@@ -267,6 +268,17 @@ export const api = {
 
   async getAgentModels(): Promise<AgentModelsResponse> {
     return fetchJson<AgentModelsResponse>('/agent/models');
+  },
+
+  async getLlmConfig(): Promise<LlmConfig> {
+    return fetchJson<LlmConfig>('/llm/config');
+  },
+
+  async setLlmConfig(config: LlmConfig): Promise<LlmConfig> {
+    return fetchJson<LlmConfig>('/llm/config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
   },
 
   async listModelFiles(modelType?: string): Promise<ModelListResponse> {

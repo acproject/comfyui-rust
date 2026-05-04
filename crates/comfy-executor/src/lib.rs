@@ -7,6 +7,8 @@ pub mod registry;
 #[cfg(feature = "controlnet")]
 pub mod controlnet;
 
+pub mod mask;
+
 pub use error::{ExecutorError, ErrorDetail, NodeErrorInfo, ValidationResult};
 pub use execution_context::{ExecutionContext, NodeOutput};
 pub use executor::{Executor, ExecutionResult, NodeEventCallback};

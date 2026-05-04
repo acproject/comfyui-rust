@@ -8,13 +8,14 @@ import { PropertyPanel } from '@/components/sidebar/PropertyPanel';
 import ImageGallery from '@/components/sidebar/ImageGallery';
 import WorkflowManager from '@/components/sidebar/WorkflowManager';
 import { ModelManager } from '@/components/sidebar/ModelManager';
+import { LlmSettings } from '@/components/sidebar/LlmSettings';
 import { CustomNodePanel } from '@/components/custom/CustomNodePanel';
 import { AIAgent } from '@/components/agent/AIAgent';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useInitApp } from '@/hooks/useInitApp';
 import { useWorkflowStore } from '@/store/workflow';
 
-type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'models' | 'custom';
+type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'models' | 'custom' | 'llm';
 
 export interface PanelVisibility {
   showSidebar: boolean;
@@ -64,7 +65,7 @@ const AppInner: FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #2d3748' }}>
               {([
                 ['nodes', 'properties', 'images'],
-                ['workflows', 'models', 'custom'],
+                ['workflows', 'models', 'custom', 'llm'],
               ] as SidebarTab[][]).map((row, rowIdx) => (
                 <div key={rowIdx} style={{ display: 'flex' }}>
                   {row.map((tab) => (
@@ -83,7 +84,7 @@ const AppInner: FC = () => {
                         textTransform: 'capitalize',
                       }}
                     >
-                      {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab}
+                      {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab === 'llm' ? '🤖' : tab}
                     </button>
                   ))}
                 </div>
@@ -101,6 +102,7 @@ const AppInner: FC = () => {
               )}
               {activeTab === 'models' && <ModelManager />}
               {activeTab === 'custom' && <CustomNodePanel />}
+              {activeTab === 'llm' && <LlmSettings />}
             </div>
           </div>
         )}

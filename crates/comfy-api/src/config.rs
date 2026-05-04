@@ -68,6 +68,8 @@ pub struct ModelPathsConfig {
     pub model_patches: String,
     #[serde(default = "default_audio_encoders_dir")]
     pub audio_encoders: String,
+    #[serde(default = "default_llm_dir")]
+    pub llm: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +153,7 @@ impl Default for ModelPathsConfig {
             classifiers: default_classifiers_dir(),
             model_patches: default_model_patches_dir(),
             audio_encoders: default_audio_encoders_dir(),
+            llm: default_llm_dir(),
         }
     }
 }
@@ -272,6 +275,10 @@ fn default_model_patches_dir() -> String {
 
 fn default_audio_encoders_dir() -> String {
     "audio_encoders".to_string()
+}
+
+fn default_llm_dir() -> String {
+    "llm".to_string()
 }
 
 fn default_backend() -> String {

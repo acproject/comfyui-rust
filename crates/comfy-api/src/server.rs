@@ -72,6 +72,8 @@ impl ComfyServer {
             .route("/agent/config", axum::routing::post(routes::post_agent_config))
             .route("/agent/chat", axum::routing::post(routes::post_agent_chat))
             .route("/agent/models", axum::routing::get(routes::get_agent_models))
+            .route("/llm/config", axum::routing::get(routes::get_llm_config))
+            .route("/llm/config", axum::routing::post(routes::post_llm_config))
             .route("/model_downloads", axum::routing::get(routes::get_model_download_list))
             .route("/model_downloads/download", axum::routing::post(routes::post_download_model))
             .route("/model_downloads/progress", axum::routing::get(routes::get_download_progress))

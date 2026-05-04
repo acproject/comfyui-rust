@@ -389,6 +389,7 @@ dependencies = [
  "image",
  "imageproc",
  "opencv",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",

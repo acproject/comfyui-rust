@@ -129,15 +129,23 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_save_image(registry);
     register_empty_latent_image(registry);
     register_vae_decode(registry);
+    register_vae_encode(registry);
     register_load_image(registry);
     register_upscale_image(registry);
     register_clip_vision_encode(registry);
     register_control_net_apply(registry);
     register_convert_model(registry);
     register_wan_video_sampler(registry);
+    register_ltx_loader(registry);
+    register_ltx_video_sampler(registry);
+    register_llm_loader(registry);
+    register_llm_text_gen(registry);
+    register_llm_text_gen_remote(registry);
 
     #[cfg(feature = "controlnet")]
     crate::controlnet::register_controlnet_nodes(registry);
+
+    crate::mask::register_mask_nodes(registry);
 }
 
 fn resolve_model_path(model_type: &str, filename: &str) -> String {
@@ -970,6 +978,720 @@ fn register_ksampler(registry: &mut NodeRegistry) {
     }));
 }
 
+fn register_ltx_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXLoader".to_string(),
+        display_name: "Load LTX Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model, IoType::Clip, IoType::Vae],
+        output_names: vec!["MODEL".to_string(), "CLIP".to_string(), "VAE".to_string()],
+        output_is_list: vec![false, false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_ltx".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let model_name = node.inputs.get("model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let model_path = resolve_model_path("checkpoints", model_name);
+
+        Box::pin(async move {
+            let model_config = json!({
+                "model_path": model_path,
+                "model_type": "ltx",
+            });
+            let clip_config = json!({
+                "type": "clip",
+                "source_model": model_path,
+            });
+            let vae_config = json!({
+                "type": "vae",
+                "source_model": model_path,
+            });
+            Ok(vec![model_config, clip_config, vae_config])
+        })
+    }));
+}
+
+fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVideoSampler".to_string(),
+        display_name: "LTX Video Sampler".to_string(),
+        category: "sampling/video".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("cfg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("sampler_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("scheduler".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("positive".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("negative".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("width".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("height".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("video_frames".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("num_frames_per_seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("init_image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("flow_shift".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "sample_video".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let seed = ctx.resolve_input(node_id, "seed").unwrap_or_else(|_| json!(42));
+        let steps = ctx.resolve_input(node_id, "steps").unwrap_or_else(|_| json!(20));
+        let cfg = ctx.resolve_input(node_id, "cfg").unwrap_or_else(|_| json!(3.0));
+        let sampler_name = ctx.resolve_input(node_id, "sampler_name")
+            .unwrap_or_else(|_| json!("euler"));
+        let scheduler = ctx.resolve_input(node_id, "scheduler")
+            .unwrap_or_else(|_| json!("normal"));
+        let positive = ctx.resolve_input(node_id, "positive").unwrap_or_else(|_| json!(null));
+        let negative = ctx.resolve_input(node_id, "negative").unwrap_or_else(|_| json!(null));
+        let width = ctx.resolve_input(node_id, "width").unwrap_or_else(|_| json!(768));
+        let height = ctx.resolve_input(node_id, "height").unwrap_or_else(|_| json!(512));
+        let video_frames = ctx.resolve_input(node_id, "video_frames").unwrap_or_else(|_| json!(97));
+        let num_frames_per_seed = ctx.resolve_input(node_id, "num_frames_per_seed")
+            .unwrap_or_else(|_| json!(1));
+        let _init_image = ctx.resolve_input(node_id, "init_image").ok();
+        let flow_shift = ctx.resolve_input(node_id, "flow_shift")
+            .ok()
+            .and_then(|v| v.as_f64());
+
+        let backend = ctx.backend();
+        let supports_vid_gen = backend.supports_video_generation();
+
+        Box::pin(async move {
+            if supports_vid_gen {
+                let prompt_text = positive.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let negative_text = negative.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let mut model_config = ModelConfig::default();
+                if let Some(path) = model.get("model_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_model(path);
+                }
+                if let Some(path) = model.get("diffusion_model_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_diffusion_model(path);
+                }
+                if let Some(path) = model.get("vae_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_vae(path);
+                }
+                if let Some(path) = model.get("clip_l_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_l(path);
+                }
+                if let Some(path) = model.get("clip_g_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_g(path);
+                }
+                if let Some(path) = model.get("clip_vision_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_clip_vision(path);
+                }
+                if let Some(path) = model.get("t5xxl_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_t5xxl(path);
+                }
+
+                let clip_config = positive.get("clip");
+                if let Some(clip) = clip_config {
+                    if model_config.clip_l_path.is_none() {
+                        if let Some(path) = clip.get("clip_l_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_clip_l(path);
+                        }
+                    }
+                    if model_config.clip_g_path.is_none() {
+                        if let Some(path) = clip.get("clip_g_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_clip_g(path);
+                        }
+                    }
+                    if model_config.t5xxl_path.is_none() {
+                        if let Some(path) = clip.get("t5xxl_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_t5xxl(path);
+                        }
+                    }
+                }
+
+                let needs_clip_auto_detect = model_config.clip_l_path.is_none()
+                    || model_config.t5xxl_path.is_none();
+                let needs_vae_auto_detect = model_config.vae_path.is_none();
+                if needs_clip_auto_detect || needs_vae_auto_detect {
+                    if needs_clip_auto_detect {
+                        let (clip_l, _, t5xxl) = auto_detect_text_encoders(ModelType::Flux);
+                        if model_config.clip_l_path.is_none() {
+                            if let Some(path) = clip_l {
+                                model_config = model_config.with_clip_l(path);
+                            }
+                        }
+                        if model_config.t5xxl_path.is_none() {
+                            if let Some(path) = t5xxl {
+                                model_config = model_config.with_t5xxl(path);
+                            }
+                        }
+                    }
+
+                    if needs_vae_auto_detect {
+                        let base = get_models_base_dir();
+                        let vae_dir = base.join("vae");
+                        if let Some(path) = find_file_in_dir(&vae_dir, &["ltx_vae", "ae"]) {
+                            model_config = model_config.with_vae(path);
+                        } else if let Some(path) = auto_detect_vae(ModelType::Flux) {
+                            model_config = model_config.with_vae(path);
+                        }
+                    }
+                }
+
+                let sample_method = parse_sample_method(
+                    sampler_name.as_str().unwrap_or("euler")
+                );
+                let scheduler_type = parse_scheduler(
+                    scheduler.as_str().unwrap_or("normal")
+                );
+
+                let mut video_params = comfy_inference::VideoGenParams::new(prompt_text)
+                    .with_negative_prompt(negative_text)
+                    .with_dimensions(
+                        width.as_i64().unwrap_or(768) as i32,
+                        height.as_i64().unwrap_or(512) as i32,
+                    )
+                    .with_seed(seed.as_i64().unwrap_or(42))
+                    .with_video_frames(video_frames.as_i64().unwrap_or(97) as i32)
+                    .with_model_config(model_config);
+
+                video_params.sample_params.sample_steps = steps.as_i64().unwrap_or(20) as i32;
+                video_params.sample_params.guidance.txt_cfg = cfg.as_f64().unwrap_or(3.0) as f32;
+                video_params.sample_params.sample_method = sample_method;
+                video_params.sample_params.scheduler = scheduler_type;
+                video_params.sample_params.flow_shift = flow_shift.map(|v| v as f32);
+
+                match backend.generate_video(video_params) {
+                    Ok(video) => {
+                        let frame_count = video.frame_count();
+                        tracing::info!("LTXVideoSampler: generated {} video frames", frame_count);
+                        Ok(vec![json!({
+                            "type": "video",
+                            "frame_count": frame_count,
+                            "fps": video.fps,
+                            "num_frames_per_seed": num_frames_per_seed,
+                        })])
+                    }
+                    Err(e) => {
+                        tracing::error!("LTX video generation failed: {}", e);
+                        Err(ExecutorError::Inference(e))
+                    }
+                }
+            } else {
+                Ok(vec![json!({
+                    "type": "video",
+                    "seed": seed,
+                    "steps": steps,
+                    "cfg": cfg,
+                    "sampler": sampler_name,
+                    "scheduler": scheduler,
+                    "positive": positive,
+                    "negative": negative,
+                    "width": width,
+                    "height": height,
+                    "video_frames": video_frames,
+                    "num_frames_per_seed": num_frames_per_seed,
+                })])
+            }
+        })
+    }));
+}
+
+fn register_llm_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LLMLoader".to_string(),
+        display_name: "Load LLM Model".to_string(),
+        category: "loaders/llm".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("llm_model_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Llm],
+        output_names: vec!["LLM".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_llm".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let model_name = node.inputs.get("llm_model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let model_path = resolve_model_path("llm", model_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "llm",
+                "model_path": model_path,
+                "model_name": model_name,
+            })])
+        })
+    }));
+}
+
+fn register_llm_text_gen(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LLMTextGen".to_string(),
+        display_name: "LLM Text Generation".to_string(),
+        category: "llm".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("llm".to_string(), InputTypeSpec {
+                    type_name: "LLM".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("system_prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("max_tokens".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("temperature".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("top_p".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::String],
+        output_names: vec!["STRING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "generate".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, node, node_id| {
+        let llm = ctx.resolve_input(node_id, "llm")
+            .unwrap_or_else(|_| json!(null));
+        let prompt = ctx.resolve_input(node_id, "prompt")
+            .unwrap_or_else(|_| json!(""));
+        let system_prompt = ctx.resolve_input(node_id, "system_prompt")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let max_tokens = node.inputs.get("max_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(512);
+        let temperature = node.inputs.get("temperature")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.7);
+        let top_p = node.inputs.get("top_p")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.9);
+        let seed = node.inputs.get("seed")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
+
+        let llm_config = ctx.get_extra_data("llm_config")
+            .cloned()
+            .unwrap_or(json!({
+                "mode": "local",
+                "cli_path": "/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli",
+            }));
+
+        let model_path = llm.get("model_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let prompt_text = prompt.as_str().unwrap_or("").to_string();
+
+        Box::pin(async move {
+            let mode = llm_config.get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("local");
+
+            if mode == "remote" {
+                let api_url = llm_config.get("api_url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("http://127.0.0.1:8080");
+                let api_key = llm_config.get("api_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let client = reqwest::Client::new();
+                let mut body = serde_json::json!({
+                    "model": model_path,
+                    "prompt": prompt_text,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                });
+                if seed >= 0 {
+                    body["seed"] = json!(seed);
+                }
+                if let Some(ref sp) = system_prompt {
+                    body["system_prompt"] = json!(sp);
+                }
+
+                let mut req = client
+                    .post(format!("{}/v1/completions", api_url.trim_end_matches('/')))
+                    .header("Content-Type", "application/json")
+                    .json(&body);
+
+                if !api_key.is_empty() {
+                    req = req.header("Authorization", format!("Bearer {}", api_key));
+                }
+
+                match req.send().await {
+                    Ok(resp) => {
+                        match resp.json::<serde_json::Value>().await {
+                            Ok(data) => {
+                                let text = data.get("choices")
+                                    .and_then(|c| c.get(0))
+                                    .and_then(|c| c.get("text"))
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                Ok(vec![json!(text)])
+                            }
+                            Err(e) => {
+                                Err(ExecutorError::NodeExecutionFailed {
+                                    node_id: node_id.to_string(),
+                                    message: format!("Failed to parse LLM API response: {}", e),
+                                })
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        Err(ExecutorError::NodeExecutionFailed {
+                            node_id: node_id.to_string(),
+                            message: format!("LLM API request failed: {}", e),
+                        })
+                    }
+                }
+            } else {
+                let cli_path = llm_config.get("cli_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli")
+                    .to_string();
+
+                if model_path.is_empty() {
+                    return Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: "LLM model path is empty".to_string(),
+                    });
+                }
+
+                let mut cmd = tokio::process::Command::new(&cli_path);
+                cmd.arg("-m").arg(&model_path)
+                    .arg("-p").arg(&prompt_text)
+                    .arg("--n-predict").arg(max_tokens.to_string())
+                    .arg("--temp").arg(temperature.to_string())
+                    .arg("--top-p").arg(top_p.to_string())
+                    .arg("--no-display-prompt")
+                    .arg("--log-disable")
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+
+                if seed >= 0 {
+                    cmd.arg("--seed").arg(seed.to_string());
+                }
+
+                if let Some(ref sp) = system_prompt {
+                    cmd.arg("--system-prompt").arg(sp);
+                }
+
+                if let Some(extra_args) = llm_config.get("extra_args").and_then(|v| v.as_str()) {
+                    for arg in extra_args.split_whitespace() {
+                        cmd.arg(arg);
+                    }
+                }
+
+                match cmd.output().await {
+                    Ok(output) => {
+                        if output.status.success() {
+                            let text = String::from_utf8_lossy(&output.stdout).to_string();
+                            let cleaned = text.trim().to_string();
+                            Ok(vec![json!(cleaned)])
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                            Err(ExecutorError::NodeExecutionFailed {
+                                node_id: node_id.to_string(),
+                                message: format!("llama-cli failed: {}", stderr),
+                            })
+                        }
+                    }
+                    Err(e) => {
+                        Err(ExecutorError::NodeExecutionFailed {
+                            node_id: node_id.to_string(),
+                            message: format!("Failed to execute llama-cli: {}", e),
+                        })
+                    }
+                }
+            }
+        })
+    }))
+}
+
+fn register_llm_text_gen_remote(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LLMTextGenRemote".to_string(),
+        display_name: "LLM Text Generation (Remote API)".to_string(),
+        category: "llm".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("system_prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("max_tokens".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("temperature".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("top_p".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::String],
+        output_names: vec!["STRING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "generate".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, node, node_id| {
+        let prompt = ctx.resolve_input(node_id, "prompt")
+            .unwrap_or_else(|_| json!(""));
+        let system_prompt = ctx.resolve_input(node_id, "system_prompt")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let model_name = node.inputs.get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let max_tokens = node.inputs.get("max_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(512);
+        let temperature = node.inputs.get("temperature")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.7);
+        let top_p = node.inputs.get("top_p")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.9);
+        let seed = node.inputs.get("seed")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
+
+        let llm_config = ctx.get_extra_data("llm_config")
+            .cloned()
+            .unwrap_or(json!({
+                "mode": "remote",
+                "api_url": "http://127.0.0.1:8080",
+                "api_key": "",
+            }));
+
+        let prompt_text = prompt.as_str().unwrap_or("").to_string();
+        let model_str = if model_name.is_empty() {
+            llm_config.get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string()
+        } else {
+            model_name.to_string()
+        };
+
+        Box::pin(async move {
+            let api_url = llm_config.get("api_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("http://127.0.0.1:8080");
+            let api_key = llm_config.get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let client = reqwest::Client::new();
+            let mut body = serde_json::json!({
+                "model": model_str,
+                "prompt": prompt_text,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+            });
+            if seed >= 0 {
+                body["seed"] = json!(seed);
+            }
+            if let Some(ref sp) = system_prompt {
+                body["system_prompt"] = json!(sp);
+            }
+
+            let mut req = client
+                .post(format!("{}/v1/completions", api_url.trim_end_matches('/')))
+                .header("Content-Type", "application/json")
+                .json(&body);
+
+            if !api_key.is_empty() {
+                req = req.header("Authorization", format!("Bearer {}", api_key));
+            }
+
+            match req.send().await {
+                Ok(resp) => {
+                    match resp.json::<serde_json::Value>().await {
+                        Ok(data) => {
+                            let text = data.get("choices")
+                                .and_then(|c| c.get(0))
+                                .and_then(|c| c.get("text"))
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            Ok(vec![json!(text)])
+                        }
+                        Err(e) => {
+                            Err(ExecutorError::NodeExecutionFailed {
+                                node_id: node_id.to_string(),
+                                message: format!("Failed to parse remote LLM API response: {}", e),
+                            })
+                        }
+                    }
+                }
+                Err(e) => {
+                    Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("Remote LLM API request failed: {}", e),
+                    })
+                }
+            }
+        })
+    }));
+}
+
 fn register_save_image(registry: &mut NodeRegistry) {
     let class_def = NodeClassDef {
         class_type: "SaveImage".to_string(),
@@ -1170,6 +1892,68 @@ fn register_vae_decode(registry: &mut NodeRegistry) {
                 "type": "image",
                 "source": "vae_decode",
                 "latent": samples,
+            })])
+        })
+    }));
+}
+
+fn register_vae_encode(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VAEEncode".to_string(),
+        display_name: "VAE Encode".to_string(),
+        category: "latent".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("pixels".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("vae".to_string(), InputTypeSpec {
+                    type_name: "VAE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "encode".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let pixels = ctx.resolve_input(node_id, "pixels")
+            .unwrap_or_else(|_| json!(null));
+        let vae = ctx.resolve_input(node_id, "vae")
+            .unwrap_or_else(|_| json!(null));
+
+        Box::pin(async move {
+            if let Some(images) = pixels.get("images").and_then(|v| v.as_array()) {
+                if !images.is_empty() {
+                    return Ok(vec![json!({
+                        "type": "latent",
+                        "samples": images,
+                    })]);
+                }
+            }
+
+            let width = pixels.get("width").and_then(|v| v.as_i64()).unwrap_or(512);
+            let height = pixels.get("height").and_then(|v| v.as_i64()).unwrap_or(512);
+
+            Ok(vec![json!({
+                "type": "latent",
+                "source": "vae_encode",
+                "image": pixels,
+                "vae": vae,
+                "width": width,
+                "height": height,
             })])
         })
     }));

@@ -183,6 +183,10 @@ impl ExecutionContext {
         &self.extra_data
     }
 
+    pub fn get_extra_data(&self, key: &str) -> Option<&Value> {
+        self.extra_data.get(key)
+    }
+
     pub fn prompt_id(&self) -> &str {
         &self.prompt_id
     }

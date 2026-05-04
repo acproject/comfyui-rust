@@ -1,6 +1,7 @@
 use crate::agent::{AgentConfig, ChatRequest};
 use crate::config::ComfyConfig;
 use crate::error::ApiError;
+use crate::llm::LlmConfig;
 use crate::state::AppState;
 use crate::ws::WsMessage;
 use axum::body::Body;
@@ -208,6 +209,7 @@ pub async fn get_object_info(
         m.insert("embedding_name", "embeddings");
         m.insert("style_model_name", "style_models");
         m.insert("image", "input_images");
+        m.insert("llm_model_name", "llm");
         m
     };
 
@@ -232,6 +234,19 @@ pub async fn get_object_info(
     let weight_dtype_choices: Vec<String> = vec![
         "default".into(), "fp8_e4m3fn".into(), "fp8_e5m2".into(),
         "fp16".into(), "bf16".into(),
+    ];
+
+    let channel_choices: Vec<String> = vec![
+        "red".into(), "green".into(), "blue".into(), "alpha".into(),
+    ];
+
+    let mask_operation_choices: Vec<String> = vec![
+        "add".into(), "subtract".into(), "multiply".into(),
+        "divide".into(), "intersect".into(), "difference".into(),
+    ];
+
+    let dual_clip_type_choices: Vec<String> = vec![
+        "sdxl".into(), "flux".into(), "sd3".into(), "wan".into(),
     ];
 
     let mut result = HashMap::new();
@@ -259,6 +274,12 @@ pub async fn get_object_info(
                                                 scheduler_choices.clone()
                                             } else if input_name == "weight_dtype" {
                                                 weight_dtype_choices.clone()
+                                            } else if input_name == "channel" {
+                                                channel_choices.clone()
+                                            } else if input_name == "operation" {
+                                                mask_operation_choices.clone()
+                                            } else if input_name == "type" {
+                                                dual_clip_type_choices.clone()
                                             } else if let Some(&model_type) = input_to_model_type.get(input_name.as_str()) {
                                                 if model_type == "input_images" {
                                                     let input_dir = &state.input_dir;
@@ -1181,6 +1202,39 @@ pub async fn get_agent_models(
         Ok(models) => Ok(Json(json!({ "models": models }))),
         Err(e) => Err(ApiError::Internal(e.to_string())),
     }
+}
+
+pub async fn get_llm_config(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.llm.get_config().await;
+    let safe_config = LlmConfig {
+        api_key: config.api_key.as_ref().map(|_| "********".to_string()),
+        ..config
+    };
+    Ok(Json(serde_json::to_value(safe_config).unwrap_or(Value::Null)))
+}
+
+pub async fn post_llm_config(
+    State(state): State<AppState>,
+    Json(mut body): Json<LlmConfig>,
+) -> Result<impl IntoResponse, ApiError> {
+    if body.api_key.as_deref() == Some("********") {
+        let existing = state.llm.get_config().await;
+        body.api_key = existing.api_key;
+    }
+    state.llm.set_config(body.clone()).await;
+
+    if let Err(e) = state.db.set("llm_config", &body) {
+        tracing::warn!("Failed to persist LLM config to database: {}", e);
+    }
+
+    let config = state.llm.get_config().await;
+    let safe_config = LlmConfig {
+        api_key: config.api_key.as_ref().map(|_| "********".to_string()),
+        ..config
+    };
+    Ok(Json(serde_json::to_value(safe_config).unwrap_or(Value::Null)))
 }
 
 pub async fn get_model_download_list() -> Result<impl IntoResponse, ApiError> {

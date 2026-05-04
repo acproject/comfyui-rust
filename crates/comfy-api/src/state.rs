@@ -3,6 +3,7 @@ use crate::config::ComfyConfig;
 use crate::database::{Database, SharedDatabase};
 use crate::download_tracker::{DownloadTracker, SharedDownloadTracker};
 use crate::images::ImageStore;
+use crate::llm::{LlmConfig, LlmService};
 use crate::queue::PromptQueue;
 use crate::ws::WsBroadcaster;
 use comfy_executor::{Executor, NodeRegistry};
@@ -27,6 +28,7 @@ pub struct AppState {
     pub config: Arc<std::sync::RwLock<ComfyConfig>>,
     pub config_path: Arc<PathBuf>,
     pub agent: Arc<AgentService>,
+    pub llm: Arc<LlmService>,
     pub download_tracker: SharedDownloadTracker,
     pub db: SharedDatabase,
 }
@@ -56,6 +58,20 @@ fn load_agent_config_from_db(db: &Database) -> AgentConfig {
         Err(e) => {
             tracing::warn!("Failed to load agent config from database: {}, using defaults", e);
             AgentConfig::from_env()
+        }
+    }
+}
+
+fn load_llm_config_from_db(db: &Database) -> LlmConfig {
+    match db.get::<LlmConfig>("llm_config") {
+        Ok(Some(config)) => {
+            tracing::info!("Loaded LLM config from database");
+            config
+        }
+        Ok(None) => LlmConfig::from_env(),
+        Err(e) => {
+            tracing::warn!("Failed to load LLM config from database: {}, using defaults", e);
+            LlmConfig::from_env()
         }
     }
 }
@@ -99,6 +115,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db);
 
         let registry = Arc::new(Mutex::new(registry));
         let queue = Arc::new(PromptQueue::new());
@@ -117,6 +134,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: Arc::new(AgentService::new(agent_config)),
+            llm: Arc::new(LlmService::new(llm_config)),
             download_tracker: create_download_tracker(),
             db,
         }
@@ -150,6 +168,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db);
 
         Self {
             executor,
@@ -163,6 +182,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: Arc::new(AgentService::new(agent_config)),
+            llm: Arc::new(LlmService::new(llm_config)),
             download_tracker: create_download_tracker(),
             db,
         }
@@ -212,6 +232,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db);
 
         Self {
             executor,
@@ -225,6 +246,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: Arc::new(AgentService::new(agent_config)),
+            llm: Arc::new(LlmService::new(llm_config)),
             download_tracker: create_download_tracker(),
             db,
         }
@@ -290,6 +312,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db);
 
         Self {
             executor,
@@ -303,6 +326,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: Arc::new(AgentService::new(agent_config)),
+            llm: Arc::new(LlmService::new(llm_config)),
             download_tracker: create_download_tracker(),
             db,
         }
@@ -341,6 +365,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db);
 
         Self {
             executor,
@@ -354,6 +379,7 @@ impl AppState {
             config: Arc::new(std::sync::RwLock::new(config)),
             config_path: Arc::new(config_path),
             agent: Arc::new(AgentService::new(agent_config)),
+            llm: Arc::new(LlmService::new(llm_config)),
             download_tracker: create_download_tracker(),
             db,
         }
@@ -380,6 +406,7 @@ impl Clone for AppState {
             config: self.config.clone(),
             config_path: self.config_path.clone(),
             agent: self.agent.clone(),
+            llm: self.llm.clone(),
             download_tracker: self.download_tracker.clone(),
             db: self.db.clone(),
         }
