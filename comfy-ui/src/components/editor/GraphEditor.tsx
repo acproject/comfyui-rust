@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type FC } from 'react';
+import { useCallback, useMemo, useRef, useState, useEffect, type FC } from 'react';
 import {
   ReactFlow,
   Background,
@@ -13,11 +13,13 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import { ComfyNodeComponent } from '@/components/nodes/ComfyNode';
+import { NoteNodeComponent } from '@/components/nodes/NoteNode';
 import { ContextMenu, type ContextMenuState } from '@/components/editor/ContextMenu';
 import { useWorkflowStore, type ComfyNodeData } from '@/store/workflow';
 
 const nodeTypes = {
   comfyNode: ComfyNodeComponent,
+  noteNode: NoteNodeComponent,
 };
 
 const GraphEditor: FC = () => {
@@ -34,10 +36,21 @@ const GraphEditor: FC = () => {
   const cachedNodeIds = useWorkflowStore((s) => s.cachedNodeIds);
   const getWorkflowAsJson = useWorkflowStore((s) => s.getWorkflowAsJson);
   const disconnectNode = useWorkflowStore((s) => s.disconnectNode);
+  const addNoteNode = useWorkflowStore((s) => s.addNoteNode);
+  const updateNoteNode = useWorkflowStore((s) => s.updateNoteNode);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  useEffect(() => {
+    const handleNoteUpdate = (e: Event) => {
+      const { id, text, color } = (e as CustomEvent).detail;
+      updateNoteNode(id, text, color);
+    };
+    window.addEventListener('note-update', handleNoteUpdate);
+    return () => window.removeEventListener('note-update', handleNoteUpdate);
+  }, [updateNoteNode]);
 
   const styledEdges = useMemo(() => {
     const completedIds = new Set([...executedNodeIds, ...cachedNodeIds]);
@@ -261,6 +274,7 @@ const GraphEditor: FC = () => {
           style={{ background: '#1e1e2e', border: '1px solid #333' }}
           nodeColor={(node) => {
             const data = node.data as ComfyNodeData;
+            if (data?.isNote) return data.noteColor || '#5b8c5a';
             const cat = data?.category || '';
             if (cat.includes('loaders')) return '#5b8c5a';
             if (cat.includes('conditioning')) return '#c78030';

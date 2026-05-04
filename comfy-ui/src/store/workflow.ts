@@ -18,6 +18,9 @@ interface ComfyNodeData extends Record<string, unknown> {
   outputs: { name: string; type: string }[];
   isOutputNode: boolean;
   category: string;
+  isNote?: boolean;
+  noteText?: string;
+  noteColor?: string;
 }
 
 interface OutputImage {
@@ -56,6 +59,8 @@ interface WorkflowState {
   onNodesChange: (changes: NodeChange<ComfyNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<Edge>[]) => void;
   addNode: (classType: string, position: { x: number; y: number }) => void;
+  addNoteNode: (position: { x: number; y: number }, text?: string, color?: string) => void;
+  updateNoteNode: (nodeId: string, text: string, color: string) => void;
   removeNode: (nodeId: string) => void;
   updateNodeInput: (nodeId: string, inputName: string, value: unknown) => void;
   connectNodes: (source: string, sourceHandle: string, target: string, targetHandle: string) => ValidationError | null;
@@ -179,6 +184,39 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
 
     set({ nodes: [...nodes, newNode] });
+  },
+
+  addNoteNode: (position, text, color) => {
+    const { nodes } = get();
+    const nodeId = nextNodeId();
+    const newNode: ComfyNode = {
+      id: nodeId,
+      type: 'noteNode',
+      position,
+      data: {
+        classType: '_Note',
+        title: 'Note',
+        inputs: {},
+        outputs: [],
+        isOutputNode: false,
+        category: 'note',
+        isNote: true,
+        noteText: text || '',
+        noteColor: color || '#5b8c5a',
+      },
+    };
+    set({ nodes: [...nodes, newNode] });
+  },
+
+  updateNoteNode: (nodeId, text, color) => {
+    const { nodes } = get();
+    set({
+      nodes: nodes.map((n) =>
+        n.id === nodeId
+          ? { ...n, data: { ...n.data, noteText: text, noteColor: color } }
+          : n
+      ),
+    });
   },
 
   removeNode: (nodeId) => {
@@ -309,6 +347,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const prompt: Record<string, unknown> = {};
 
     for (const node of nodes) {
+      if (node.data.isNote) continue;
+
       const inputs: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(node.data.inputs)) {
         inputs[key] = value;
@@ -370,10 +410,6 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const newId = nextNodeId();
       nodeIdMap[oldId] = newId;
 
-      if (!classDef) {
-        console.warn(`[loadWorkflowFromJson] No classDef for classType "${classType}" (node id=${oldId}). Available types:`, Object.keys(objectInfo).slice(0, 10));
-      }
-
       const rawPos = wn.pos;
       let posX = 0, posY = 0;
       if (Array.isArray(rawPos)) {
@@ -384,9 +420,41 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         posY = (rawPos as Record<string, number>)['1'] || 0;
       }
 
+      const wnProps = (wn.properties as Record<string, unknown>) || {};
+      const isNote = wnProps.isNote === true || classType === '_Note';
+
+      if (isNote) {
+        const noteText = (wnProps.noteText as string) || '';
+        const noteColor = (wnProps.noteColor as string) || '#5b8c5a';
+        newNodes.push({
+          id: newId,
+          type: 'noteNode',
+          position: { x: posX, y: posY },
+          data: {
+            classType: '_Note',
+            title: 'Note',
+            inputs: {},
+            outputs: [],
+            isOutputNode: false,
+            category: 'note',
+            isNote: true,
+            noteText,
+            noteColor,
+          },
+        });
+        if (Number(wn.id) > _nodeIdCounter) {
+          _nodeIdCounter = Number(wn.id);
+        }
+        continue;
+      }
+
       const widgetsValues = Array.isArray(wn.widgets_values)
         ? (wn.widgets_values as unknown[])
         : [];
+
+      if (!classDef) {
+        console.warn(`[loadWorkflowFromJson] No classDef for classType "${classType}" (node id=${oldId}). Available types:`, Object.keys(objectInfo).slice(0, 10));
+      }
 
       const wnOutputs = (wn.outputs as Array<{ name: string; type: string | string[] }>) || [];
 
@@ -696,7 +764,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         mode: 0,
         inputs: nodeInputs,
         outputs: nodeOutputs,
-        properties: {},
+        properties: n.data.isNote
+          ? { isNote: true, noteText: n.data.noteText || '', noteColor: n.data.noteColor || '#5b8c5a' }
+          : {},
         widgets_values: widgetsValues,
         title: n.data.title !== n.data.classType ? n.data.title : undefined,
       };

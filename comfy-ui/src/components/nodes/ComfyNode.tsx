@@ -572,7 +572,7 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
         >
           {(choices || []).map((c) => (
             <option key={c} value={c}>
-              {c.length > 16 ? '…' + c.slice(-14) : c}
+              {c.length > 16 ? c.slice(0, 13) + '…' : c}
             </option>
           ))}
         </select>

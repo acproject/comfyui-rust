@@ -15,7 +15,7 @@ interface ContextMenuProps {
 }
 
 const ContextMenu: FC<ContextMenuProps> = memo(({ menu, onClose }) => {
-  const { objectInfo, addNode, removeNode, nodes, edges, setEdges } = useWorkflowStore();
+  const { objectInfo, addNode, addNoteNode, removeNode, nodes, edges, setEdges } = useWorkflowStore();
   const [search, setSearch] = useState('');
   const ref = useRef<HTMLDivElement>(null);
 
@@ -156,6 +156,30 @@ const ContextMenu: FC<ContextMenuProps> = memo(({ menu, onClose }) => {
             outline: 'none',
           }}
         />
+      </div>
+      <div
+        onClick={() => {
+          addNoteNode({ x: menu.x, y: menu.y });
+          onClose();
+        }}
+        style={{
+          padding: '6px 10px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          borderBottom: '1px solid #333',
+          transition: 'background 0.1s',
+        }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLElement).style.background = '#2a2a3e';
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.background = 'transparent';
+        }}
+      >
+        <span style={{ fontSize: 12 }}>📝</span>
+        <span>Add Note</span>
       </div>
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {Object.entries(categories).map(([category, items]) => (

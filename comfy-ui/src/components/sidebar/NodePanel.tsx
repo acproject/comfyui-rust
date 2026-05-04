@@ -11,6 +11,7 @@ interface CategorizedNodes {
 const NodePanel: FC = () => {
   const objectInfo = useWorkflowStore((s) => s.objectInfo);
   const addNode = useWorkflowStore((s) => s.addNode);
+  const addNoteNode = useWorkflowStore((s) => s.addNoteNode);
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -81,6 +82,25 @@ const NodePanel: FC = () => {
               width: '100%',
             }}
           />
+        </div>
+        <div
+          onClick={() => addNoteNode({ x: 200, y: 200 })}
+          style={{
+            marginTop: 6,
+            padding: '4px 8px',
+            background: '#5b8c5a',
+            borderRadius: 4,
+            cursor: 'pointer',
+            fontSize: 11,
+            textAlign: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+          }}
+        >
+          <span>📝</span>
+          <span>Add Note</span>
         </div>
       </div>
 
