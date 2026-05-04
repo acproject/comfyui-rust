@@ -135,6 +135,9 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_control_net_apply(registry);
     register_convert_model(registry);
     register_wan_video_sampler(registry);
+
+    #[cfg(feature = "controlnet")]
+    crate::controlnet::register_controlnet_nodes(registry);
 }
 
 fn resolve_model_path(model_type: &str, filename: &str) -> String {
@@ -851,6 +854,30 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                             params = params.with_lora(path, mult as f32);
                         }
                     }
+                }
+
+                if let Some(cn) = positive.get("control_net") {
+                    if let Some(cn_path) = cn.get("path").and_then(|v| v.as_str()) {
+                        if !cn_path.is_empty() {
+                            params.model_config.control_net_path = Some(cn_path.to_string());
+                        }
+                    }
+                }
+                if let Some(cn_image) = positive.get("control_image") {
+                    if let Ok(sd_img) = serde_json::from_value::<comfy_inference::SdImage>(cn_image.clone()) {
+                        params.control_image = Some(sd_img);
+                    } else if let Some(img_obj) = cn_image.as_object() {
+                        if let Some(images) = img_obj.get("images").and_then(|v| v.as_array()) {
+                            if let Some(first) = images.first() {
+                                if let Ok(sd_img) = serde_json::from_value::<comfy_inference::SdImage>(first.clone()) {
+                                    params.control_image = Some(sd_img);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(cn_strength) = positive.get("control_strength") {
+                    params.control_strength = cn_strength.as_f64().unwrap_or(0.9) as f32;
                 }
 
                 let model_type_str = model.get("model_type")

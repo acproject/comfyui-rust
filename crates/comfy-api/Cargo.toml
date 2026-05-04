@@ -28,6 +28,7 @@ local = ["comfy-inference/local", "comfy-executor/local"]
 local-ffi = ["local", "comfy-inference/local-ffi", "comfy-executor/local-ffi"]
 local-build = ["local-ffi", "comfy-inference/local-build", "comfy-executor/local-build"]
 remote = ["comfy-inference/remote", "comfy-executor/remote"]
+controlnet = ["comfy-executor/controlnet"]
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

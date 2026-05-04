@@ -42,15 +42,15 @@ if [ -n "$SD_CPP_DIR" ]; then
 
     SD_LIB="$SD_CPP_DIR/build/libstable-diffusion.a"
     if [ -f "$SD_LIB" ]; then
-        CARGO_FEATURES="local-ffi"
-        echo "  使用 FFI + CLI 后端 (预编译库已就绪)"
+        CARGO_FEATURES="local-ffi,controlnet"
+        echo "  使用 FFI + CLI 后端 (预编译库已就绪) + ControlNet"
     else
-        CARGO_FEATURES="local-build"
-        echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢)..."
+        CARGO_FEATURES="local-build,controlnet"
+        echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢) + ControlNet..."
     fi
 else
-    CARGO_FEATURES="local"
-    echo "  stable-diffusion-cpp 未找到，使用 CLI 后端 (需要 sd-cli 可执行文件)"
+    CARGO_FEATURES="local,controlnet"
+    echo "  stable-diffusion-cpp 未找到，使用 CLI 后端 (需要 sd-cli 可执行文件) + ControlNet"
 fi
 
 cargo run -p comfy-api --features "$CARGO_FEATURES" &
