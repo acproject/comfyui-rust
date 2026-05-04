@@ -356,7 +356,8 @@ impl ComfyConfig {
     pub fn resolve_model_path(&self, model_type: &str, filename: &str) -> PathBuf {
         let sub_dir = match model_type {
             "checkpoints" => &self.models.checkpoints,
-            "clip" | "text_encoders" => &self.models.clip,
+            "clip" => &self.models.clip,
+            "text_encoders" => &self.models.text_encoders,
             "vae" => &self.models.vae,
             "loras" => &self.models.lora,
             "controlnet" => &self.models.controlnet,
@@ -383,7 +384,8 @@ impl ComfyConfig {
     pub fn get_model_type_dir(&self, model_type: &str) -> String {
         match model_type {
             "checkpoints" => self.models.checkpoints.clone(),
-            "clip" | "text_encoders" => self.models.clip.clone(),
+            "clip" => self.models.clip.clone(),
+            "text_encoders" => self.models.text_encoders.clone(),
             "vae" => self.models.vae.clone(),
             "loras" => self.models.lora.clone(),
             "controlnet" => self.models.controlnet.clone(),

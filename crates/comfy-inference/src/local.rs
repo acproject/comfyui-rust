@@ -313,17 +313,11 @@ impl LocalBackend {
 
 impl InferenceBackend for LocalBackend {
     fn supports_image_generation(&self) -> bool {
-        let cache = self.contexts.lock().unwrap();
-        cache.entries.values().any(|ctx| {
-            !ctx.is_null() && unsafe { sd_ctx_supports_image_generation(*ctx) }
-        })
+        true
     }
 
     fn supports_video_generation(&self) -> bool {
-        let cache = self.contexts.lock().unwrap();
-        cache.entries.values().any(|ctx| {
-            !ctx.is_null() && unsafe { sd_ctx_supports_video_generation(*ctx) }
-        })
+        true
     }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {

@@ -228,8 +228,14 @@ async fn test_execute_checkpoint_loader() {
     let checkpoint_output = result.get_output("4").unwrap();
     assert_eq!(checkpoint_output.len(), 3);
     let model_output = checkpoint_output.get(0).unwrap();
-    assert_eq!(model_output["type"], "model");
-    assert_eq!(model_output["path"], "test_model.safetensors");
+    assert!(model_output["model_path"].as_str().unwrap().contains("test_model.safetensors"));
+    assert_eq!(model_output["model_type"], "unknown");
+    let clip_output = checkpoint_output.get(1).unwrap();
+    assert_eq!(clip_output["type"], "clip");
+    assert_eq!(clip_output["model_type"], "unknown");
+    let vae_output = checkpoint_output.get(2).unwrap();
+    assert_eq!(vae_output["type"], "vae");
+    assert_eq!(vae_output["model_type"], "unknown");
 }
 
 #[tokio::test]

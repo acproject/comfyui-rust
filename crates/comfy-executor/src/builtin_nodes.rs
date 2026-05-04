@@ -8,6 +8,112 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ModelType {
+    SD3,
+    Flux,
+    SDXL,
+    SD15,
+    Wan,
+    Unknown,
+}
+
+fn detect_model_type(checkpoint_name: &str) -> ModelType {
+    let lower = checkpoint_name.to_lowercase();
+    if lower.contains("sd3") || lower.contains("sd3.5") {
+        ModelType::SD3
+    } else if lower.contains("flux") {
+        ModelType::Flux
+    } else if lower.contains("sdxl") {
+        ModelType::SDXL
+    } else if lower.contains("wan") {
+        ModelType::Wan
+    } else if lower.contains("v1") || lower.contains("sd1") || lower.contains("stable-diffusion-1") {
+        ModelType::SD15
+    } else {
+        ModelType::Unknown
+    }
+}
+
+fn get_models_base_dir() -> std::path::PathBuf {
+    let base = std::env::var("COMFY_MODELS_DIR").unwrap_or_else(|_| "models".to_string());
+    let base_path = std::path::Path::new(&base);
+    if base_path.is_relative() {
+        std::env::current_dir().unwrap_or_default().join(base_path)
+    } else {
+        base_path.to_path_buf()
+    }
+}
+
+fn find_file_in_dir(dir: &std::path::Path, prefixes: &[&str]) -> Option<String> {
+    if !dir.exists() {
+        return None;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut candidates: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let lower = name.to_lowercase();
+                if lower.ends_with(".safetensors") || lower.ends_with(".gguf") {
+                    prefixes.iter().any(|p| lower.starts_with(p)).then(|| name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        candidates.sort();
+        return candidates.first().map(|name| dir.join(name).to_string_lossy().to_string());
+    }
+    None
+}
+
+fn auto_detect_text_encoders(model_type: ModelType) -> (Option<String>, Option<String>, Option<String>) {
+    let base = get_models_base_dir();
+    let te_dir = base.join("text_encoders");
+
+    let (need_clip_l, need_clip_g, need_t5xxl) = match model_type {
+        ModelType::SD3 => (true, true, true),
+        ModelType::Flux => (true, false, true),
+        ModelType::SDXL => (true, true, false),
+        ModelType::SD15 => (true, false, false),
+        ModelType::Wan => (false, false, true),
+        ModelType::Unknown => (true, true, true),
+    };
+
+    let clip_l_path = if need_clip_l {
+        find_file_in_dir(&te_dir, &["clip_l"])
+    } else {
+        None
+    };
+    let clip_g_path = if need_clip_g {
+        find_file_in_dir(&te_dir, &["clip_g"])
+    } else {
+        None
+    };
+    let t5xxl_path = if need_t5xxl {
+        find_file_in_dir(&te_dir, &["t5xxl"])
+    } else {
+        None
+    };
+
+    (clip_l_path, clip_g_path, t5xxl_path)
+}
+
+fn auto_detect_vae(model_type: ModelType) -> Option<String> {
+    let base = get_models_base_dir();
+    let vae_dir = base.join("vae");
+
+    let prefixes: &[&str] = match model_type {
+        ModelType::SD3 | ModelType::Flux => &["sd3_vae", "flux_vae", "ae"],
+        ModelType::SDXL | ModelType::SD15 => &["sdxl_vae", "vae"],
+        ModelType::Wan => &["wan_vae"],
+        ModelType::Unknown => &["sd3_vae", "flux_vae", "sdxl_vae", "vae", "ae"],
+    };
+
+    find_file_in_dir(&vae_dir, prefixes)
+}
+
 pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_checkpoint_loader(registry);
     register_flux_loader(registry);
@@ -95,97 +201,37 @@ fn register_checkpoint_loader(registry: &mut NodeRegistry) {
             .unwrap_or("model.safetensors");
 
         let model_path = resolve_model_path("checkpoints", ckpt_name);
+        let model_type = detect_model_type(ckpt_name);
+        let model_type_str = format!("{:?}", model_type).to_lowercase();
 
         Box::pin(async move {
             let is_gguf = model_path.to_lowercase().ends_with(".gguf");
 
-            let mut model_config = if is_gguf {
+            let model_config = if is_gguf {
                 json!({
                     "diffusion_model_path": model_path,
+                    "model_type": model_type_str,
                 })
             } else {
                 json!({
                     "model_path": model_path,
+                    "model_type": model_type_str,
                 })
             };
 
-            let base = std::env::var("COMFY_MODELS_DIR").unwrap_or_else(|_| "models".to_string());
-            let base_path = std::path::Path::new(&base);
-            let abs_base = if base_path.is_relative() {
-                std::env::current_dir().unwrap_or_default().join(base_path)
-            } else {
-                base_path.to_path_buf()
-            };
-            let te_dir = abs_base.join("text_encoders");
-
-            let clip_l_path = if te_dir.join("clip_l.safetensors").exists() {
-                te_dir.join("clip_l.safetensors").to_string_lossy().to_string()
-            } else {
-                String::new()
-            };
-            let clip_g_path = if te_dir.join("clip_g.safetensors").exists() {
-                te_dir.join("clip_g.safetensors").to_string_lossy().to_string()
-            } else {
-                String::new()
-            };
-            let t5xxl_path = if te_dir.join("t5xxl_fp8_e4m3fn.safetensors").exists() {
-                te_dir.join("t5xxl_fp8_e4m3fn.safetensors").to_string_lossy().to_string()
-            } else if te_dir.join("t5xxl_fp16.safetensors").exists() {
-                te_dir.join("t5xxl_fp16.safetensors").to_string_lossy().to_string()
-            } else {
-                String::new()
-            };
-
-            let vae_dir = abs_base.join("vae");
-            let vae_path = if vae_dir.join("sd3_vae.safetensors").exists() {
-                vae_dir.join("sd3_vae.safetensors").to_string_lossy().to_string()
-            } else {
-                String::new()
-            };
-
-            if !clip_l_path.is_empty() {
-                model_config.as_object_mut().unwrap().insert("clip_l_path".to_string(), json!(clip_l_path));
-            }
-            if !clip_g_path.is_empty() {
-                model_config.as_object_mut().unwrap().insert("clip_g_path".to_string(), json!(clip_g_path));
-            }
-            if !t5xxl_path.is_empty() {
-                model_config.as_object_mut().unwrap().insert("t5xxl_path".to_string(), json!(t5xxl_path));
-            }
-            if !vae_path.is_empty() {
-                model_config.as_object_mut().unwrap().insert("vae_path".to_string(), json!(vae_path));
-            }
-
             tracing::info!("CheckpointLoader: model_config = {}", serde_json::to_string_pretty(&model_config).unwrap_or_default());
 
-            let mut clip_config = json!({
+            let clip_config = json!({
                 "type": "clip",
                 "source_model": model_path,
+                "model_type": model_type_str,
             });
-            if !clip_l_path.is_empty() {
-                clip_config.as_object_mut().unwrap().insert("clip_l_path".to_string(), json!(clip_l_path));
-            }
-            if !clip_g_path.is_empty() {
-                clip_config.as_object_mut().unwrap().insert("clip_g_path".to_string(), json!(clip_g_path));
-            }
-            if !t5xxl_path.is_empty() {
-                clip_config.as_object_mut().unwrap().insert("t5xxl_path".to_string(), json!(t5xxl_path));
-            }
 
-            let vae_dir = std::path::Path::new(&base).join("vae");
-            let vae_path = if vae_dir.join("sd3_vae.safetensors").exists() {
-                vae_dir.join("sd3_vae.safetensors").to_string_lossy().to_string()
-            } else {
-                String::new()
-            };
-
-            let mut vae_config = json!({
+            let vae_config = json!({
                 "type": "vae",
                 "source_model": model_path,
+                "model_type": model_type_str,
             });
-            if !vae_path.is_empty() {
-                vae_config.as_object_mut().unwrap().insert("vae_path".to_string(), json!(vae_path));
-            }
 
             Ok(vec![model_config, clip_config, vae_config])
         })
@@ -644,6 +690,12 @@ fn register_ksampler(registry: &mut NodeRegistry) {
         let supports_img_gen = backend.supports_image_generation();
 
         Box::pin(async move {
+            if !supports_img_gen {
+                tracing::warn!(
+                    "KSampler: backend does not support image generation, skipping inference. \
+                     Check that sd-cli or local inference backend is properly configured."
+                );
+            }
             if supports_img_gen {
                 let prompt_text = positive.get("text")
                     .and_then(|v| v.as_str())
@@ -712,6 +764,63 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     model_config = model_config.with_vae(path);
                 }
 
+                let needs_clip_auto_detect = model_config.clip_l_path.is_none()
+                    || model_config.clip_g_path.is_none()
+                    || model_config.t5xxl_path.is_none();
+                let needs_vae_auto_detect = model_config.vae_path.is_none();
+                if needs_clip_auto_detect || needs_vae_auto_detect {
+                    let model_type_str = model.get("model_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let detected_type = match model_type_str {
+                        "sd3" => ModelType::SD3,
+                        "flux" => ModelType::Flux,
+                        "sdxl" => ModelType::SDXL,
+                        "sd15" => ModelType::SD15,
+                        "wan" => ModelType::Wan,
+                        _ => {
+                            let ckpt = model.get("model_path")
+                                .or_else(|| model.get("diffusion_model_path"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            detect_model_type(ckpt)
+                        }
+                    };
+
+                    if needs_clip_auto_detect {
+                        let (clip_l, clip_g, t5xxl) = auto_detect_text_encoders(detected_type);
+                        if model_config.clip_l_path.is_none() {
+                            if let Some(path) = clip_l {
+                                model_config = model_config.with_clip_l(path);
+                            }
+                        }
+                        if model_config.clip_g_path.is_none() {
+                            if let Some(path) = clip_g {
+                                model_config = model_config.with_clip_g(path);
+                            }
+                        }
+                        if model_config.t5xxl_path.is_none() {
+                            if let Some(path) = t5xxl {
+                                model_config = model_config.with_t5xxl(path);
+                            }
+                        }
+                        tracing::info!(
+                            "KSampler: auto-detected text encoders for {:?} model: clip_l={:?}, clip_g={:?}, t5xxl={:?}",
+                            detected_type, model_config.clip_l_path, model_config.clip_g_path, model_config.t5xxl_path
+                        );
+                    }
+
+                    if needs_vae_auto_detect {
+                        if let Some(path) = auto_detect_vae(detected_type) {
+                            model_config = model_config.with_vae(path);
+                            tracing::info!(
+                                "KSampler: auto-detected vae for {:?} model: vae={:?}",
+                                detected_type, model_config.vae_path
+                            );
+                        }
+                    }
+                }
+
                 let mut width = 512i32;
                 let mut height = 512i32;
                 if let Some(latent) = latent_image.as_object() {
@@ -742,6 +851,59 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                             params = params.with_lora(path, mult as f32);
                         }
                     }
+                }
+
+                let model_type_str = model.get("model_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let detected_type = match model_type_str {
+                    "sd3" => ModelType::SD3,
+                    "flux" => ModelType::Flux,
+                    "sdxl" => ModelType::SDXL,
+                    "sd15" => ModelType::SD15,
+                    "wan" => ModelType::Wan,
+                    _ => {
+                        let ckpt = model.get("model_path")
+                            .or_else(|| model.get("diffusion_model_path"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        detect_model_type(ckpt)
+                    }
+                };
+                let (need_clip_l, need_clip_g, need_t5xxl) = match detected_type {
+                    ModelType::SD3 => (true, true, true),
+                    ModelType::Flux => (true, false, true),
+                    ModelType::SDXL => (true, true, false),
+                    ModelType::SD15 => (true, false, false),
+                    ModelType::Wan => (false, false, true),
+                    ModelType::Unknown => (false, false, false),
+                };
+                let mut missing_encoders = Vec::new();
+                if need_clip_l && params.model_config.clip_l_path.is_none() {
+                    missing_encoders.push("clip_l");
+                }
+                if need_clip_g && params.model_config.clip_g_path.is_none() {
+                    missing_encoders.push("clip_g");
+                }
+                if need_t5xxl && params.model_config.t5xxl_path.is_none() {
+                    missing_encoders.push("t5xxl");
+                }
+                if !missing_encoders.is_empty() {
+                    tracing::error!(
+                        "KSampler: {:?} model requires text encoders [{}] but they are missing. \
+                         Please download them to models/text_encoders/ directory.",
+                        detected_type,
+                        missing_encoders.join(", ")
+                    );
+                    return Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!(
+                            "{:?} model requires text encoders [{}] but they are missing. \
+                             Please download them to models/text_encoders/ directory.",
+                            detected_type,
+                            missing_encoders.join(", ")
+                        ),
+                    });
                 }
 
                 match backend.generate_image(params) {
@@ -1443,9 +1605,21 @@ fn register_clip_loader(registry: &mut NodeRegistry) {
         let clip_name = node.inputs.get("clip_name")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let clip_type = node.inputs.get("type")
+        let clip_type_raw = node.inputs.get("type")
             .and_then(|v| v.as_str())
-            .unwrap_or("stable_diffusion");
+            .unwrap_or("");
+        let clip_type = if clip_type_raw.is_empty() {
+            let lower = clip_name.to_lowercase();
+            if lower.contains("t5") {
+                "sd3"
+            } else if lower.contains("clip_g") {
+                "stable_cascade"
+            } else {
+                "stable_diffusion"
+            }
+        } else {
+            clip_type_raw
+        };
 
         let clip_path = resolve_model_path("text_encoders", clip_name);
 
@@ -1467,9 +1641,28 @@ fn register_clip_loader(registry: &mut NodeRegistry) {
                     clip_config.insert("t5xxl_path".to_string(), json!(clip_path));
                 }
                 _ => {
-                    clip_config.insert("clip_l_path".to_string(), json!(clip_path));
+                    tracing::warn!(
+                        "CLIPLoader: unknown type '{}', inferring from filename '{}'",
+                        clip_type_str, clip_name
+                    );
+                    let lower = clip_name.to_lowercase();
+                    if lower.contains("t5") {
+                        clip_config.insert("t5xxl_path".to_string(), json!(clip_path));
+                    } else if lower.contains("clip_g") {
+                        clip_config.insert("clip_g_path".to_string(), json!(clip_path));
+                    } else {
+                        clip_config.insert("clip_l_path".to_string(), json!(clip_path));
+                    }
                 }
             }
+
+            tracing::info!(
+                "CLIPLoader: loaded '{}' with type '{}' -> clip_l={:?}, clip_g={:?}, t5xxl={:?}",
+                clip_name, clip_type_str,
+                clip_config.get("clip_l_path"),
+                clip_config.get("clip_g_path"),
+                clip_config.get("t5xxl_path")
+            );
 
             Ok(vec![json!(clip_config)])
         })
@@ -1666,6 +1859,12 @@ fn register_wan_video_sampler(registry: &mut NodeRegistry) {
         let supports_vid_gen = backend.supports_video_generation();
 
         Box::pin(async move {
+            if !supports_vid_gen {
+                tracing::warn!(
+                    "WanVideoSampler: backend does not support video generation, skipping inference. \
+                     Check that sd-cli or local inference backend is properly configured."
+                );
+            }
             if supports_vid_gen {
                 let prompt_text = positive.get("text")
                     .and_then(|v| v.as_str())
@@ -1716,6 +1915,49 @@ fn register_wan_video_sampler(registry: &mut NodeRegistry) {
                     }
                 }
 
+                let needs_clip_auto_detect = model_config.clip_l_path.is_none()
+                    || model_config.clip_g_path.is_none()
+                    || model_config.t5xxl_path.is_none();
+                let needs_vae_auto_detect = model_config.vae_path.is_none();
+                if needs_clip_auto_detect || needs_vae_auto_detect {
+                    let model_type_str = model.get("model_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("wan");
+                    let detected_type = match model_type_str {
+                        "sd3" => ModelType::SD3,
+                        "flux" => ModelType::Flux,
+                        "sdxl" => ModelType::SDXL,
+                        "sd15" => ModelType::SD15,
+                        "wan" => ModelType::Wan,
+                        _ => ModelType::Wan,
+                    };
+
+                    if needs_clip_auto_detect {
+                        let (clip_l, clip_g, t5xxl) = auto_detect_text_encoders(detected_type);
+                        if model_config.clip_l_path.is_none() {
+                            if let Some(path) = clip_l {
+                                model_config = model_config.with_clip_l(path);
+                            }
+                        }
+                        if model_config.clip_g_path.is_none() {
+                            if let Some(path) = clip_g {
+                                model_config = model_config.with_clip_g(path);
+                            }
+                        }
+                        if model_config.t5xxl_path.is_none() {
+                            if let Some(path) = t5xxl {
+                                model_config = model_config.with_t5xxl(path);
+                            }
+                        }
+                    }
+
+                    if needs_vae_auto_detect {
+                        if let Some(path) = auto_detect_vae(detected_type) {
+                            model_config = model_config.with_vae(path);
+                        }
+                    }
+                }
+
                 let sample_method = parse_sample_method(
                     sampler_name.as_str().unwrap_or("euler")
                 );
@@ -1738,6 +1980,17 @@ fn register_wan_video_sampler(registry: &mut NodeRegistry) {
                 video_params.sample_params.sample_method = sample_method;
                 video_params.sample_params.scheduler = scheduler_type;
                 video_params.sample_params.flow_shift = flow_shift.map(|v| v as f32);
+
+                if video_params.model_config.t5xxl_path.is_none() {
+                    tracing::error!(
+                        "WanVideoSampler: Wan model requires t5xxl text encoder but it is missing. \
+                         Please download it to models/text_encoders/ directory."
+                    );
+                    return Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: "Wan model requires t5xxl text encoder but it is missing.".to_string(),
+                    });
+                }
 
                 match backend.generate_video(video_params) {
                     Ok(video) => {
