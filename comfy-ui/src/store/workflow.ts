@@ -51,6 +51,7 @@ interface WorkflowState {
   clientId: string;
 
   outputImages: Record<string, OutputImage[]>;
+  outputAudios: Record<string, OutputImage[]>;
 
   validationErrors: ValidationError[];
 
@@ -77,6 +78,7 @@ interface WorkflowState {
   setProgress: (value: number, max: number) => void;
   clearProgress: () => void;
   setOutputImages: (nodeId: string, images: OutputImage[]) => void;
+  setOutputAudios: (nodeId: string, audios: OutputImage[]) => void;
 
   getPrompt: () => Record<string, unknown>;
   clearWorkflow: () => void;
@@ -109,6 +111,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   progress: null,
   clientId: crypto.randomUUID(),
   outputImages: {},
+  outputAudios: {},
   validationErrors: [],
 
   setNodes: (nodes) => set({ nodes }),
@@ -340,6 +343,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setOutputImages: (nodeId, images) => {
     const { outputImages } = get();
     set({ outputImages: { ...outputImages, [nodeId]: images } });
+  },
+
+  setOutputAudios: (nodeId, audios) => {
+    const { outputAudios } = get();
+    set({ outputAudios: { ...outputAudios, [nodeId]: audios } });
   },
 
   getPrompt: () => {

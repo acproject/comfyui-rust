@@ -65,6 +65,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const isImageNode = classType === 'LoadImage';
   const isSaveImageNode = classType === 'SaveImage';
   const isSaveVideoNode = classType === 'SaveVideo';
+  const isSaveAudioNode = classType === 'SaveAudio';
+  const isLoadAudioNode = classType === 'LoadAudio';
 
   const isPrimitive = (typeName: string) =>
     ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
@@ -76,6 +78,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
     if (isImageNode) y += 80;
     if (isSaveImageNode) y += 80;
     if (isSaveVideoNode) y += 80;
+    if (isSaveAudioNode) y += 60;
+    if (isLoadAudioNode) y += 60;
   }
 
   const inputHandleY: Record<string, number> = {};
@@ -233,6 +237,12 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           )}
           {(isSaveVideoNode) && (
             <VideoPreview nodeId={id} />
+          )}
+          {(isSaveAudioNode) && (
+            <AudioPreview nodeId={id} />
+          )}
+          {(isLoadAudioNode) && (
+            <AudioPreview nodeId={id} />
           )}
 
           <div style={{ padding: '2px 0' }}>
@@ -532,6 +542,63 @@ const VideoPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
 });
 
 VideoPreview.displayName = 'VideoPreview';
+
+const AudioPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
+  const outputAudios = useWorkflowStore((s) => s.outputAudios);
+  const audios = outputAudios[nodeId];
+
+  if (!audios || audios.length === 0) {
+    return (
+      <div style={{
+        padding: '4px 6px',
+        borderBottom: '1px solid #333',
+        height: 50,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#111',
+        borderRadius: 3,
+        margin: '4px 6px',
+      }}>
+        <span style={{ fontSize: 10, color: '#666' }}>Audio Preview</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      padding: '4px 6px',
+      borderBottom: '1px solid #333',
+    }}>
+      {audios.map((aud, i) => {
+        const url = `${window.location.origin}/view_audio?filename=${encodeURIComponent(aud.filename)}&subfolder=${encodeURIComponent(aud.subfolder || '')}`;
+        return (
+          <div key={i} style={{
+            background: '#1a1a2e',
+            borderRadius: 3,
+            padding: '4px 6px',
+            marginBottom: 2,
+          }}>
+            <div style={{ fontSize: 9, color: '#888', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {aud.filename}
+            </div>
+            <audio
+              src={url}
+              controls
+              style={{
+                width: '100%',
+                height: 28,
+                borderRadius: 2,
+              }}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+AudioPreview.displayName = 'AudioPreview';
 
 interface NodeInputFieldProps {
   nodeId: string;

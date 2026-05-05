@@ -12,6 +12,7 @@ export function useWebSocket() {
   const clearProgress = useWorkflowStore((s) => s.clearProgress);
   const setQueueInfo = useWorkflowStore((s) => s.setQueueInfo);
   const setOutputImages = useWorkflowStore((s) => s.setOutputImages);
+  const setOutputAudios = useWorkflowStore((s) => s.setOutputAudios);
 
   useEffect(() => {
     const ws = getWsClient();
@@ -81,6 +82,12 @@ export function useWebSocket() {
               const videos = (nodeOutput as { videos: Array<{ filename: string; subfolder: string; type: string }> }).videos;
               if (Array.isArray(videos)) {
                 setOutputImages(nodeId, videos);
+              }
+            }
+            if (nodeOutput && typeof nodeOutput === 'object' && 'audios' in nodeOutput) {
+              const audios = (nodeOutput as { audios: Array<{ filename: string; subfolder: string; type: string }> }).audios;
+              if (Array.isArray(audios)) {
+                setOutputAudios(nodeId, audios);
               }
             }
           }

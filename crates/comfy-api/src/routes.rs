@@ -210,6 +210,7 @@ pub async fn get_object_info(
         m.insert("style_model_name", "style_models");
         m.insert("image", "input_images");
         m.insert("llm_model_name", "llm");
+        m.insert("audio", "input_audio");
         m
     };
 
@@ -253,6 +254,10 @@ pub async fn get_object_info(
         "gif".into(), "mp4".into(), "webm".into(),
     ];
 
+    let audio_format_choices: Vec<String> = vec![
+        "wav".into(), "mp3".into(), "flac".into(), "ogg".into(),
+    ];
+
     let mut result = HashMap::new();
 
     for (class_type, class_def) in info {
@@ -285,7 +290,11 @@ pub async fn get_object_info(
                                             } else if input_name == "type" {
                                                 dual_clip_type_choices.clone()
                                             } else if input_name == "format" {
-                                                video_format_choices.clone()
+                                                if class_type == "SaveAudio" {
+                                                    audio_format_choices.clone()
+                                                } else {
+                                                    video_format_choices.clone()
+                                                }
                                             } else if input_name == "video" {
                                                 let input_dir = &state.input_dir;
                                                 let mut videos: Vec<String> = Vec::new();
@@ -301,6 +310,13 @@ pub async fn get_object_info(
                                                         collect_image_filenames(input_dir, input_dir, &mut images);
                                                     }
                                                     images
+                                                } else if model_type == "input_audio" {
+                                                    let input_dir = &state.input_dir;
+                                                    let mut audios: Vec<String> = Vec::new();
+                                                    if input_dir.exists() {
+                                                        collect_audio_filenames(input_dir, input_dir, &mut audios);
+                                                    }
+                                                    audios
                                                 } else {
                                                     model_cache.get(model_type).cloned().unwrap_or_default()
                                                 }
@@ -469,6 +485,37 @@ fn collect_video_filenames(
                     || lower.ends_with(".mov");
 
                 if is_video {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        results.push(rel.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_audio_filenames(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    results: &mut Vec<String>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_audio_filenames(&path, base, results);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                let is_audio = lower.ends_with(".wav")
+                    || lower.ends_with(".mp3")
+                    || lower.ends_with(".flac")
+                    || lower.ends_with(".ogg")
+                    || lower.ends_with(".aac")
+                    || lower.ends_with(".m4a")
+                    || lower.ends_with(".wma")
+                    || lower.ends_with(".opus");
+
+                if is_audio {
                     if let Ok(rel) = path.strip_prefix(base) {
                         results.push(rel.to_string_lossy().to_string());
                     }
@@ -916,6 +963,69 @@ fn guess_video_content_type_from_path(path: &std::path::Path) -> String {
         "mov" => "video/quicktime",
         _ => "application/octet-stream",
     }.to_string()
+}
+
+fn guess_audio_content_type_from_path(path: &std::path::Path) -> String {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "ogg" => "audio/ogg",
+        "aac" => "audio/aac",
+        "m4a" => "audio/mp4",
+        "wma" => "audio/x-ms-wma",
+        "opus" => "audio/opus",
+        _ => "application/octet-stream",
+    }.to_string()
+}
+
+pub async fn get_view_audio(
+    State(state): State<AppState>,
+    Query(query): Query<ImageQuery>,
+) -> Result<Response, ApiError> {
+    let subfolder = query.subfolder.unwrap_or_default();
+    let filename = query.filename.unwrap_or_default();
+
+    if filename.is_empty() {
+        return Err(ApiError::BadRequest("filename is required".to_string()));
+    }
+
+    let path = if subfolder.is_empty() {
+        state.images.output_dir().join(&filename)
+    } else {
+        state.images.output_dir().join(&subfolder).join(&filename)
+    };
+
+    if !path.exists() {
+        let input_path = if subfolder.is_empty() {
+            state.input_dir.join(&filename)
+        } else {
+            state.input_dir.join(&subfolder).join(&filename)
+        };
+        if input_path.exists() {
+            let data = std::fs::read(&input_path).map_err(|e| ApiError::Internal(e.to_string()))?;
+            let content_type = guess_audio_content_type_from_path(&input_path);
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, &content_type)
+                .header(header::CACHE_CONTROL, "public, max-age=31536000")
+                .header(header::ACCEPT_RANGES, "bytes")
+                .body(Body::from(data))
+                .map_err(|e| ApiError::Internal(e.to_string()));
+        }
+        return Err(ApiError::NotFound(format!("Audio not found: {}", filename)));
+    }
+
+    let data = std::fs::read(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let content_type = guess_audio_content_type_from_path(&path);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, &content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000")
+        .header(header::ACCEPT_RANGES, "bytes")
+        .body(Body::from(data))
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 pub async fn get_view_video(

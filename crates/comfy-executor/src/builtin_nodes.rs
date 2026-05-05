@@ -143,6 +143,9 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_llm_text_gen_remote(registry);
     register_save_video(registry);
     register_load_video(registry);
+    register_load_audio(registry);
+    register_save_audio(registry);
+    register_audio_to_llm(registry);
 
     #[cfg(feature = "controlnet")]
     crate::controlnet::register_controlnet_nodes(registry);
@@ -980,6 +983,369 @@ fn register_ksampler(registry: &mut NodeRegistry) {
     }));
 }
 
+fn register_load_audio(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LoadAudio".to_string(),
+        display_name: "Load Audio".to_string(),
+        category: "audio".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("audio".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Audio],
+        output_names: vec!["AUDIO".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, node_id| {
+        let audio_name = node.inputs.get("audio")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let input_dir = std::env::var("COMFY_INPUT_DIR")
+            .unwrap_or_else(|_| "input".to_string());
+        let audio_path = std::path::Path::new(&input_dir).join(audio_name);
+
+        let audio_path_str = audio_path.to_string_lossy().to_string();
+        let filename = audio_name.to_string();
+
+        Box::pin(async move {
+            if !std::path::Path::new(&audio_path_str).exists() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("Audio file not found: {}", audio_path_str),
+                });
+            }
+
+            let ext = std::path::Path::new(&filename)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            let duration_secs = get_audio_duration(&audio_path_str);
+
+            Ok(vec![json!({
+                "type": "audio",
+                "path": audio_path_str,
+                "filename": filename,
+                "format": ext,
+                "duration": duration_secs,
+            })])
+        })
+    }));
+}
+
+fn register_save_audio(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "SaveAudio".to_string(),
+        display_name: "Save Audio".to_string(),
+        category: "audio".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("audio".to_string(), InputTypeSpec {
+                    type_name: "AUDIO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("filename_prefix".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("format".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Audio],
+        output_names: vec!["AUDIO".to_string()],
+        output_is_list: vec![false],
+        is_output_node: true,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "save".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, node, node_id| {
+        let audio_val = ctx.resolve_input(node_id, "audio")
+            .unwrap_or_else(|_| json!(null));
+        let prefix = node.inputs.get("filename_prefix")
+            .and_then(|v| v.as_str())
+            .unwrap_or("audio");
+        let format = node.inputs.get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("wav");
+
+        let output_dir = std::env::var("COMFY_OUTPUT_DIR")
+            .unwrap_or_else(|_| "output".to_string());
+        let output_dir_path = std::path::PathBuf::from(&output_dir);
+        if !output_dir_path.exists() {
+            let _ = std::fs::create_dir_all(&output_dir_path);
+        }
+
+        Box::pin(async move {
+            let src_path = audio_val.get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if src_path.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "No audio input provided".to_string(),
+                });
+            }
+
+            let ext = match format {
+                "mp3" => "mp3",
+                "flac" => "flac",
+                "ogg" => "ogg",
+                _ => "wav",
+            };
+
+            let filename = format!("{}_{}.{}", prefix, chrono::Utc::now().format("%Y%m%d_%H%M%S"), ext);
+            let dest_path = output_dir_path.join(&filename);
+
+            if ext == "wav" {
+                std::fs::copy(src_path, &dest_path)
+                    .map_err(|e| ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("Failed to save audio: {}", e),
+                    })?;
+            } else if is_ffmpeg_available() {
+                let status = tokio::process::Command::new("ffmpeg")
+                    .arg("-y")
+                    .arg("-i").arg(src_path)
+                    .arg(&dest_path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await
+                    .map_err(|e| ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("Failed to run ffmpeg: {}", e),
+                    })?;
+
+                if !status.success() {
+                    return Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: "ffmpeg conversion failed".to_string(),
+                    });
+                }
+            } else {
+                std::fs::copy(src_path, &dest_path)
+                    .map_err(|e| ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("FFmpeg not available, failed to copy audio: {}", e),
+                    })?;
+            }
+
+            Ok(vec![json!({
+                "type": "audio",
+                "path": dest_path.to_string_lossy().to_string(),
+                "filename": filename,
+                "format": ext,
+                "audios": [{
+                    "filename": filename,
+                    "subfolder": "",
+                    "type": "output",
+                }],
+            })])
+        })
+    }));
+}
+
+fn register_audio_to_llm(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "AudioToLLM".to_string(),
+        display_name: "Audio to LLM".to_string(),
+        category: "audio".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("audio".to_string(), InputTypeSpec {
+                    type_name: "AUDIO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("llm".to_string(), InputTypeSpec {
+                    type_name: "LLM".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("max_tokens".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("temperature".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::String],
+        output_names: vec!["STRING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "process".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, node, node_id| {
+        let audio = ctx.resolve_input(node_id, "audio")
+            .unwrap_or_else(|_| json!(null));
+        let llm = ctx.resolve_input(node_id, "llm")
+            .unwrap_or_else(|_| json!(null));
+        let prompt = ctx.resolve_input(node_id, "prompt")
+            .unwrap_or_else(|_| json!(""));
+        let max_tokens = node.inputs.get("max_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(512);
+        let temperature = node.inputs.get("temperature")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.7);
+
+        let llm_config = ctx.get_extra_data("llm_config")
+            .cloned()
+            .unwrap_or(json!({
+                "mode": "local",
+                "cli_path": "/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli",
+            }));
+
+        let model_path = llm.get("model_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let audio_path = audio.get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let prompt_text = prompt.as_str().unwrap_or("").to_string();
+
+        Box::pin(async move {
+            if audio_path.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "No audio input provided".to_string(),
+                });
+            }
+
+            if model_path.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "No LLM model loaded".to_string(),
+                });
+            }
+
+            let cli_path = llm_config.get("cli_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli")
+                .to_string();
+
+            let mut cmd = tokio::process::Command::new(&cli_path);
+            cmd.arg("-m").arg(&model_path)
+                .arg("--audio").arg(&audio_path)
+                .arg("-p").arg(&prompt_text)
+                .arg("--n-predict").arg(max_tokens.to_string())
+                .arg("--temp").arg(temperature.to_string())
+                .arg("--no-display-prompt")
+                .arg("--log-disable")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+
+            if let Some(mmproj) = llm.get("mmproj_path").and_then(|v| v.as_str()) {
+                if !mmproj.is_empty() {
+                    cmd.arg("--mmproj").arg(mmproj);
+                }
+            }
+
+            if let Some(extra_args) = llm_config.get("extra_args").and_then(|v| v.as_str()) {
+                for arg in extra_args.split_whitespace() {
+                    cmd.arg(arg);
+                }
+            }
+
+            match cmd.output().await {
+                Ok(output) => {
+                    if output.status.success() {
+                        let text = String::from_utf8_lossy(&output.stdout).to_string();
+                        Ok(vec![json!(text.trim())])
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        Err(ExecutorError::NodeExecutionFailed {
+                            node_id: node_id.to_string(),
+                            message: format!("llama-cli audio processing failed: {}", stderr),
+                        })
+                    }
+                }
+                Err(e) => {
+                    Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("Failed to execute llama-cli: {}", e),
+                    })
+                }
+            }
+        })
+    }));
+}
+
+fn get_audio_duration(path: &str) -> f64 {
+    if is_ffmpeg_available() {
+        let output = std::process::Command::new("ffprobe")
+            .arg("-v").arg("quiet")
+            .arg("-show_entries").arg("format=duration")
+            .arg("-of").arg("default=noprint_wrappers=1:nokey=1")
+            .arg(path)
+            .output();
+        if let Ok(out) = output {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if let Ok(d) = s.parse::<f64>() {
+                return d;
+            }
+        }
+    }
+    0.0
+}
+
+fn is_ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 fn register_ltx_loader(registry: &mut NodeRegistry) {
     let class_def = NodeClassDef {
         class_type: "LTXLoader".to_string(),

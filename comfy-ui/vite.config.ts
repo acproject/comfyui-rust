@@ -24,6 +24,7 @@ export default defineConfig({
       '/view': 'http://127.0.0.1:8188',
       '/view_input': 'http://127.0.0.1:8188',
       '/view_video': 'http://127.0.0.1:8188',
+      '/view_audio': 'http://127.0.0.1:8188',
       '/list_images': 'http://127.0.0.1:8188',
       '/upload/image': 'http://127.0.0.1:8188',
       '/upload/input_image': 'http://127.0.0.1:8188',
