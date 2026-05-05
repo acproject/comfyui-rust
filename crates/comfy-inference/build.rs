@@ -140,6 +140,30 @@ fn lib_exists(search_dirs: &[std::path::PathBuf], lib_name: &str) -> bool {
     search_dirs.iter().any(|d| d.join(&lib_file).exists())
 }
 
+fn detect_cuda_from_cmake_cache(search_dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    for dir in search_dirs {
+        let cache_path = dir.join("CMakeCache.txt");
+        if cache_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&cache_path) {
+                for line in content.lines() {
+                    if line.contains("CUDAToolkit_BIN_DIR") && line.contains("/usr/local/cuda-") {
+                        if let Some(eq_pos) = line.find('=') {
+                            let bin_dir = &line[eq_pos + 1..];
+                            let toolkit_dir = std::path::Path::new(bin_dir).parent()?;
+                            let lib_dir = toolkit_dir.join("lib64");
+                            if lib_dir.exists() {
+                                println!("cargo:warning=Detected CUDA toolkit from CMake cache: {}", toolkit_dir.display());
+                                return Some(lib_dir);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn emit_link_libs(search_dirs: &[std::path::PathBuf]) {
     let required_libs = ["stable-diffusion", "ggml", "ggml-base", "ggml-cpu"];
     let optional_libs = ["ggml-blas", "ggml-cuda"];
@@ -182,21 +206,31 @@ fn emit_link_libs(search_dirs: &[std::path::PathBuf]) {
         println!("cargo:rustc-link-lib=gomp");
 
         if has_cuda {
+            let mut cuda_lib_dirs: Vec<std::path::PathBuf> = Vec::new();
+
             if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
                 let cuda_lib_dir = std::path::Path::new(&cuda_path).join("lib64");
                 if cuda_lib_dir.exists() {
-                    println!("cargo:rustc-link-search=native={}", cuda_lib_dir.display());
+                    cuda_lib_dirs.push(cuda_lib_dir);
                 }
             } else {
+                if let Some(detected_dir) = detect_cuda_from_cmake_cache(search_dirs) {
+                    cuda_lib_dirs.push(detected_dir);
+                }
                 for cuda_dir in &[
                     "/usr/local/cuda/lib64",
                     "/usr/local/cuda/lib",
                     "/usr/lib/x86_64-linux-gnu",
                 ] {
-                    if std::path::Path::new(cuda_dir).exists() {
-                        println!("cargo:rustc-link-search=native={}", cuda_dir);
+                    let p = std::path::PathBuf::from(cuda_dir);
+                    if p.exists() && !cuda_lib_dirs.iter().any(|d| d == &p) {
+                        cuda_lib_dirs.push(p);
                     }
                 }
+            }
+
+            for dir in &cuda_lib_dirs {
+                println!("cargo:rustc-link-search=native={}", dir.display());
             }
             println!("cargo:rustc-link-lib=cudart");
             println!("cargo:rustc-link-lib=cublas");
