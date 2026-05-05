@@ -462,10 +462,10 @@ mod opencv_imp {
             .map_err(|e| format!("Failed to create Mat: {}", e))?;
         let reshaped = mat.reshape(3, image.height as i32)
             .map_err(|e| format!("Failed to reshape Mat: {}", e))?;
-        let mut rgb = opencv::core::Mat::default();
-        opencv::core::transpose(&reshaped, &mut rgb)
-            .map_err(|e| format!("Failed to transpose: {}", e))?;
-        Ok(rgb)
+        let mut bgr = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&reshaped, &mut bgr, opencv::imgproc::COLOR_RGB2BGR)
+            .map_err(|e| format!("RGB2BGR failed: {}", e))?;
+        Ok(bgr)
     }
 
     pub fn mat_to_sd_image(mat: &opencv::core::Mat) -> Result<SdImage, String> {
@@ -474,8 +474,23 @@ mod opencv_imp {
             .map_err(|e| format!("cvt_color failed: {}", e))?;
         let width = rgb.cols() as u32;
         let height = rgb.rows() as u32;
+        let channels = rgb.channels() as usize;
+        let row_bytes = width as usize * channels;
+        let step = rgb.step1(0).map_err(|e| format!("step1 failed: {}", e))? * rgb.elem_size1();
         let data = rgb.data_bytes().map_err(|e| format!("Failed to get Mat data: {}", e))?;
-        SdImage::rgb(width, height, data.to_vec())
+
+        let pixel_data = if step == row_bytes {
+            data.to_vec()
+        } else {
+            let mut pixels = Vec::with_capacity(height as usize * row_bytes);
+            for y in 0..height as usize {
+                let start = y * step;
+                pixels.extend_from_slice(&data[start..start + row_bytes]);
+            }
+            pixels
+        };
+
+        SdImage::rgb(width, height, pixel_data)
             .map_err(|e| e.to_string())
     }
 
