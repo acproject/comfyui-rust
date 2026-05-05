@@ -6,6 +6,7 @@ pub mod error;
 pub mod images;
 pub mod llm;
 pub mod model_downloads;
+pub mod model_knowledge;
 pub mod queue;
 pub mod routes;
 pub mod server;

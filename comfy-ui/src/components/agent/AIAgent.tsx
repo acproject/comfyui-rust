@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type FC } from 'react';
-import { Send, Bot, User, Settings, Trash2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Send, Bot, User, Settings, Trash2, CheckCircle, XCircle, Loader2, Workflow, Sparkles, BookOpen } from 'lucide-react';
 import { useWorkflowStore } from '@/store/workflow';
 import { api } from '@/api/client';
 import type {
@@ -9,6 +9,8 @@ import type {
   AgentChatResponse,
   AgentChatContext,
   AgentModelInfo,
+  WorkflowTemplate,
+  ModelKnowledgeEntry,
 } from '@/types/api';
 
 interface DisplayMessage {
@@ -39,6 +41,10 @@ const AIAgent: FC = () => {
   const [availableModels, setAvailableModels] = useState<AgentModelInfo[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelInputMode, setModelInputMode] = useState<'select' | 'manual'>('select');
+  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowTemplate[]>([]);
+  const [modelRecommendations, setModelRecommendations] = useState<ModelKnowledgeEntry[]>([]);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [showRecommendations, setShowRecommendations] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const addNode = useWorkflowStore((s) => s.addNode);
@@ -51,6 +57,7 @@ const AIAgent: FC = () => {
   const objectInfo = useWorkflowStore((s) => s.objectInfo);
   const clearWorkflow = useWorkflowStore((s) => s.clearWorkflow);
   const validateWorkflow = useWorkflowStore((s) => s.validateWorkflow);
+  const loadWorkflowFromJson = useWorkflowStore((s) => s.loadWorkflowFromJson);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -60,6 +67,15 @@ const AIAgent: FC = () => {
     api.getAgentConfig().then((cfg) => {
       setAgentConfig(cfg);
       setConfigForm(cfg);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    api.getWorkflowTemplates().then((res) => {
+      setWorkflowTemplates(res.templates);
+    }).catch(() => {});
+    api.getModelKnowledge().then((res) => {
+      setModelRecommendations(res.models);
     }).catch(() => {});
   }, []);
 
@@ -107,6 +123,25 @@ const AIAgent: FC = () => {
           updateNodeInput(p.nodeId, p.inputName, p.value);
           return { success: true, message: `Set ${p.nodeId}.${p.inputName} = ${JSON.stringify(p.value)}` };
         }
+        case 'load_workflow_template': {
+          const p = action.payload as { templateId: string };
+          if (!p.templateId) return { success: false, message: 'Missing templateId' };
+          const template = workflowTemplates.find((t) => t.id === p.templateId);
+          if (!template) {
+            api.getWorkflowTemplate(p.templateId).then((t) => {
+              const workflow = templateToWorkflow(t);
+              loadWorkflowFromJson(workflow);
+            }).catch(() => {});
+            return { success: true, message: `Loading template: ${p.templateId}` };
+          }
+          const workflow = templateToWorkflow(template);
+          loadWorkflowFromJson(workflow);
+          return { success: true, message: `Loaded template: ${template.name}` };
+        }
+        case 'recommend_model': {
+          const p = action.payload as { modelName: string; reason?: string };
+          return { success: true, message: `Recommended model: ${p.modelName}${p.reason ? ` — ${p.reason}` : ''}` };
+        }
         case 'run_workflow': {
           const prompt = getPrompt();
           api.submitPrompt({
@@ -128,7 +163,7 @@ const AIAgent: FC = () => {
           return { success: false, message: `Unknown action: ${(action as AgentAction & { type: string }).type}` };
       }
     },
-    [addNode, connectNodes, updateNodeInput, getPrompt, clientId, nodes, objectInfo, validateWorkflow, clearWorkflow],
+    [addNode, connectNodes, updateNodeInput, getPrompt, clientId, nodes, objectInfo, validateWorkflow, clearWorkflow, loadWorkflowFromJson, workflowTemplates],
   );
 
   const stripActionBlocks = (text: string): string => {
@@ -598,6 +633,36 @@ const AIAgent: FC = () => {
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
           <button
+            onClick={() => setShowTemplates(!showTemplates)}
+            title="Workflow templates"
+            style={{
+              background: showTemplates ? '#5a6abf' : 'transparent',
+              border: 'none',
+              color: showTemplates ? '#fff' : '#718096',
+              cursor: 'pointer',
+              padding: 2,
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <Workflow size={14} />
+          </button>
+          <button
+            onClick={() => setShowRecommendations(!showRecommendations)}
+            title="Model recommendations"
+            style={{
+              background: showRecommendations ? '#5a6abf' : 'transparent',
+              border: 'none',
+              color: showRecommendations ? '#fff' : '#718096',
+              cursor: 'pointer',
+              padding: 2,
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <Sparkles size={14} />
+          </button>
+          <button
             onClick={handleClearChat}
             title="Clear chat"
             style={{
@@ -643,10 +708,66 @@ const AIAgent: FC = () => {
               <div style={{ marginBottom: 4, color: '#718096', fontWeight: 600 }}>Examples:</div>
               <div style={{ padding: '2px 0' }}>&#8226; &quot;Create a txt2img workflow&quot;</div>
               <div style={{ padding: '2px 0' }}>&#8226; &quot;Add a KSampler node&quot;</div>
+              <div style={{ padding: '2px 0' }}>&#8226; &quot;Recommend an anime model&quot;</div>
               <div style={{ padding: '2px 0' }}>&#8226; &quot;Run the current workflow&quot;</div>
               <div style={{ padding: '2px 0' }}>&#8226; &quot;Validate my workflow&quot;</div>
-              <div style={{ padding: '2px 0' }}>&#8226; &quot;Clear the workflow&quot;</div>
             </div>
+
+            {workflowTemplates.length > 0 && (
+              <div style={{ marginTop: 12, textAlign: 'left' }}>
+                <div style={{ marginBottom: 6, color: '#718096', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Workflow size={12} /> Quick Templates
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {workflowTemplates.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        const workflow = templateToWorkflow(t);
+                        loadWorkflowFromJson(workflow);
+                      }}
+                      style={{
+                        background: '#2d3748',
+                        border: '1px solid #4a5568',
+                        borderRadius: 4,
+                        color: '#a0aec0',
+                        padding: '3px 8px',
+                        fontSize: 10,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {t.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {modelRecommendations.length > 0 && (
+              <div style={{ marginTop: 12, textAlign: 'left' }}>
+                <div style={{ marginBottom: 6, color: '#718096', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Sparkles size={12} /> Popular Models
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {modelRecommendations.slice(0, 5).map((m) => (
+                    <div
+                      key={m.name}
+                      style={{
+                        background: '#2d3748',
+                        border: '1px solid #4a5568',
+                        borderRadius: 4,
+                        padding: '4px 8px',
+                        fontSize: 10,
+                        color: '#a0aec0',
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, color: '#e2e8f0' }}>{m.name}</div>
+                      <div style={{ fontSize: 9, color: '#718096' }}>{m.description}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -726,6 +847,87 @@ const AIAgent: FC = () => {
         <div ref={messagesEndRef} />
       </div>
 
+      {showTemplates && workflowTemplates.length > 0 && (
+        <div style={{
+          maxHeight: 200,
+          overflowY: 'auto',
+          padding: 8,
+          borderTop: '1px solid #2d3748',
+          borderBottom: '1px solid #2d3748',
+          background: '#1e2a3a',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#718096', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <BookOpen size={11} /> Workflow Templates
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {workflowTemplates.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => {
+                  const workflow = templateToWorkflow(t);
+                  loadWorkflowFromJson(workflow);
+                  setShowTemplates(false);
+                }}
+                style={{
+                  background: '#2d3748',
+                  border: '1px solid #4a5568',
+                  borderRadius: 4,
+                  color: '#e2e8f0',
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  width: '100%',
+                }}
+              >
+                <div style={{ fontWeight: 600 }}>{t.name}</div>
+                <div style={{ fontSize: 9, color: '#718096', marginTop: 2 }}>{t.description}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showRecommendations && modelRecommendations.length > 0 && (
+        <div style={{
+          maxHeight: 200,
+          overflowY: 'auto',
+          padding: 8,
+          borderTop: '1px solid #2d3748',
+          borderBottom: '1px solid #2d3748',
+          background: '#1e2a3a',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#718096', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Sparkles size={11} /> Model Recommendations
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {modelRecommendations.map((m) => (
+              <div
+                key={m.name}
+                style={{
+                  background: '#2d3748',
+                  border: '1px solid #4a5568',
+                  borderRadius: 4,
+                  padding: '6px 10px',
+                  fontSize: 11,
+                }}
+              >
+                <div style={{ fontWeight: 600, color: '#e2e8f0' }}>{m.name}</div>
+                <div style={{ fontSize: 9, color: '#718096', marginTop: 2 }}>{m.description}</div>
+                <div style={{ fontSize: 9, color: '#5a6abf', marginTop: 2 }}>
+                  {m.base_model} · steps={m.recommended_settings.steps} · cfg={m.recommended_settings.cfg} · {m.recommended_settings.resolution}
+                </div>
+                {m.trigger_tokens.length > 0 && (
+                  <div style={{ fontSize: 9, color: '#d69e2e', marginTop: 1 }}>
+                    Triggers: {m.trigger_tokens.join(', ')}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ padding: 8, borderTop: '1px solid #2d3748' }}>
         <div
           style={{
@@ -780,6 +982,45 @@ const AIAgent: FC = () => {
     </div>
   );
 };
+
+function templateToWorkflow(template: WorkflowTemplate): Record<string, unknown> {
+  const workflowNodes: Record<string, unknown> = {};
+  for (const node of template.nodes) {
+    workflowNodes[node.id] = {
+      class_type: node.class_type,
+      inputs: node.inputs,
+      _meta: { title: node.title },
+    };
+  }
+  const workflowLinks = template.connections.map((conn, idx) => [
+    idx + 1,
+    parseInt(conn.source),
+    conn.source_handle,
+    parseInt(conn.target),
+    conn.target_handle,
+  ]);
+  return {
+    last_node_id: String(template.nodes.length),
+    last_link_id: String(template.connections.length),
+    nodes: template.nodes.map((n) => ({
+      id: parseInt(n.id),
+      type: n.class_type,
+      pos: [n.x, n.y],
+      size: { 0: 220, 1: 100 },
+      flags: {},
+      order: parseInt(n.id),
+      mode: 0,
+      properties: {},
+      widgets_values: [],
+      title: n.title,
+    })),
+    links: workflowLinks,
+    groups: [],
+    config: {},
+    extra: {},
+    version: 0.4,
+  };
+}
 
 function parseActions(text: string): AgentAction[] {
   const actions: AgentAction[] = [];
@@ -972,6 +1213,11 @@ All nodes and connections have been removed.`;
 - "Create a txt2img workflow" - Build a text-to-image pipeline
 - "Create an img2img workflow" - Build an image-to-image pipeline
 - "Add a KSampler node" - Add specific nodes
+- "Load template txt2img_sd15" - Load a workflow template
+
+**Model Recommendations:**
+- "Recommend an anime model" - Get model suggestions
+- "What model should I use for realistic images?" - Style-based recommendations
 
 **Workflow Execution:**
 - "Run the current workflow" - Submit to queue
@@ -981,7 +1227,7 @@ All nodes and connections have been removed.`;
 **Node Types Available:**
 - CheckpointLoaderSimple, CLIPTextEncode, KSampler
 - VAEDecode, VAEEncode, EmptyLatentImage
-- SaveImage, LoadImage, and more...
+- SaveImage, LoadImage, LoraLoader, and more...
 
 Enable LLM in settings for more intelligent responses!`;
   }

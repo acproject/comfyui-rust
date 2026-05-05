@@ -278,7 +278,7 @@ export interface AgentChatRequest {
 }
 
 export interface AgentAction {
-  type: 'add_node' | 'connect' | 'set_param' | 'run_workflow' | 'validate_workflow' | 'clear_workflow';
+  type: 'add_node' | 'connect' | 'set_param' | 'load_workflow_template' | 'recommend_model' | 'run_workflow' | 'validate_workflow' | 'clear_workflow';
   payload: Record<string, unknown>;
 }
 
@@ -367,4 +367,65 @@ export interface DownloadProgress {
 
 export interface DownloadProgressResponse {
   downloads: DownloadProgress[];
+}
+
+export interface WorkflowTemplateNode {
+  id: string;
+  class_type: string;
+  title: string;
+  x: number;
+  y: number;
+  inputs: Record<string, unknown>;
+}
+
+export interface WorkflowTemplateConnection {
+  source: string;
+  source_handle: string;
+  target: string;
+  target_handle: string;
+}
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  nodes: WorkflowTemplateNode[];
+  connections: WorkflowTemplateConnection[];
+}
+
+export interface WorkflowTemplatesResponse {
+  templates: WorkflowTemplate[];
+}
+
+export interface ModelKnowledgeRecommendedSettings {
+  steps: number;
+  cfg: number;
+  sampler: string;
+  scheduler: string;
+  resolution: string;
+  denoise: number;
+}
+
+export interface ModelKnowledgeEntry {
+  name: string;
+  category: string;
+  description: string;
+  trigger_tokens: string[];
+  recommended_settings: ModelKnowledgeRecommendedSettings;
+  base_model: string;
+  style_tags: string[];
+  negative_prompt_suggestion: string;
+}
+
+export interface ModelKnowledgeResponse {
+  models: ModelKnowledgeEntry[];
+}
+
+export interface ModelRecommendRequest {
+  style: string;
+}
+
+export interface ModelRecommendResponse {
+  recommendations: ModelKnowledgeEntry[];
 }

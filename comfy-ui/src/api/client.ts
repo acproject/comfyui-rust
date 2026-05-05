@@ -24,6 +24,12 @@ import type {
   DownloadModelRequest,
   DownloadModelResponse,
   DownloadProgressResponse,
+  WorkflowTemplatesResponse,
+  WorkflowTemplate,
+  ModelKnowledgeResponse,
+  ModelKnowledgeEntry,
+  ModelRecommendRequest,
+  ModelRecommendResponse,
 } from '@/types/api';
 
 const API_BASE = '';
@@ -331,6 +337,29 @@ export const api = {
   async clearDownloadProgress(): Promise<void> {
     await fetchJson<{ status: string }>('/model_downloads/progress', {
       method: 'DELETE',
+    });
+  },
+
+  async getWorkflowTemplates(): Promise<WorkflowTemplatesResponse> {
+    return fetchJson<WorkflowTemplatesResponse>('/workflow_templates');
+  },
+
+  async getWorkflowTemplate(templateId: string): Promise<WorkflowTemplate> {
+    return fetchJson<WorkflowTemplate>(`/workflow_templates/${encodeURIComponent(templateId)}`);
+  },
+
+  async getModelKnowledge(): Promise<ModelKnowledgeResponse> {
+    return fetchJson<ModelKnowledgeResponse>('/model_knowledge');
+  },
+
+  async getModelKnowledgeByName(modelName: string): Promise<ModelKnowledgeEntry> {
+    return fetchJson<ModelKnowledgeEntry>(`/model_knowledge/${encodeURIComponent(modelName)}`);
+  },
+
+  async recommendModels(request: ModelRecommendRequest): Promise<ModelRecommendResponse> {
+    return fetchJson<ModelRecommendResponse>('/model_knowledge/recommend', {
+      method: 'POST',
+      body: JSON.stringify(request),
     });
   },
 };

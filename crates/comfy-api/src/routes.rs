@@ -1552,3 +1552,66 @@ pub async fn delete_download_progress(
     tracker.remove_completed();
     Ok(Json(json!({ "status": "ok" })))
 }
+
+pub async fn get_workflow_templates() -> Result<impl IntoResponse, ApiError> {
+    let templates = crate::model_knowledge::get_workflow_templates();
+    Ok(Json(json!({ "templates": templates })))
+}
+
+pub async fn get_workflow_template_by_id(
+    Path(template_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    match crate::model_knowledge::get_template_by_id(&template_id) {
+        Some(template) => Ok(Json(json!(template))),
+        None => Err(ApiError::NotFound(format!(
+            "Workflow template not found: {}",
+            template_id
+        ))),
+    }
+}
+
+pub async fn get_model_knowledge() -> Result<impl IntoResponse, ApiError> {
+    let knowledge = crate::model_knowledge::get_model_knowledge_base();
+    Ok(Json(json!({ "models": knowledge })))
+}
+
+pub async fn get_model_knowledge_by_name(
+    Path(model_name): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let knowledge = crate::model_knowledge::get_model_knowledge_base();
+    let model = knowledge
+        .iter()
+        .find(|m| m.name.to_lowercase().replace(' ', "_") == model_name.to_lowercase().replace(' ', "_")
+            || m.name.to_lowercase() == model_name.to_lowercase());
+    match model {
+        Some(m) => Ok(Json(json!(m))),
+        None => Err(ApiError::NotFound(format!(
+            "Model knowledge not found: {}",
+            model_name
+        ))),
+    }
+}
+
+pub async fn recommend_models(
+    Json(body): Json<RecommendModelsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let knowledge = crate::model_knowledge::get_model_knowledge_base();
+    let style_lower = body.style.to_lowercase();
+
+    let recommendations: Vec<&crate::model_knowledge::ModelKnowledge> = knowledge
+        .iter()
+        .filter(|m| {
+            m.style_tags.iter().any(|t| t.to_lowercase().contains(&style_lower))
+                || m.name.to_lowercase().contains(&style_lower)
+                || m.description.to_lowercase().contains(&style_lower)
+                || format!("{:?}", m.category).to_lowercase().contains(&style_lower)
+        })
+        .collect();
+
+    Ok(Json(json!({ "recommendations": recommendations })))
+}
+
+#[derive(Deserialize)]
+pub struct RecommendModelsRequest {
+    pub style: String,
+}

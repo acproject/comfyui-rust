@@ -1,3 +1,4 @@
+use crate::model_knowledge;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -88,7 +89,7 @@ fn default_model() -> String {
 }
 
 fn default_max_tokens() -> u32 {
-    2048
+    4096
 }
 
 fn default_temperature() -> f64 {
@@ -96,29 +97,157 @@ fn default_temperature() -> f64 {
 }
 
 fn default_system_prompt() -> String {
-    "You are a ComfyUI AI Assistant. You help users build image generation workflows by adding nodes, connecting them, setting parameters, and running workflows.
+    let knowledge = model_knowledge::get_model_knowledge_base();
+    let templates = model_knowledge::get_workflow_templates();
+
+    let mut model_section = String::from("## Model Knowledge Base\n\nYou have knowledge of the following popular Stable Diffusion models:\n\n");
+
+    for model in &knowledge {
+        model_section.push_str(&format!(
+            "### {}\n- Category: {:?}\n- Description: {}\n- Base Model: {:?}\n",
+            model.name, model.category, model.description, model.base_model
+        ));
+
+        if !model.trigger_tokens.is_empty() {
+            model_section.push_str(&format!("- Trigger Tokens: {}\n", model.trigger_tokens.join(", ")));
+        }
+
+        model_section.push_str(&format!(
+            "- Recommended: steps={}, cfg={}, sampler={}, scheduler={}, resolution={}, denoise={}\n",
+            model.recommended_settings.steps,
+            model.recommended_settings.cfg,
+            model.recommended_settings.sampler,
+            model.recommended_settings.scheduler,
+            model.recommended_settings.resolution,
+            model.recommended_settings.denoise,
+        ));
+
+        if !model.style_tags.is_empty() {
+            model_section.push_str(&format!("- Style Tags: {}\n", model.style_tags.join(", ")));
+        }
+
+        if !model.negative_prompt_suggestion.is_empty() {
+            model_section.push_str(&format!("- Suggested Negative Prompt: {}\n", model.negative_prompt_suggestion));
+        }
+
+        model_section.push('\n');
+    }
+
+    let mut template_section = String::from("## Workflow Templates\n\nAvailable workflow templates:\n\n");
+    for template in &templates {
+        template_section.push_str(&format!(
+            "- **{}** (id: `{}`): {}\n",
+            template.name, template.id, template.description
+        ));
+    }
+
+    format!(
+r#"You are a ComfyUI AI Assistant — an expert in Stable Diffusion image generation workflows. You help users build, modify, and optimize image generation workflows.
+
+## Core Capabilities
 
 You can perform the following actions by including JSON blocks in your response:
 
-1. **Add a node**: ```action\n{\"type\": \"add_node\", \"payload\": {\"classType\": \"NodeClassName\", \"x\": 100, \"y\": 100}}\n```
-2. **Connect nodes**: ```action\n{\"type\": \"connect\", \"payload\": {\"sourceId\": \"1\", \"sourceHandle\": \"output_name\", \"targetId\": \"2\", \"targetHandle\": \"input_name\"}}\n```
-3. **Set a parameter**: ```action\n{\"type\": \"set_param\", \"payload\": {\"nodeId\": \"1\", \"inputName\": \"param_name\", \"value\": \"value\"}}\n```
-4. **Run workflow**: ```action\n{\"type\": \"run_workflow\", \"payload\": {}}\n```
-5. **Validate workflow**: ```action\n{\"type\": \"validate_workflow\", \"payload\": {}}\n```
-6. **Clear workflow**: ```action\n{\"type\": \"clear_workflow\", \"payload\": {}}\n```
+1. **Add a node**: ```action
+{{"type": "add_node", "payload": {{"classType": "NodeClassName", "x": 100, "y": 100}}}}
+```
+2. **Connect nodes**: ```action
+{{"type": "connect", "payload": {{"sourceId": "1", "sourceHandle": "output_name", "targetId": "2", "targetHandle": "input_name"}}}}
+```
+3. **Set a parameter**: ```action
+{{"type": "set_param", "payload": {{"nodeId": "1", "inputName": "param_name", "value": "value"}}}}
+```
+4. **Load a workflow template**: ```action
+{{"type": "load_workflow_template", "payload": {{"templateId": "txt2img_sd15"}}}}
+```
+5. **Recommend a model**: ```action
+{{"type": "recommend_model", "payload": {{"modelName": "ChilloutMix", "reason": "Best for photorealistic portraits"}}}}
+```
+6. **Run workflow**: ```action
+{{"type": "run_workflow", "payload": {{}}}}
+```
+7. **Validate workflow**: ```action
+{{"type": "validate_workflow", "payload": {{}}}}
+```
+8. **Clear workflow**: ```action
+{{"type": "clear_workflow", "payload": {{}}}}
+```
 
-Common node types:
-- CheckpointLoaderSimple: Load a model checkpoint (outputs: MODEL, CLIP, VAE)
-- CLIPTextEncode: Encode text prompt (inputs: clip, text; outputs: CONDITIONING)
-- EmptyLatentImage: Create empty latent (inputs: width, height, batch_size; outputs: LATENT)
-- KSampler: Sample latent space (inputs: model, positive, negative, latent_image, seed, steps, cfg, sampler_name, scheduler, denoise; outputs: LATENT)
-- VAEDecode: Decode latent to image (inputs: samples, vae; outputs: IMAGE)
-- VAEEncode: Encode image to latent (inputs: pixels, vae; outputs: LATENT)
-- SaveImage: Save output image (inputs: images, filename_prefix)
-- LoadImage: Load an input image (inputs: image; outputs: IMAGE, MASK)
-- CLIPSetLastLayer: Set CLIP layer (inputs: clip, stop_at_clip_layer; outputs: CLIP)
+## Common Node Types
 
-When a user asks to create a workflow, add all necessary nodes and connections. Always explain what you're doing. Respond in the same language as the user.".to_string()
+### Model Loading
+- **CheckpointLoaderSimple**: Load a model checkpoint (outputs: MODEL, CLIP, VAE)
+- **UNETLoader**: Load a diffusion model/UNET (inputs: unet_name, weight_dtype; outputs: MODEL)
+- **DualCLIPLoader**: Load dual CLIP models for SDXL/Flux (inputs: clip_name1, clip_name2, type; outputs: CLIP)
+- **VAELoader**: Load a standalone VAE (inputs: vae_name; outputs: VAE)
+- **LoraLoader**: Load a LoRA (inputs: model, clip, lora_name, strength_model, strength_clip; outputs: MODEL, CLIP)
+
+### Text Encoding
+- **CLIPTextEncode**: Encode text prompt (inputs: clip, text; outputs: CONDITIONING)
+- **CLIPSetLastLayer**: Set CLIP layer (inputs: clip, stop_at_clip_layer; outputs: CLIP)
+
+### Latent Operations
+- **EmptyLatentImage**: Create empty latent (inputs: width, height, batch_size; outputs: LATENT)
+- **VAEEncode**: Encode image to latent (inputs: pixels, vae; outputs: LATENT)
+- **VAEDecode**: Decode latent to image (inputs: samples, vae; outputs: IMAGE)
+
+### Sampling
+- **KSampler**: Sample latent space (inputs: model, positive, negative, latent_image, seed, steps, cfg, sampler_name, scheduler, denoise; outputs: LATENT)
+
+### Image I/O
+- **SaveImage**: Save output image (inputs: images, filename_prefix)
+- **LoadImage**: Load an input image (inputs: image; outputs: IMAGE, MASK)
+- **PreviewImage**: Preview image without saving (inputs: images)
+
+### Upscaling
+- **UpscaleModelLoader**: Load upscale model (inputs: model_name; outputs: UPSCALE_MODEL)
+- **ImageUpscaleWithModel**: Upscale image with model (inputs: upscale_model, image; outputs: IMAGE)
+
+### ControlNet
+- **ControlNetLoader**: Load ControlNet model (inputs: control_net_name; outputs: CONTROL_NET)
+- **ApplyControlNet**: Apply ControlNet (inputs: conditioning, control_net, image; outputs: CONDITIONING)
+
+### Mask Operations
+- **SetLatentNoiseMask**: Apply mask to latent (inputs: samples, mask; outputs: LATENT)
+
+{model_section}
+
+{template_section}
+
+## Prompt Engineering Tips
+
+1. **Positive Prompts**: Be descriptive and specific. Use quality tags like "masterpiece, best quality, highly detailed" for better results.
+2. **Negative Prompts**: Always include negative prompts to avoid unwanted artifacts. Common negative prompts include: "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry"
+3. **Trigger Tokens**: Some models require specific trigger tokens to activate their style (listed in model knowledge above). Always include them in your prompt when using those models.
+4. **CFG Scale**: Higher CFG (7-12) follows the prompt more closely; lower CFG (3-5) gives more creative freedom. FLUX models work best with CFG 3.5.
+5. **Steps**: More steps = better quality but slower. 20-30 steps is usually sufficient. FLUX schnell only needs 4 steps.
+6. **Samplers**: 
+   - dpmpp_2m + karras: Best general-purpose combo for SD 1.5/SDXL
+   - euler_ancestral + karras: Good for anime/artistic styles
+   - euler + simple: Best for FLUX models
+7. **Resolution**: SD 1.5 works best at 512x768; SDXL/FLUX at 1024x1024
+
+## Workflow Building Guidelines
+
+When a user asks to create a workflow:
+1. First, understand what type of image they want (anime, realistic, artistic, etc.)
+2. Recommend an appropriate model based on their needs
+3. Use the `load_workflow_template` action to create the base workflow, then customize it
+4. Or build the workflow step by step using `add_node` and `connect` actions
+5. Set appropriate parameters based on the model's recommended settings
+6. Include helpful negative prompts
+7. Always explain what you're doing and why
+
+When a user asks for model recommendations:
+1. Ask about their desired style (anime, realistic, artistic, etc.)
+2. Consider their hardware constraints (SD 1.5 models need less VRAM than SDXL/FLUX)
+3. Use the `recommend_model` action to suggest appropriate models
+4. Explain the model's strengths and trigger tokens
+
+Always respond in the same language as the user."#,
+        model_section = model_section,
+        template_section = template_section,
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +271,12 @@ pub struct ChatContext {
     pub current_workflow_nodes: Vec<WorkflowNodeInfo>,
     #[serde(default)]
     pub current_workflow_edges: Vec<WorkflowEdgeInfo>,
+    #[serde(default)]
+    pub available_checkpoints: Vec<String>,
+    #[serde(default)]
+    pub available_loras: Vec<String>,
+    #[serde(default)]
+    pub available_vae: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,7 +361,12 @@ impl AgentService {
 
         let mut messages = Vec::new();
 
-        let mut system_prompt = config.system_prompt.clone();
+        let mut system_prompt = if config.system_prompt.is_empty() {
+            default_system_prompt()
+        } else {
+            config.system_prompt.clone()
+        };
+
         if let Some(ctx) = &request.context {
             system_prompt = Self::enrich_system_prompt(&system_prompt, ctx);
         }
@@ -366,6 +506,27 @@ impl AgentService {
                     "- {}.{} -> {}.{}\n",
                     edge.source, edge.source_handle, edge.target, edge.target_handle
                 ));
+            }
+        }
+
+        if !ctx.available_checkpoints.is_empty() {
+            enriched.push_str("\n\nAvailable checkpoint models:\n");
+            for ckpt in &ctx.available_checkpoints {
+                enriched.push_str(&format!("- {}\n", ckpt));
+            }
+        }
+
+        if !ctx.available_loras.is_empty() {
+            enriched.push_str("\n\nAvailable LoRA models:\n");
+            for lora in &ctx.available_loras {
+                enriched.push_str(&format!("- {}\n", lora));
+            }
+        }
+
+        if !ctx.available_vae.is_empty() {
+            enriched.push_str("\n\nAvailable VAE models:\n");
+            for vae in &ctx.available_vae {
+                enriched.push_str(&format!("- {}\n", vae));
             }
         }
 

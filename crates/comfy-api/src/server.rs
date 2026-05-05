@@ -79,6 +79,11 @@ impl ComfyServer {
             .route("/model_downloads/download", axum::routing::post(routes::post_download_model))
             .route("/model_downloads/progress", axum::routing::get(routes::get_download_progress))
             .route("/model_downloads/progress", axum::routing::delete(routes::delete_download_progress))
+            .route("/workflow_templates", axum::routing::get(routes::get_workflow_templates))
+            .route("/workflow_templates/{template_id}", axum::routing::get(routes::get_workflow_template_by_id))
+            .route("/model_knowledge", axum::routing::get(routes::get_model_knowledge))
+            .route("/model_knowledge/{model_name}", axum::routing::get(routes::get_model_knowledge_by_name))
+            .route("/model_knowledge/recommend", axum::routing::post(routes::recommend_models))
             .with_state(self.state.clone());
 
         let upload_routes = Router::new()
