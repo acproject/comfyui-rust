@@ -1146,6 +1146,71 @@ This node loads a Stable Diffusion model checkpoint and outputs MODEL, CLIP, and
 This node saves the generated image to the output directory.`;
   }
 
+  if ((lower.includes('text to video') || lower.includes('text-to-video') || lower.includes('txt2vid') || lower.includes('文生视频') || lower.includes('生成视频')) && !lower.includes('image to video') && !lower.includes('图生视频')) {
+    return `I'll create a text-to-video workflow using Wan2.1!
+
+\`\`\`action
+{"type": "load_workflow_template", "payload": {"templateId": "wan_txt2vid"}}
+\`\`\`
+
+This workflow uses:
+1. **WanLoader** - Load the Wan2.1 video model
+2. **CLIPTextEncode** (positive/negative) - Encode prompts
+3. **WanVideoSampler** - Generate video latent (832x480, 33 frames)
+4. **VideoVAEDecode** - Decode video latent to video frames (NOT VAEDecode!)
+5. **SaveVideo** - Save the output video
+
+Important: Use **VideoVAEDecode** for video workflows, not VAEDecode which only handles single images.`;
+  }
+
+  if (lower.includes('image to video') || lower.includes('image-to-video') || lower.includes('img2vid') || lower.includes('图生视频')) {
+    return `I'll create an image-to-video workflow using Wan2.1!
+
+\`\`\`action
+{"type": "load_workflow_template", "payload": {"templateId": "wan_img2vid"}}
+\`\`\`
+
+This workflow uses:
+1. **WanLoader** - Load the Wan2.1 video model
+2. **LoadImage** - Load the reference image (first frame)
+3. **CLIPTextEncode** (positive/negative) - Encode prompts
+4. **WanVideoSampler** - Generate video from the init image
+5. **VideoVAEDecode** - Decode video latent to video frames
+6. **SaveVideo** - Save the output video
+
+The init image guides the video generation as the first frame.`;
+  }
+
+  if (lower.includes('add') && (lower.includes('video') && lower.includes('vae') && lower.includes('decode'))) {
+    return `Adding a VideoVAEDecode node for video workflows.
+
+\`\`\`action
+{"type": "add_node", "payload": {"classType": "VideoVAEDecode", "x": 800, "y": 200}}
+\`\`\`
+
+This node decodes video LATENT into VIDEO frames. Use this instead of VAEDecode for video workflows — VAEDecode only handles single images!`;
+  }
+
+  if (lower.includes('add') && (lower.includes('video') && lower.includes('vae') && lower.includes('encode'))) {
+    return `Adding a VideoVAEEncode node for video workflows.
+
+\`\`\`action
+{"type": "add_node", "payload": {"classType": "VideoVAEEncode", "x": 300, "y": 200}}
+\`\`\`
+
+This node encodes VIDEO frames into LATENT. Use this instead of VAEEncode for video workflows.`;
+  }
+
+  if (lower.includes('add') && (lower.includes('save') && lower.includes('video'))) {
+    return `Adding a SaveVideo node.
+
+\`\`\`action
+{"type": "add_node", "payload": {"classType": "SaveVideo", "x": 1100, "y": 200}}
+\`\`\`
+
+This node saves the generated video to the output directory. Supports mp4, gif, webm formats.`;
+  }
+
   if (lower.includes('add') && (lower.includes('clip') || lower.includes('encode') || lower.includes('prompt'))) {
     return `Adding a CLIPTextEncode node.
 
@@ -1238,6 +1303,7 @@ In local mode, I support these commands:
 - **Build workflows**: "Create a txt2img/img2img workflow"
 - **Add nodes**: "Add a [node type] node"
 - **Run/Validate/Clear**: "Run/Validate/Clear the workflow"
+- **Video generation**: "Create a text-to-video workflow"
 - **Help**: "What can you do?"
 
 For more intelligent and flexible responses, enable LLM in the Agent Settings (gear icon).`;

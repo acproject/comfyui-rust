@@ -115,6 +115,11 @@ pub enum IoType {
     Latent,
     Conditioning,
     ControlNet,
+    Noise,
+    Sampler,
+    Sigmas,
+    Guider,
+    LatentUpscaleModel,
     Combo(Vec<String>),
     Custom(String),
 }
@@ -138,6 +143,11 @@ impl IoType {
             IoType::Latent => "LATENT".to_string(),
             IoType::Conditioning => "CONDITIONING".to_string(),
             IoType::ControlNet => "CONTROL_NET".to_string(),
+            IoType::Noise => "NOISE".to_string(),
+            IoType::Sampler => "SAMPLER".to_string(),
+            IoType::Sigmas => "SIGMAS".to_string(),
+            IoType::Guider => "GUIDER".to_string(),
+            IoType::LatentUpscaleModel => "LATENT_UPSCALE_MODEL".to_string(),
             IoType::Combo(opts) => opts.join(","),
             IoType::Custom(s) => s.clone(),
         }
@@ -161,6 +171,11 @@ impl IoType {
             "LATENT" => IoType::Latent,
             "CONDITIONING" => IoType::Conditioning,
             "CONTROL_NET" => IoType::ControlNet,
+            "NOISE" => IoType::Noise,
+            "SAMPLER" => IoType::Sampler,
+            "SIGMAS" => IoType::Sigmas,
+            "GUIDER" => IoType::Guider,
+            "LATENT_UPSCALE_MODEL" => IoType::LatentUpscaleModel,
             other => IoType::Custom(other.to_string()),
         }
     }

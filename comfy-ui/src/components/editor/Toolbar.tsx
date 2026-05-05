@@ -208,6 +208,9 @@ const Toolbar: FC<ToolbarProps> = ({ showSidebar, showAgent, onToggleSidebar, on
         }
         if (workflow.nodes && Array.isArray(workflow.nodes)) {
           console.log('[Load] Workflow format: node-link format. Calling loadWorkflowFromJson...');
+          if (workflow.definitions?.subgraphs?.length > 0) {
+            console.log('[Load] Detected subgraph format, will flatten during load');
+          }
           loadWorkflowFromJson(workflow);
           console.log('[Load] loadWorkflowFromJson completed');
         } else if (workflow.last_node_id !== undefined || workflow.version !== undefined) {

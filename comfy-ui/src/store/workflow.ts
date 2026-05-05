@@ -11,6 +11,118 @@ import {
   type ExecutionOrderResult,
 } from '@/dag';
 
+interface SubgraphLink {
+  id: number;
+  origin_id: number;
+  origin_slot: number;
+  target_id: number;
+  target_slot: number;
+  type: string;
+}
+
+interface SubgraphInput {
+  id: string;
+  name: string;
+  type: string;
+  linkIds: number[];
+  label?: string;
+}
+
+interface SubgraphOutput {
+  id: string;
+  name: string;
+  type: string;
+  linkIds: number[];
+}
+
+interface Subgraph {
+  id: string;
+  name: string;
+  nodes: Array<Record<string, unknown>>;
+  links: SubgraphLink[];
+  groups: Array<Record<string, unknown>>;
+  inputs: SubgraphInput[];
+  outputs: SubgraphOutput[];
+}
+
+function flattenSubgraphWorkflow(workflow: Record<string, unknown>): {
+  nodes: Array<Record<string, unknown>>;
+  links: unknown[];
+} {
+  const topNodes = (workflow.nodes as Array<Record<string, unknown>>) || [];
+  const topLinks = (workflow.links as SubgraphLink[]) || [];
+  const definitions = workflow.definitions as { subgraphs: Subgraph[] } | undefined;
+  const subgraphs = definitions?.subgraphs || [];
+
+  const allNodes: Array<Record<string, unknown>> = [];
+  const allLinks: (SubgraphLink | unknown)[] = [];
+  const allGroups: Array<Record<string, unknown>> = [];
+
+  for (const node of topNodes) {
+    const nodeType = node.type as string;
+    const matchingSubgraph = subgraphs.find((sg) => sg.id === nodeType);
+
+    if (matchingSubgraph) {
+      const sg = matchingSubgraph;
+      const sgNodes = sg.nodes.filter((n) => n.type !== 'MarkdownNote');
+      allNodes.push(...sgNodes);
+      allLinks.push(...sg.links);
+      if (sg.groups) allGroups.push(...sg.groups);
+
+      for (const topLink of topLinks) {
+        if (topLink.target_id === node.id) {
+          const sgInput = sg.inputs[topLink.target_slot];
+          if (sgInput) {
+            for (const linkId of sgInput.linkIds) {
+              const sgLink = sg.links.find((l) => l.id === linkId);
+              if (sgLink) {
+                allLinks.push({
+                  id: topLink.id,
+                  origin_id: topLink.origin_id,
+                  origin_slot: topLink.origin_slot,
+                  target_id: sgLink.target_id,
+                  target_slot: sgLink.target_slot,
+                  type: topLink.type,
+                });
+              }
+            }
+          }
+        }
+        if (topLink.origin_id === node.id) {
+          const sgOutput = sg.outputs[topLink.origin_slot];
+          if (sgOutput) {
+            for (const linkId of sgOutput.linkIds) {
+              const sgLink = sg.links.find((l) => l.id === linkId);
+              if (sgLink) {
+                allLinks.push({
+                  id: topLink.id,
+                  origin_id: sgLink.origin_id,
+                  origin_slot: sgLink.origin_slot,
+                  target_id: topLink.target_id,
+                  target_slot: topLink.target_slot,
+                  type: topLink.type,
+                });
+              }
+            }
+          }
+        }
+      }
+    } else {
+      allNodes.push(node);
+    }
+  }
+
+  const seenLinkIds = new Set<number>();
+  const dedupedLinks = allLinks.filter((link) => {
+    const id = Array.isArray(link) ? link[0] : (link as SubgraphLink).id;
+    if (seenLinkIds.has(id)) return false;
+    seenLinkIds.add(id);
+    return true;
+  });
+
+  return { nodes: allNodes, links: dedupedLinks };
+}
+
 interface ComfyNodeData extends Record<string, unknown> {
   classType: string;
   title: string;
@@ -393,8 +505,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   loadWorkflowFromJson: (workflow) => {
     const { objectInfo } = get();
-    const workflowNodes = (workflow.nodes as Array<Record<string, unknown>>) || [];
-    const workflowLinks = workflow.links;
+
+    let workflowNodes = (workflow.nodes as Array<Record<string, unknown>>) || [];
+    let workflowLinks = workflow.links;
+
+    if ((workflow.definitions as Record<string, unknown>)?.subgraphs && Array.isArray((workflow.definitions as Record<string, unknown>).subgraphs) && ((workflow.definitions as Record<string, unknown>).subgraphs as unknown[]).length > 0) {
+      console.log('[loadWorkflowFromJson] Detected subgraph format, flattening...');
+      const flatResult = flattenSubgraphWorkflow(workflow);
+      workflowNodes = flatResult.nodes;
+      workflowLinks = flatResult.links;
+      console.log('[loadWorkflowFromJson] Flattened to', workflowNodes.length, 'nodes and', Array.isArray(workflowLinks) ? workflowLinks.length : 0, 'links');
+    }
 
     console.log('[loadWorkflowFromJson] Starting...');
     console.log('[loadWorkflowFromJson] objectInfo keys count:', Object.keys(objectInfo).length);

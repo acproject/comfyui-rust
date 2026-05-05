@@ -210,6 +210,52 @@ You can perform the following actions by including JSON blocks in your response:
 ### Mask Operations
 - **SetLatentNoiseMask**: Apply mask to latent (inputs: samples, mask; outputs: LATENT)
 
+### Video Generation
+- **WanLoader**: Load Wan video model (inputs: model_name; outputs: MODEL, CLIP, VAE)
+- **LTXLoader**: Load LTX-Video model (inputs: model_name; outputs: MODEL, CLIP, VAE)
+- **WanVideoSampler**: Sample video latent with Wan model (inputs: model, seed, steps, cfg, sampler_name, scheduler, positive, negative, width, height, video_frames, [init_image, end_image, flow_shift]; outputs: LATENT)
+- **LTXVideoSampler**: Sample video latent with LTX model (inputs: model, seed, steps, cfg, sampler_name, scheduler, positive, negative, width, height, video_frames, num_frames_per_seed, [init_image, flow_shift]; outputs: LATENT)
+- **VideoVAEDecode**: Decode video latent to video frames (inputs: samples, vae, [fps]; outputs: VIDEO) — Use this instead of VAEDecode for video workflows!
+- **VideoVAEEncode**: Encode video frames to latent (inputs: video, vae; outputs: LATENT) — Use this instead of VAEEncode for video workflows!
+- **SaveVideo**: Save output video (inputs: video, [filename_prefix, fps, format]; outputs: VIDEO)
+- **LoadVideo**: Load an input video (inputs: video, [fps]; outputs: VIDEO)
+
+### LTX-2.3 Video Generation
+- **LTXLoader**: Load LTX-Video model (inputs: model_name; outputs: MODEL, CLIP, VAE)
+- **LTXAVTextEncoderLoader**: Load LTX text encoder (inputs: text_encoder, ckpt_name; outputs: CLIP) — Use gemma_3_12B text encoder
+- **LTXVAudioVAELoader**: Load LTX Audio VAE (inputs: ckpt_name; outputs: Audio VAE)
+- **LTXVConditioning**: Apply LTXV conditioning with frame_rate (inputs: positive, negative, frame_rate; outputs: positive, negative)
+- **EmptyLTXVLatentVideo**: Create empty LTXV video latent (inputs: width, height, length, batch_size; outputs: LATENT)
+- **LTXVEmptyLatentAudio**: Create empty LTXV audio latent (inputs: audio_vae, frames_number, frame_rate, batch_size; outputs: LATENT)
+- **LTXVImgToVideoInplace**: Encode image into video latent (inputs: vae, image, latent, bypass; outputs: LATENT)
+- **LTXVPreprocess**: Preprocess image for LTXV (inputs: image, [strip_weight]; outputs: IMAGE)
+- **LTXVCropGuides**: Crop guides for LTXV (inputs: positive, negative, latent; outputs: positive, negative, latent)
+- **LTXVConcatAVLatent**: Concatenate video and audio latents (inputs: video_latent, audio_latent; outputs: LATENT)
+- **LTXVSeparateAVLatent**: Separate AV latent into video and audio (inputs: av_latent; outputs: video_latent, audio_latent)
+- **LTXVAudioVAEEncode**: Encode audio with LTXV Audio VAE (inputs: audio, audio_vae; outputs: LATENT)
+- **LTXVAudioVAEDecode**: Decode audio latent with LTXV Audio VAE (inputs: samples, audio_vae; outputs: AUDIO)
+- **LTXVLatentUpsampler**: Upscale LTXV latent (inputs: samples, upscale_model, vae; outputs: LATENT)
+- **LatentUpscaleModelLoader**: Load latent upscale model (inputs: model_name; outputs: LATENT_UPSCALE_MODEL)
+
+### Advanced Sampling
+- **RandomNoise**: Generate random noise (inputs: noise_seed, control_after_generate; outputs: NOISE)
+- **KSamplerSelect**: Select sampler (inputs: sampler_name; outputs: SAMPLER)
+- **ManualSigmas**: Provide manual sigma schedule (inputs: sigmas; outputs: SIGMAS)
+- **CFGGuider**: CFG guider (inputs: model, positive, negative, cfg; outputs: GUIDER)
+- **SamplerCustomAdvanced**: Advanced custom sampler (inputs: noise, guider, sampler, sigmas, latent_image; outputs: output, denoised_output)
+
+### Utility Nodes
+- **CreateVideo**: Create video from images with optional audio (inputs: images, fps, [audio]; outputs: VIDEO)
+- **VAEDecodeTiled**: Tiled VAE decode for large images/video (inputs: samples, vae, [tile_size, overlap, temporal_size, temporal_overlap]; outputs: IMAGE)
+- **ResizeImagesByLongerEdge**: Resize images by longer edge (inputs: images, longer_edge; outputs: IMAGE)
+- **ResizeImageMaskNode**: Resize image/mask to specific dimensions (inputs: input, resize_type.width, resize_type.height, [resize_type, crop, interpolation]; outputs: IMAGE)
+- **TrimAudioDuration**: Trim audio to specific duration (inputs: audio, start_index, duration; outputs: AUDIO)
+- **SetLatentNoiseMask**: Apply mask to latent (inputs: samples, mask; outputs: LATENT)
+- **SolidMask**: Create solid color mask (inputs: value, width, height; outputs: MASK)
+- **LoraLoaderModelOnly**: Load LoRA for model only (inputs: model, lora_name, strength_model; outputs: MODEL)
+- **PrimitiveInt/Float/Boolean/StringMultiline**: Primitive value nodes
+- **ComfyMathExpression**: Evaluate math expression (inputs: expression, [values.a, values.b, values.c]; outputs: FLOAT, INT)
+
 {model_section}
 
 {template_section}
@@ -226,6 +272,26 @@ You can perform the following actions by including JSON blocks in your response:
    - euler_ancestral + karras: Good for anime/artistic styles
    - euler + simple: Best for FLUX models
 7. **Resolution**: SD 1.5 works best at 512x768; SDXL/FLUX at 1024x1024
+
+## Video Generation Tips
+
+1. **Video VAE**: Always use **VideoVAEDecode** (not VAEDecode) for video workflows. VAEDecode only handles single images, while VideoVAEDecode handles video frame sequences.
+2. **Video VAE Encode**: Use **VideoVAEEncode** (not VAEEncode) when encoding video to latent for video-to-video workflows.
+3. **Wan2.1**: Best for text-to-video and image-to-video. Recommended: 832x480, 33 frames, steps=20, cfg=6.0, euler+discrete.
+4. **LTX-Video**: Good for fast text-to-video. Recommended: 768x512, 97 frames, steps=20, cfg=3.0, euler+normal.
+5. **LTX-Video 2.3**: Advanced video generation with audio support. Key differences from LTX-Video 1.x:
+   - Uses **SamplerCustomAdvanced** pipeline (RandomNoise → CFGGuider → KSamplerSelect → ManualSigmas → SamplerCustomAdvanced) instead of LTXVideoSampler
+   - Requires **LTXAVTextEncoderLoader** for gemma_3_12B text encoder (not just CLIP from LTXLoader)
+   - Uses **LTXVConditioning** to set frame_rate on conditioning
+   - Uses **LTXVPreprocess** to prepare images before encoding
+   - Uses **LTXVImgToVideoInplace** to inject image into video latent
+   - For audio-driven video: use **LTXVAudioVAELoader** + **LTXVAudioVAEEncode** + **LTXVConcatAVLatent**
+   - After sampling, use **LTXVSeparateAVLatent** to split video/audio, then **VAEDecodeTiled** for video and **LTXVAudioVAEDecode** for audio
+   - Use **CreateVideo** to combine video frames and audio into final video
+   - Recommended: 768x512, 97 frames, steps=20, cfg=1.0, euler+simple, frame_rate=25
+6. **Video Frames**: More frames = longer video but more VRAM. 33 frames ≈ 4 seconds at 8fps. 97 frames ≈ 4 seconds at 25fps.
+7. **FPS**: 8fps is common for Wan videos. 25fps is standard for LTX-2.3 videos.
+8. **LTX-2.3 Workflow Templates**: Use `ltx23_i2v` for image-to-video, `ltx23_ia2v` for image+audio-to-video.
 
 ## Workflow Building Guidelines
 

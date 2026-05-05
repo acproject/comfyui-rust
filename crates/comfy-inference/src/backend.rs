@@ -1,6 +1,7 @@
 use crate::error::{InferenceError, InferenceResult};
 use crate::image::{SdImage, SdVideo};
 use crate::params::*;
+use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -13,6 +14,10 @@ pub trait InferenceBackend: Send + Sync {
     fn generate_video(&self, params: VideoGenParams) -> InferenceResult<SdVideo>;
 
     fn upscale(&self, image: SdImage, params: UpscaleParams) -> InferenceResult<SdImage>;
+
+    fn decode_video_latent(&self, _latent: &Value, _params: &VideoGenParams) -> InferenceResult<SdVideo> {
+        Err(InferenceError::BackendNotAvailable("decode_video_latent not implemented".to_string()))
+    }
 
     fn get_capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
