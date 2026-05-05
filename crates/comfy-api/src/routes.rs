@@ -249,6 +249,10 @@ pub async fn get_object_info(
         "sdxl".into(), "flux".into(), "sd3".into(), "wan".into(),
     ];
 
+    let video_format_choices: Vec<String> = vec![
+        "gif".into(), "webp".into(),
+    ];
+
     let mut result = HashMap::new();
 
     for (class_type, class_def) in info {
@@ -280,6 +284,15 @@ pub async fn get_object_info(
                                                 mask_operation_choices.clone()
                                             } else if input_name == "type" {
                                                 dual_clip_type_choices.clone()
+                                            } else if input_name == "format" {
+                                                video_format_choices.clone()
+                                            } else if input_name == "video" {
+                                                let input_dir = &state.input_dir;
+                                                let mut videos: Vec<String> = Vec::new();
+                                                if input_dir.exists() {
+                                                    collect_video_filenames(input_dir, input_dir, &mut videos);
+                                                }
+                                                videos
                                             } else if let Some(&model_type) = input_to_model_type.get(input_name.as_str()) {
                                                 if model_type == "input_images" {
                                                     let input_dir = &state.input_dir;
@@ -430,6 +443,34 @@ fn scan_model_files(
                             "size": size,
                             "modified": modified,
                         }));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_video_filenames(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    results: &mut Vec<String>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_video_filenames(&path, base, results);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                let is_video = lower.ends_with(".gif")
+                    || lower.ends_with(".mp4")
+                    || lower.ends_with(".webm")
+                    || lower.ends_with(".avi")
+                    || lower.ends_with(".mov");
+
+                if is_video {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        results.push(rel.to_string_lossy().to_string());
                     }
                 }
             }
@@ -861,6 +902,64 @@ fn guess_content_type_from_path(path: &std::path::Path) -> String {
         "bmp" => "image/bmp",
         _ => "application/octet-stream",
     }.to_string()
+}
+
+fn guess_video_content_type_from_path(path: &std::path::Path) -> String {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "gif" => "image/gif",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        _ => "application/octet-stream",
+    }.to_string()
+}
+
+pub async fn get_view_video(
+    State(state): State<AppState>,
+    Query(query): Query<ImageQuery>,
+) -> Result<Response, ApiError> {
+    let subfolder = query.subfolder.unwrap_or_default();
+    let filename = query.filename.unwrap_or_default();
+
+    if filename.is_empty() {
+        return Err(ApiError::BadRequest("filename is required".to_string()));
+    }
+
+    let path = if subfolder.is_empty() {
+        state.images.output_dir().join(&filename)
+    } else {
+        state.images.output_dir().join(&subfolder).join(&filename)
+    };
+
+    if !path.exists() {
+        let input_path = if subfolder.is_empty() {
+            state.input_dir.join(&filename)
+        } else {
+            state.input_dir.join(&subfolder).join(&filename)
+        };
+        if input_path.exists() {
+            let data = std::fs::read(&input_path).map_err(|e| ApiError::Internal(e.to_string()))?;
+            let content_type = guess_video_content_type_from_path(&input_path);
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, &content_type)
+                .header(header::CACHE_CONTROL, "public, max-age=31536000")
+                .body(Body::from(data))
+                .map_err(|e| ApiError::Internal(e.to_string()));
+        }
+        return Err(ApiError::NotFound(format!("Video not found: {}", filename)));
+    }
+
+    let data = std::fs::read(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let content_type = guess_video_content_type_from_path(&path);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, &content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000")
+        .body(Body::from(data))
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 pub async fn get_image_list(

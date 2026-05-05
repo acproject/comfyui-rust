@@ -23,6 +23,7 @@ export default defineConfig({
       '/extensions': 'http://127.0.0.1:8188',
       '/view': 'http://127.0.0.1:8188',
       '/view_input': 'http://127.0.0.1:8188',
+      '/view_video': 'http://127.0.0.1:8188',
       '/list_images': 'http://127.0.0.1:8188',
       '/upload/image': 'http://127.0.0.1:8188',
       '/upload/input_image': 'http://127.0.0.1:8188',
@@ -32,6 +33,7 @@ export default defineConfig({
       '/config': 'http://127.0.0.1:8188',
       '/custom_nodes': 'http://127.0.0.1:8188',
       '/agent': 'http://127.0.0.1:8188',
+      '/llm': 'http://127.0.0.1:8188',
       '/model_manager': {
         target: 'http://127.0.0.1:8188',
         configure: (proxy) => {

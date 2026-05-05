@@ -141,6 +141,8 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_llm_loader(registry);
     register_llm_text_gen(registry);
     register_llm_text_gen_remote(registry);
+    register_save_video(registry);
+    register_load_video(registry);
 
     #[cfg(feature = "controlnet")]
     crate::controlnet::register_controlnet_nodes(registry);
@@ -1784,6 +1786,256 @@ fn register_save_image(registry: &mut NodeRegistry) {
     }));
 }
 
+fn register_save_video(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "SaveVideo".to_string(),
+        display_name: "Save Video".to_string(),
+        category: "video".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("filename_prefix".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("fps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("format".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video],
+        output_names: vec!["VIDEO".to_string()],
+        output_is_list: vec![false],
+        is_output_node: true,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "save".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, node, node_id| {
+        let video = ctx.resolve_input(node_id, "video")
+            .unwrap_or_else(|_| json!(null));
+        let filename_prefix = ctx.resolve_input(node_id, "filename_prefix")
+            .unwrap_or_else(|_| json!("ComfyUI"));
+        let fps = node.inputs.get("fps")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(8);
+        let format = node.inputs.get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("gif");
+
+        let output_dir = std::env::var("COMFY_OUTPUT_DIR")
+            .unwrap_or_else(|_| "output".to_string());
+
+        Box::pin(async move {
+            let prefix = filename_prefix.as_str().unwrap_or("ComfyUI");
+            let output_path = std::path::PathBuf::from(&output_dir);
+            std::fs::create_dir_all(&output_path).ok();
+
+            let frames = video.get("frames")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            if frames.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "No video frames to save".to_string(),
+                });
+            }
+
+            let sd_video = comfy_inference::SdVideo::new(
+                frames.iter()
+                    .filter_map(|f| serde_json::from_value::<comfy_inference::SdImage>(f.clone()).ok())
+                    .collect(),
+                fps as i32,
+            );
+
+            if sd_video.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "Failed to parse video frames".to_string(),
+                });
+            }
+
+            let ext = if format == "webp" { "webp" } else { "gif" };
+            let filename = format!("{}_{}.{}", prefix, chrono::Utc::now().format("%Y%m%d_%H%M%S"), ext);
+            let filepath = output_path.join(&filename);
+
+            match sd_video.to_gif_bytes() {
+                Ok(gif_bytes) => {
+                    match std::fs::write(&filepath, &gif_bytes) {
+                        Ok(_) => {
+                            tracing::info!("SaveVideo: saved {} frames to {}", sd_video.frame_count(), filepath.display());
+                            Ok(vec![json!({
+                                "type": "video",
+                                "videos": [{
+                                    "filename": filename,
+                                    "subfolder": "",
+                                    "type": "output",
+                                    "frame_count": sd_video.frame_count(),
+                                    "fps": fps,
+                                }]
+                            })])
+                        }
+                        Err(e) => {
+                            Err(ExecutorError::NodeExecutionFailed {
+                                node_id: node_id.to_string(),
+                                message: format!("Failed to write video file: {}", e),
+                            })
+                        }
+                    }
+                }
+                Err(e) => {
+                    Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("Failed to encode video: {}", e),
+                    })
+                }
+            }
+        })
+    }));
+}
+
+fn register_load_video(registry: &mut NodeRegistry) {
+    let video_choices = scan_input_videos();
+
+    let class_def = NodeClassDef {
+        class_type: "LoadVideo".to_string(),
+        display_name: "Load Video".to_string(),
+        category: "video".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("choices".to_string(), serde_json::Value::Array(
+                            video_choices.iter().map(|s| json!(s)).collect()
+                        ));
+                        e
+                    },
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("fps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video],
+        output_names: vec!["VIDEO".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let video_path = node.inputs.get("video")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let fps = node.inputs.get("fps")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(8);
+
+        let video_path = video_path.to_string();
+
+        Box::pin(async move {
+            if video_path.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: _node_id.to_string(),
+                    message: "No video file specified".to_string(),
+                });
+            }
+
+            let path = std::path::PathBuf::from(&video_path);
+            if !path.exists() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: _node_id.to_string(),
+                    message: format!("Video file not found: {}", video_path),
+                });
+            }
+
+            let ext = path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            if ext == "gif" {
+                let data = std::fs::read(&path).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: _node_id.to_string(),
+                    message: format!("Failed to read video file: {}", e),
+                })?;
+
+                let mut decoder = gif::DecodeOptions::new();
+                decoder.set_color_output(gif::ColorOutput::RGBA);
+                let mut reader = decoder.read_info(std::io::Cursor::new(data))
+                    .map_err(|e| ExecutorError::NodeExecutionFailed {
+                        node_id: _node_id.to_string(),
+                        message: format!("Failed to decode GIF: {}", e),
+                    })?;
+
+                let mut frames = Vec::new();
+                while let Ok(Some(frame)) = reader.read_next_frame() {
+                    let w = frame.width as u32;
+                    let h = frame.height as u32;
+                    let buf = frame.buffer.to_vec();
+                    if let Ok(img) = comfy_inference::SdImage::rgba(w, h, buf) {
+                        frames.push(img);
+                    }
+                }
+
+                let video = comfy_inference::SdVideo::new(frames, fps as i32);
+                let val = serde_json::to_value(&video).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: _node_id.to_string(),
+                    message: format!("Failed to serialize video: {}", e),
+                })?;
+
+                Ok(vec![json!({
+                    "type": "video",
+                    "videos": [{
+                        "filename": path.file_name().and_then(|n| n.to_str()).unwrap_or("video.gif"),
+                        "subfolder": "",
+                        "type": "input",
+                    }],
+                    "frames": val.get("frames").cloned().unwrap_or(json!([])),
+                    "fps": fps,
+                })])
+            } else {
+                Err(ExecutorError::NodeExecutionFailed {
+                    node_id: _node_id.to_string(),
+                    message: format!("Unsupported video format: {}. Only GIF is supported currently.", ext),
+                })
+            }
+        })
+    }))
+}
+
 fn register_empty_latent_image(registry: &mut NodeRegistry) {
     let class_def = NodeClassDef {
         class_type: "EmptyLatentImage".to_string(),
@@ -2371,6 +2623,37 @@ fn scan_image_dir(dir: &std::path::Path, base: &std::path::Path, results: &mut V
                 let lower = name.to_lowercase();
                 if lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
                     || lower.ends_with(".webp") || lower.ends_with(".gif") || lower.ends_with(".bmp")
+                {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        results.push(rel.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn scan_input_videos() -> Vec<String> {
+    let input_dir = std::path::Path::new("input");
+    if !input_dir.exists() {
+        return Vec::new();
+    }
+    let mut results = Vec::new();
+    scan_video_dir(input_dir, input_dir, &mut results);
+    results.sort();
+    results
+}
+
+fn scan_video_dir(dir: &std::path::Path, base: &std::path::Path, results: &mut Vec<String>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_video_dir(&path, base, results);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                if lower.ends_with(".gif") || lower.ends_with(".mp4") || lower.ends_with(".webm")
+                    || lower.ends_with(".avi") || lower.ends_with(".mov")
                 {
                     if let Ok(rel) = path.strip_prefix(base) {
                         results.push(rel.to_string_lossy().to_string());

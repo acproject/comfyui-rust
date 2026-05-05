@@ -106,6 +106,29 @@ pub struct SdVideo {
     pub fps: i32,
 }
 
+impl Serialize for SdVideo {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("SdVideo", 3)?;
+        state.serialize_field("frames", &self.frames)?;
+        state.serialize_field("fps", &self.fps)?;
+        state.serialize_field("frame_count", &self.frame_count())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SdVideo {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct SdVideoHelper {
+            frames: Vec<SdImage>,
+            fps: i32,
+        }
+        let helper = SdVideoHelper::deserialize(deserializer)?;
+        Ok(SdVideo::new(helper.frames, helper.fps))
+    }
+}
+
 impl SdVideo {
     pub fn new(frames: Vec<SdImage>, fps: i32) -> Self {
         Self { frames, fps }
@@ -117,6 +140,27 @@ impl SdVideo {
 
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
+    }
+
+    pub fn to_gif_bytes(&self) -> Result<Vec<u8>, ImageError> {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut buf, self.frames[0].width as u16, self.frames[0].height as u16, &[]).map_err(|e| ImageError::PngEncodeError(e.to_string()))?;
+            encoder.set_repeat(gif::Repeat::Infinite).map_err(|e| ImageError::PngEncodeError(e.to_string()))?;
+            for frame in &self.frames {
+                let rgb_data = match frame.channel {
+                    1 => {
+                        frame.data.iter().flat_map(|&g| [g, g, g]).collect()
+                    }
+                    3 => frame.data.clone(),
+                    4 => frame.data.chunks(4).flat_map(|px| [px[0], px[1], px[2]]).collect(),
+                    _ => frame.data.clone(),
+                };
+                let gif_frame = gif::Frame::from_rgb(frame.width as u16, frame.height as u16, &rgb_data);
+                encoder.write_frame(&gif_frame).map_err(|e| ImageError::PngEncodeError(e.to_string()))?;
+            }
+        }
+        Ok(buf)
     }
 }
 

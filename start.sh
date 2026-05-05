@@ -25,6 +25,16 @@ fi
 echo "1/2 启动 Rust 后端服务器 (端口 8188)..."
 cd "$PROJECT_DIR"
 
+# 检查 OpenCV + CUDA 编译依赖
+if [ ! -f /usr/lib/llvm-18/lib/libclang.so ] && [ ! -f /usr/lib/llvm-15/lib/libclang.so ]; then
+    echo "  检测到缺少 libclang-dev (OpenCV Rust 绑定编译所需)"
+    echo "  正在尝试安装 libclang-dev..."
+    sudo apt-get install -y libclang-dev 2>/dev/null || {
+        echo "  ⚠️  安装 libclang-dev 失败，将回退到普通 ControlNet (无 OpenCV 加速)"
+        USE_OPENCV=false
+    }
+fi
+
 SD_CPP_DIR=""
 for dir in "$PROJECT_DIR/cpp/stable-diffusion-cpp" "$PROJECT_DIR/cpp/stable-diffusion.cpp"; do
     if [ -d "$dir" ]; then
@@ -41,16 +51,24 @@ if [ -n "$SD_CPP_DIR" ]; then
     fi
 
     SD_LIB="$SD_CPP_DIR/build/libstable-diffusion.a"
+    CONTROLNET_FEATURE="controlnet-opencv"
+    if [ "${USE_OPENCV:-true}" = "false" ]; then
+        CONTROLNET_FEATURE="controlnet"
+    fi
     if [ -f "$SD_LIB" ]; then
-        CARGO_FEATURES="local-ffi,controlnet"
-        echo "  使用 FFI + CLI 后端 (预编译库已就绪) + ControlNet"
+        CARGO_FEATURES="local-ffi,$CONTROLNET_FEATURE"
+        echo "  使用 FFI + CLI 后端 (预编译库已就绪) + ControlNet ($CONTROLNET_FEATURE)"
     else
-        CARGO_FEATURES="local-build,controlnet"
-        echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢) + ControlNet..."
+        CARGO_FEATURES="local-build,$CONTROLNET_FEATURE"
+        echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢) + ControlNet ($CONTROLNET_FEATURE)..."
     fi
 else
-    CARGO_FEATURES="local,controlnet"
-    echo "  stable-diffusion-cpp 未找到，使用 CLI 后端 (需要 sd-cli 可执行文件) + ControlNet"
+    CONTROLNET_FEATURE="controlnet-opencv"
+    if [ "${USE_OPENCV:-true}" = "false" ]; then
+        CONTROLNET_FEATURE="controlnet"
+    fi
+    CARGO_FEATURES="local,$CONTROLNET_FEATURE"
+    echo "  stable-diffusion-cpp 未找到，使用 CLI 后端 (需要 sd-cli 可执行文件) + ControlNet ($CONTROLNET_FEATURE)"
 fi
 
 cargo run -p comfy-api --features "$CARGO_FEATURES" &

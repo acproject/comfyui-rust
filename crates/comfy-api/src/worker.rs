@@ -72,6 +72,11 @@ pub async fn run_executor(state: AppState) {
                                 "images".to_string(),
                                 serde_json::Value::Array(images.clone()),
                             );
+                        } else if let Some(videos) = value.get("videos").and_then(|v| v.as_array()) {
+                            node_output_json.insert(
+                                "videos".to_string(),
+                                serde_json::Value::Array(videos.clone()),
+                            );
                         } else if let Some(obj) = value.as_object() {
                             if obj.contains_key("filename") {
                                 let images = node_output_json

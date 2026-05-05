@@ -429,7 +429,7 @@ fn register_canny_preprocessor(registry: &mut NodeRegistry) {
                     message: e,
                 })?;
 
-            let result_img = imp::canny_preprocess(&dyn_img, low_threshold, high_threshold)
+            let result_img = dispatch::canny_preprocess(&dyn_img, low_threshold, high_threshold)
                 .map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: node_id.to_string(),
                     message: e,
@@ -444,6 +444,236 @@ fn register_canny_preprocessor(registry: &mut NodeRegistry) {
             image_output(result)
         })
     }));
+}
+
+#[cfg(feature = "opencv")]
+mod opencv_imp {
+    use comfy_inference::SdImage;
+    use opencv::prelude::*;
+
+    pub fn sd_image_to_mat(image: &SdImage) -> Result<opencv::core::Mat, String> {
+        let rgb_data = match image.channel {
+            1 => image.data.iter().flat_map(|&g| [g, g, g]).collect(),
+            3 => image.data.clone(),
+            4 => image.data.chunks(4).flat_map(|px| [px[0], px[1], px[2]]).collect(),
+            _ => image.data.clone(),
+        };
+        let mat = opencv::core::Mat::from_slice(&rgb_data)
+            .map_err(|e| format!("Failed to create Mat: {}", e))?;
+        let reshaped = mat.reshape(3, image.height as i32)
+            .map_err(|e| format!("Failed to reshape Mat: {}", e))?;
+        let mut rgb = opencv::core::Mat::default();
+        opencv::core::transpose(&reshaped, &mut rgb)
+            .map_err(|e| format!("Failed to transpose: {}", e))?;
+        Ok(rgb)
+    }
+
+    pub fn mat_to_sd_image(mat: &opencv::core::Mat) -> Result<SdImage, String> {
+        let mut rgb = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(mat, &mut rgb, opencv::imgproc::COLOR_BGR2RGB)
+            .map_err(|e| format!("cvt_color failed: {}", e))?;
+        let width = rgb.cols() as u32;
+        let height = rgb.rows() as u32;
+        let data = rgb.data_bytes().map_err(|e| format!("Failed to get Mat data: {}", e))?;
+        SdImage::rgb(width, height, data.to_vec())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn canny_preprocess(
+        img: &image::DynamicImage,
+        low_threshold: f64,
+        high_threshold: f64,
+    ) -> Result<image::DynamicImage, String> {
+        let sd_img = super::imp::dynamic_to_sd_image(img)?;
+        let mat = sd_image_to_mat(&sd_img)?;
+        let mut gray = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&mat, &mut gray, opencv::imgproc::COLOR_RGB2GRAY)
+            .map_err(|e| format!("cvt_color to gray failed: {}", e))?;
+        let mut edges = opencv::core::Mat::default();
+        opencv::imgproc::canny_def(&gray, &mut edges, low_threshold, high_threshold)
+            .map_err(|e| format!("Canny failed: {}", e))?;
+        let mut rgb_result = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&edges, &mut rgb_result, opencv::imgproc::COLOR_GRAY2RGB)
+            .map_err(|e| format!("cvt_color to rgb failed: {}", e))?;
+        let result = mat_to_sd_image(&rgb_result)?;
+        super::imp::sd_image_to_dynamic(&result)
+    }
+
+    pub fn sobel_preprocess(
+        img: &image::DynamicImage,
+        _ksize: i32,
+    ) -> Result<image::DynamicImage, String> {
+        let sd_img = super::imp::dynamic_to_sd_image(img)?;
+        let mat = sd_image_to_mat(&sd_img)?;
+        let mut gray = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&mat, &mut gray, opencv::imgproc::COLOR_RGB2GRAY)
+            .map_err(|e| format!("cvt_color to gray failed: {}", e))?;
+        let mut grad_x = opencv::core::Mat::default();
+        let mut grad_y = opencv::core::Mat::default();
+        opencv::imgproc::sobel_def(&gray, &mut grad_x, opencv::core::CV_32F, 1, 0)
+            .map_err(|e| format!("Sobel X failed: {}", e))?;
+        opencv::imgproc::sobel_def(&gray, &mut grad_y, opencv::core::CV_32F, 0, 1)
+            .map_err(|e| format!("Sobel Y failed: {}", e))?;
+        let mut abs_grad_x = opencv::core::Mat::default();
+        let mut abs_grad_y = opencv::core::Mat::default();
+        opencv::core::convert_scale_abs(&grad_x, &mut abs_grad_x, 1.0, 0.0)
+            .map_err(|e| format!("convert_scale_abs X failed: {}", e))?;
+        opencv::core::convert_scale_abs(&grad_y, &mut abs_grad_y, 1.0, 0.0)
+            .map_err(|e| format!("convert_scale_abs Y failed: {}", e))?;
+        let mut combined = opencv::core::Mat::default();
+        opencv::core::add_weighted(&abs_grad_x, 0.5, &abs_grad_y, 0.5, 0.0, &mut combined, opencv::core::CV_8U)
+            .map_err(|e| format!("add_weighted failed: {}", e))?;
+        let mut rgb_result = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&combined, &mut rgb_result, opencv::imgproc::COLOR_GRAY2RGB)
+            .map_err(|e| format!("cvt_color to rgb failed: {}", e))?;
+        let result = mat_to_sd_image(&rgb_result)?;
+        super::imp::sd_image_to_dynamic(&result)
+    }
+
+    pub fn depth_preprocess(
+        img: &image::DynamicImage,
+    ) -> Result<image::DynamicImage, String> {
+        let sd_img = super::imp::dynamic_to_sd_image(img)?;
+        let mat = sd_image_to_mat(&sd_img)?;
+        let mut gray = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&mat, &mut gray, opencv::imgproc::COLOR_RGB2GRAY)
+            .map_err(|e| format!("cvt_color to gray failed: {}", e))?;
+        let mut blurred = opencv::core::Mat::default();
+        opencv::imgproc::gaussian_blur_def(&gray, &mut blurred, opencv::core::Size::new(5, 5), 0.0)
+            .map_err(|e| format!("GaussianBlur failed: {}", e))?;
+        let mut grad_x = opencv::core::Mat::default();
+        let mut grad_y = opencv::core::Mat::default();
+        opencv::imgproc::sobel_def(&blurred, &mut grad_x, opencv::core::CV_32F, 1, 0)
+            .map_err(|e| format!("Sobel X failed: {}", e))?;
+        opencv::imgproc::sobel_def(&blurred, &mut grad_y, opencv::core::CV_32F, 0, 1)
+            .map_err(|e| format!("Sobel Y failed: {}", e))?;
+        let mut abs_grad_x = opencv::core::Mat::default();
+        let mut abs_grad_y = opencv::core::Mat::default();
+        opencv::core::convert_scale_abs(&grad_x, &mut abs_grad_x, 1.0, 0.0)
+            .map_err(|e| format!("convert_scale_abs X failed: {}", e))?;
+        opencv::core::convert_scale_abs(&grad_y, &mut abs_grad_y, 1.0, 0.0)
+            .map_err(|e| format!("convert_scale_abs Y failed: {}", e))?;
+        let mut combined = opencv::core::Mat::default();
+        opencv::core::add_weighted(&abs_grad_x, 0.5, &abs_grad_y, 0.5, 0.0, &mut combined, opencv::core::CV_8U)
+            .map_err(|e| format!("add_weighted failed: {}", e))?;
+        let mut depth_map = opencv::core::Mat::default();
+        opencv::imgproc::gaussian_blur_def(&combined, &mut depth_map, opencv::core::Size::new(15, 15), 0.0)
+            .map_err(|e| format!("GaussianBlur depth failed: {}", e))?;
+        let mut normalized = opencv::core::Mat::default();
+        opencv::core::normalize(&depth_map, &mut normalized, 0.0, 255.0, opencv::core::NORM_MINMAX, opencv::core::CV_8U, &opencv::core::no_array())
+            .map_err(|e| format!("normalize failed: {}", e))?;
+        let mut rgb_result = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&normalized, &mut rgb_result, opencv::imgproc::COLOR_GRAY2RGB)
+            .map_err(|e| format!("cvt_color to rgb failed: {}", e))?;
+        let result = mat_to_sd_image(&rgb_result)?;
+        super::imp::sd_image_to_dynamic(&result)
+    }
+
+    pub fn lineart_preprocess(
+        img: &image::DynamicImage,
+        coarse: bool,
+    ) -> Result<image::DynamicImage, String> {
+        let (low, high) = if coarse { (12.0, 50.0) } else { (25.0, 100.0) };
+        let result = canny_preprocess(img, low, high)?;
+        let rgb = result.to_rgb8();
+        let (width, height) = rgb.dimensions();
+        let mut inverted = image::RgbImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let p = rgb.get_pixel(x, y);
+                inverted.put_pixel(x, y, image::Rgb([255 - p[0], 255 - p[1], 255 - p[2]]));
+            }
+        }
+        Ok(image::DynamicImage::ImageRgb8(inverted))
+    }
+
+    pub fn threshold_preprocess(
+        img: &image::DynamicImage,
+        threshold_val: f32,
+        invert: bool,
+    ) -> Result<image::DynamicImage, String> {
+        let sd_img = super::imp::dynamic_to_sd_image(img)?;
+        let mat = sd_image_to_mat(&sd_img)?;
+        let mut gray = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&mat, &mut gray, opencv::imgproc::COLOR_RGB2GRAY)
+            .map_err(|e| format!("cvt_color to gray failed: {}", e))?;
+        let thresh = (threshold_val * 255.0).min(255.0) as f64;
+        let thresh_type = if invert {
+            opencv::imgproc::THRESH_BINARY_INV
+        } else {
+            opencv::imgproc::THRESH_BINARY
+        };
+        let mut result = opencv::core::Mat::default();
+        opencv::imgproc::threshold(&gray, &mut result, thresh, 255.0, thresh_type)
+            .map_err(|e| format!("threshold failed: {}", e))?;
+        let mut rgb_result = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&result, &mut rgb_result, opencv::imgproc::COLOR_GRAY2RGB)
+            .map_err(|e| format!("cvt_color to rgb failed: {}", e))?;
+        let sd_result = mat_to_sd_image(&rgb_result)?;
+        super::imp::sd_image_to_dynamic(&sd_result)
+    }
+
+    pub fn invert_preprocess(
+        img: &image::DynamicImage,
+    ) -> Result<image::DynamicImage, String> {
+        let sd_img = super::imp::dynamic_to_sd_image(img)?;
+        let mat = sd_image_to_mat(&sd_img)?;
+        let mut result = opencv::core::Mat::default();
+        opencv::core::bitwise_not_def(&mat, &mut result)
+            .map_err(|e| format!("bitwise_not failed: {}", e))?;
+        let sd_result = mat_to_sd_image(&result)?;
+        super::imp::sd_image_to_dynamic(&sd_result)
+    }
+}
+
+#[cfg(feature = "opencv")]
+mod dispatch {
+    pub fn canny_preprocess(img: &image::DynamicImage, low: f32, high: f32) -> Result<image::DynamicImage, String> {
+        super::opencv_imp::canny_preprocess(img, low as f64, high as f64)
+    }
+    pub fn sobel_preprocess(img: &image::DynamicImage, ksize: i32) -> Result<image::DynamicImage, String> {
+        super::opencv_imp::sobel_preprocess(img, ksize)
+    }
+    pub fn depth_preprocess(img: &image::DynamicImage) -> Result<image::DynamicImage, String> {
+        super::opencv_imp::depth_preprocess(img)
+    }
+    pub fn lineart_preprocess(img: &image::DynamicImage, coarse: bool) -> Result<image::DynamicImage, String> {
+        super::opencv_imp::lineart_preprocess(img, coarse)
+    }
+    pub fn hed_preprocess(img: &image::DynamicImage, safe_steps: i32) -> Result<image::DynamicImage, String> {
+        super::imp::hed_preprocess(img, safe_steps)
+    }
+    pub fn threshold_preprocess(img: &image::DynamicImage, thresh: f32, invert: bool) -> Result<image::DynamicImage, String> {
+        super::opencv_imp::threshold_preprocess(img, thresh, invert)
+    }
+    pub fn invert_preprocess(img: &image::DynamicImage) -> Result<image::DynamicImage, String> {
+        super::opencv_imp::invert_preprocess(img)
+    }
+}
+
+#[cfg(not(feature = "opencv"))]
+mod dispatch {
+    pub fn canny_preprocess(img: &image::DynamicImage, low: f32, high: f32) -> Result<image::DynamicImage, String> {
+        super::imp::canny_preprocess(img, low, high)
+    }
+    pub fn sobel_preprocess(img: &image::DynamicImage, ksize: i32) -> Result<image::DynamicImage, String> {
+        super::imp::sobel_preprocess(img, ksize)
+    }
+    pub fn depth_preprocess(img: &image::DynamicImage) -> Result<image::DynamicImage, String> {
+        super::imp::depth_preprocess(img)
+    }
+    pub fn lineart_preprocess(img: &image::DynamicImage, coarse: bool) -> Result<image::DynamicImage, String> {
+        super::imp::lineart_preprocess(img, coarse)
+    }
+    pub fn hed_preprocess(img: &image::DynamicImage, safe_steps: i32) -> Result<image::DynamicImage, String> {
+        super::imp::hed_preprocess(img, safe_steps)
+    }
+    pub fn threshold_preprocess(img: &image::DynamicImage, thresh: f32, invert: bool) -> Result<image::DynamicImage, String> {
+        super::imp::threshold_preprocess(img, thresh, invert)
+    }
+    pub fn invert_preprocess(img: &image::DynamicImage) -> Result<image::DynamicImage, String> {
+        super::imp::invert_preprocess(img)
+    }
 }
 
 fn register_sobel_preprocessor(registry: &mut NodeRegistry) {
@@ -497,7 +727,7 @@ fn register_sobel_preprocessor(registry: &mut NodeRegistry) {
                     message: e,
                 })?;
 
-            let result_img = imp::sobel_preprocess(&dyn_img, ksize)
+            let result_img = dispatch::sobel_preprocess(&dyn_img, ksize)
                 .map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: node_id.to_string(),
                     message: e,
@@ -554,7 +784,7 @@ fn register_depth_preprocessor(registry: &mut NodeRegistry) {
                     message: e,
                 })?;
 
-            let result_img = imp::depth_preprocess(&dyn_img)
+            let result_img = dispatch::depth_preprocess(&dyn_img)
                 .map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: node_id.to_string(),
                     message: e,
@@ -622,7 +852,7 @@ fn register_lineart_preprocessor(registry: &mut NodeRegistry) {
                     message: e,
                 })?;
 
-            let result_img = imp::lineart_preprocess(&dyn_img, coarse)
+            let result_img = dispatch::lineart_preprocess(&dyn_img, coarse)
                 .map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: node_id.to_string(),
                     message: e,
@@ -690,7 +920,7 @@ fn register_hed_preprocessor(registry: &mut NodeRegistry) {
                     message: e,
                 })?;
 
-            let result_img = imp::hed_preprocess(&dyn_img, safe_steps)
+            let result_img = dispatch::hed_preprocess(&dyn_img, safe_steps)
                 .map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: node_id.to_string(),
                     message: e,
@@ -766,7 +996,7 @@ fn register_threshold_preprocessor(registry: &mut NodeRegistry) {
                     message: e,
                 })?;
 
-            let result_img = imp::threshold_preprocess(&dyn_img, thresh_val, invert)
+            let result_img = dispatch::threshold_preprocess(&dyn_img, thresh_val, invert)
                 .map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: node_id.to_string(),
                     message: e,
@@ -823,7 +1053,7 @@ fn register_invert_preprocessor(registry: &mut NodeRegistry) {
                     message: e,
                 })?;
 
-            let result_img = imp::invert_preprocess(&dyn_img)
+            let result_img = dispatch::invert_preprocess(&dyn_img)
                 .map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: node_id.to_string(),
                     message: e,

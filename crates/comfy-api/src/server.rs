@@ -58,6 +58,7 @@ impl ComfyServer {
             .route("/view", axum::routing::get(routes::get_image))
             .route("/view", axum::routing::post(routes::get_image))
             .route("/view_input", axum::routing::get(routes::get_view_input_image))
+            .route("/view_video", axum::routing::get(routes::get_view_video))
             .route("/list_images", axum::routing::get(routes::get_image_list))
             .route("/input_images", axum::routing::get(routes::get_input_images))
             .route("/workflow", axum::routing::post(routes::post_save_workflow))

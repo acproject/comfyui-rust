@@ -77,6 +77,12 @@ export function useWebSocket() {
                 setOutputImages(nodeId, images);
               }
             }
+            if (nodeOutput && typeof nodeOutput === 'object' && 'videos' in nodeOutput) {
+              const videos = (nodeOutput as { videos: Array<{ filename: string; subfolder: string; type: string }> }).videos;
+              if (Array.isArray(videos)) {
+                setOutputImages(nodeId, videos);
+              }
+            }
           }
         }
         setExecuting(null, null);

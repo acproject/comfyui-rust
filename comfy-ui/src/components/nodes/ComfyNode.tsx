@@ -64,6 +64,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
 
   const isImageNode = classType === 'LoadImage';
   const isSaveImageNode = classType === 'SaveImage';
+  const isSaveVideoNode = classType === 'SaveVideo';
 
   const isPrimitive = (typeName: string) =>
     ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
@@ -74,6 +75,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   if (!collapsed) {
     if (isImageNode) y += 80;
     if (isSaveImageNode) y += 80;
+    if (isSaveVideoNode) y += 80;
   }
 
   const inputHandleY: Record<string, number> = {};
@@ -228,6 +230,9 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           )}
           {(isSaveImageNode) && (
             <OutputPreview nodeId={id} />
+          )}
+          {(isSaveVideoNode) && (
+            <VideoPreview nodeId={id} />
           )}
 
           <div style={{ padding: '2px 0' }}>
@@ -448,6 +453,85 @@ const OutputPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
 });
 
 OutputPreview.displayName = 'OutputPreview';
+
+const VideoPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
+  const outputImages = useWorkflowStore((s) => s.outputImages);
+  const videos = outputImages[nodeId];
+
+  if (!videos || videos.length === 0) {
+    return (
+      <div style={{
+        padding: '4px 6px',
+        borderBottom: '1px solid #333',
+        height: 72,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#111',
+        borderRadius: 3,
+        margin: '4px 6px',
+      }}>
+        <span style={{ fontSize: 10, color: '#666' }}>Video Preview</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      padding: '4px 6px',
+      borderBottom: '1px solid #333',
+      height: 80,
+      overflow: 'hidden',
+    }}>
+      {videos.map((vid, i) => {
+        const ext = vid.filename.split('.').pop()?.toLowerCase() || '';
+        const url = `${window.location.origin}/view_video?filename=${encodeURIComponent(vid.filename)}&subfolder=${encodeURIComponent(vid.subfolder || '')}`;
+        if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
+          return (
+            <video
+              key={i}
+              src={url}
+              controls
+              muted
+              loop
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
+                borderRadius: 3,
+                background: '#111',
+                display: 'block',
+              }}
+              onError={(e) => {
+                (e.target as HTMLVideoElement).style.display = 'none';
+              }}
+            />
+          );
+        }
+        return (
+          <img
+            key={i}
+            src={url}
+            alt={vid.filename}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              borderRadius: 3,
+              background: '#111',
+              display: 'block',
+            }}
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+});
+
+VideoPreview.displayName = 'VideoPreview';
 
 interface NodeInputFieldProps {
   nodeId: string;
