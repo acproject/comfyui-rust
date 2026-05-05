@@ -1311,12 +1311,34 @@ fn register_llm_loader(registry: &mut NodeRegistry) {
 
         let model_path = resolve_model_path("llm", model_name);
 
+        let mmproj_path = {
+            let model_file = std::path::Path::new(&model_path);
+            let model_dir = model_file.parent().unwrap_or(std::path::Path::new("."));
+            let mut found: Option<String> = None;
+            if let Ok(entries) = std::fs::read_dir(model_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.to_lowercase().starts_with("mmproj-") && name.to_lowercase().ends_with(".gguf") {
+                            found = Some(path.to_string_lossy().to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+            found
+        };
+
         Box::pin(async move {
-            Ok(vec![json!({
+            let mut result = json!({
                 "type": "llm",
                 "model_path": model_path,
                 "model_name": model_name,
-            })])
+            });
+            if let Some(mmproj) = mmproj_path {
+                result.as_object_mut().unwrap().insert("mmproj_path".to_string(), json!(mmproj));
+            }
+            Ok(vec![result])
         })
     }));
 }
@@ -1496,6 +1518,13 @@ fn register_llm_text_gen(registry: &mut NodeRegistry) {
                     .arg("--log-disable")
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped());
+
+                if let Some(mmproj) = llm.get("mmproj_path").and_then(|v| v.as_str()) {
+                    if !mmproj.is_empty() {
+                        cmd.arg("--mmproj").arg(mmproj);
+                        tracing::info!("LLMTextGen: auto-detected mmproj: {}", mmproj);
+                    }
+                }
 
                 if seed >= 0 {
                     cmd.arg("--seed").arg(seed.to_string());

@@ -490,14 +490,17 @@ fn collect_model_filenames(
                 collect_model_filenames(&path, base, results);
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 let lower = name.to_lowercase();
-                let is_model = lower.ends_with(".safetensors")
+                let is_aux = lower.starts_with("mmproj-");
+                let is_model = !is_aux && (
+                    lower.ends_with(".safetensors")
                     || lower.ends_with(".ckpt")
                     || lower.ends_with(".pt")
                     || lower.ends_with(".pth")
                     || lower.ends_with(".bin")
                     || lower.ends_with(".onnx")
                     || lower.ends_with(".gguf")
-                    || lower.ends_with(".sft");
+                    || lower.ends_with(".sft")
+                );
 
                 if is_model {
                     if let Ok(rel) = path.strip_prefix(base) {
