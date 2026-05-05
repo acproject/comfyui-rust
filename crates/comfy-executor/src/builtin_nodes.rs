@@ -1874,33 +1874,52 @@ fn register_save_video(registry: &mut NodeRegistry) {
                 });
             }
 
-            let ext = if format == "webp" { "webp" } else { "gif" };
+            let ext = match format {
+                "mp4" => "mp4",
+                "webm" => "webm",
+                _ => "gif",
+            };
             let filename = format!("{}_{}.{}", prefix, chrono::Utc::now().format("%Y%m%d_%H%M%S"), ext);
             let filepath = output_path.join(&filename);
 
-            match sd_video.to_gif_bytes() {
-                Ok(gif_bytes) => {
-                    match std::fs::write(&filepath, &gif_bytes) {
-                        Ok(_) => {
-                            tracing::info!("SaveVideo: saved {} frames to {}", sd_video.frame_count(), filepath.display());
-                            Ok(vec![json!({
-                                "type": "video",
-                                "videos": [{
-                                    "filename": filename,
-                                    "subfolder": "",
-                                    "type": "output",
-                                    "frame_count": sd_video.frame_count(),
-                                    "fps": fps,
-                                }]
-                            })])
-                        }
-                        Err(e) => {
-                            Err(ExecutorError::NodeExecutionFailed {
-                                node_id: node_id.to_string(),
-                                message: format!("Failed to write video file: {}", e),
-                            })
-                        }
+            let encode_result = match ext {
+                "mp4" => {
+                    if comfy_inference::SdVideo::is_ffmpeg_available() {
+                        sd_video.encode_with_ffmpeg(&filepath, fps as i32, 18)
+                            .map_err(|e| e.to_string())
+                    } else {
+                        Err("FFmpeg is not available for MP4 encoding".to_string())
                     }
+                }
+                "webm" => {
+                    if comfy_inference::SdVideo::is_ffmpeg_available() {
+                        sd_video.encode_webm_with_ffmpeg(&filepath, fps as i32, 30)
+                            .map_err(|e| e.to_string())
+                    } else {
+                        Err("FFmpeg is not available for WebM encoding".to_string())
+                    }
+                }
+                _ => {
+                     match sd_video.to_gif_bytes() {
+                         Ok(bytes) => std::fs::write(&filepath, &bytes).map_err(|e| e.to_string()),
+                         Err(e) => Err(e.to_string()),
+                     }
+                 }
+            };
+
+            match encode_result {
+                Ok(_) => {
+                    tracing::info!("SaveVideo: saved {} frames to {}", sd_video.frame_count(), filepath.display());
+                    Ok(vec![json!({
+                        "type": "video",
+                        "videos": [{
+                            "filename": filename,
+                            "subfolder": "",
+                            "type": "output",
+                            "frame_count": sd_video.frame_count(),
+                            "fps": fps,
+                        }]
+                    })])
                 }
                 Err(e) => {
                     Err(ExecutorError::NodeExecutionFailed {
@@ -2026,10 +2045,42 @@ fn register_load_video(registry: &mut NodeRegistry) {
                     "frames": val.get("frames").cloned().unwrap_or(json!([])),
                     "fps": fps,
                 })])
+            } else if ["mp4", "webm", "avi", "mov"].contains(&ext.as_str()) {
+                if !comfy_inference::SdVideo::is_ffmpeg_available() {
+                    return Err(ExecutorError::NodeExecutionFailed {
+                        node_id: _node_id.to_string(),
+                        message: format!("FFmpeg is required to decode {} files but is not available", ext),
+                    });
+                }
+
+                let video = comfy_inference::SdVideo::decode_with_ffmpeg(&path, fps as i32)
+                    .map_err(|e| ExecutorError::NodeExecutionFailed {
+                        node_id: _node_id.to_string(),
+                        message: format!("Failed to decode video with FFmpeg: {}", e),
+                    })?;
+
+                let frame_count = video.frame_count();
+                let val = serde_json::to_value(&video).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: _node_id.to_string(),
+                    message: format!("Failed to serialize video: {}", e),
+                })?;
+
+                tracing::info!("LoadVideo: decoded {} frames from {}", frame_count, video_path);
+
+                Ok(vec![json!({
+                    "type": "video",
+                    "videos": [{
+                        "filename": path.file_name().and_then(|n| n.to_str()).unwrap_or(&video_path),
+                        "subfolder": "",
+                        "type": "input",
+                    }],
+                    "frames": val.get("frames").cloned().unwrap_or(json!([])),
+                    "fps": fps,
+                })])
             } else {
                 Err(ExecutorError::NodeExecutionFailed {
                     node_id: _node_id.to_string(),
-                    message: format!("Unsupported video format: {}. Only GIF is supported currently.", ext),
+                    message: format!("Unsupported video format: {}. Supported: gif, mp4, webm, avi, mov", ext),
                 })
             }
         })

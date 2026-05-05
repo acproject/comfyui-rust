@@ -250,7 +250,7 @@ pub async fn get_object_info(
     ];
 
     let video_format_choices: Vec<String> = vec![
-        "gif".into(), "webp".into(),
+        "gif".into(), "mp4".into(), "webm".into(),
     ];
 
     let mut result = HashMap::new();

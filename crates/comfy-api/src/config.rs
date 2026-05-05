@@ -435,6 +435,7 @@ impl ComfyConfig {
             "classifiers",
             "model_patches",
             "audio_encoders",
+            "llm",
         ]
     }
 

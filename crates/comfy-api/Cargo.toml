@@ -29,6 +29,7 @@ local-ffi = ["local", "comfy-inference/local-ffi", "comfy-executor/local-ffi"]
 local-build = ["local-ffi", "comfy-inference/local-build", "comfy-executor/local-build"]
 remote = ["comfy-inference/remote", "comfy-executor/remote"]
 controlnet = ["comfy-executor/controlnet"]
+controlnet-opencv = ["comfy-executor/controlnet-opencv"]
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

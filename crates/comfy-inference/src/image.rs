@@ -162,6 +162,155 @@ impl SdVideo {
         }
         Ok(buf)
     }
+
+    pub fn encode_with_ffmpeg(&self, output_path: &std::path::Path, fps: i32, crf: i32) -> Result<(), ImageError> {
+        if self.frames.is_empty() {
+            return Err(ImageError::PngEncodeError("No frames to encode".to_string()));
+        }
+
+        let tmp_dir = std::env::temp_dir().join(format!("comfyui_ffmpeg_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp_dir)
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to create temp dir: {}", e)))?;
+
+        for (i, frame) in self.frames.iter().enumerate() {
+            let png_path = tmp_dir.join(format!("frame_{:06}.png", i));
+            let png_bytes = frame.to_png_bytes()
+                .map_err(|e| ImageError::PngEncodeError(format!("Failed to encode frame {}: {}", i, e)))?;
+            std::fs::write(&png_path, png_bytes)
+                .map_err(|e| ImageError::PngEncodeError(format!("Failed to write frame {}: {}", i, e)))?;
+        }
+
+        let input_pattern = tmp_dir.join("frame_%06d.png");
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-framerate", &fps.to_string(),
+                "-i", input_pattern.to_str().unwrap_or(""),
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-crf", &crf.to_string(),
+                "-preset", "medium",
+                "-movflags", "+faststart",
+                output_path.to_str().unwrap_or(""),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to run ffmpeg: {}", e)))?;
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        if !status.success() {
+            return Err(ImageError::PngEncodeError(format!(
+                "ffmpeg exited with code {:?}", status.code()
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub fn encode_webm_with_ffmpeg(&self, output_path: &std::path::Path, fps: i32, crf: i32) -> Result<(), ImageError> {
+        if self.frames.is_empty() {
+            return Err(ImageError::PngEncodeError("No frames to encode".to_string()));
+        }
+
+        let tmp_dir = std::env::temp_dir().join(format!("comfyui_ffmpeg_webm_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp_dir)
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to create temp dir: {}", e)))?;
+
+        for (i, frame) in self.frames.iter().enumerate() {
+            let png_path = tmp_dir.join(format!("frame_{:06}.png", i));
+            let png_bytes = frame.to_png_bytes()
+                .map_err(|e| ImageError::PngEncodeError(format!("Failed to encode frame {}: {}", i, e)))?;
+            std::fs::write(&png_path, png_bytes)
+                .map_err(|e| ImageError::PngEncodeError(format!("Failed to write frame {}: {}", i, e)))?;
+        }
+
+        let input_pattern = tmp_dir.join("frame_%06d.png");
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-framerate", &fps.to_string(),
+                "-i", input_pattern.to_str().unwrap_or(""),
+                "-c:v", "libvpx-vp9",
+                "-pix_fmt", "yuv420p",
+                "-crf", &crf.to_string(),
+                "-b:v", "0",
+                output_path.to_str().unwrap_or(""),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to run ffmpeg: {}", e)))?;
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        if !status.success() {
+            return Err(ImageError::PngEncodeError(format!(
+                "ffmpeg exited with code {:?}", status.code()
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub fn decode_with_ffmpeg(video_path: &std::path::Path, fps: i32) -> Result<Self, ImageError> {
+        let tmp_dir = std::env::temp_dir().join(format!("comfyui_ffmpeg_decode_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp_dir)
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to create temp dir: {}", e)))?;
+
+        let output_pattern = tmp_dir.join("frame_%06d.png");
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-i", video_path.to_str().unwrap_or(""),
+                "-vf", &format!("fps={}", fps),
+                output_pattern.to_str().unwrap_or(""),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to run ffmpeg: {}", e)))?;
+
+        if !status.success() {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return Err(ImageError::PngEncodeError(format!(
+                "ffmpeg decode exited with code {:?}", status.code()
+            )));
+        }
+
+        let mut frames = Vec::new();
+        let mut idx = 1;
+        loop {
+            let frame_path = tmp_dir.join(format!("frame_{:06}.png", idx));
+            if !frame_path.exists() {
+                break;
+            }
+            match std::fs::read(&frame_path) {
+                Ok(data) => {
+                    match SdImage::from_png_bytes(&data) {
+                        Ok(img) => frames.push(img),
+                        Err(_) => {}
+                    }
+                }
+                Err(_) => break,
+            }
+            idx += 1;
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        Ok(SdVideo::new(frames, fps))
+    }
+
+    pub fn is_ffmpeg_available() -> bool {
+        std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
