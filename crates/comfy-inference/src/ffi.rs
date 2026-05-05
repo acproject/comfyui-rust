@@ -185,6 +185,7 @@ pub struct CSdCtxParams {
     pub chroma_use_t5_mask: bool,
     pub chroma_t5_mask_pad: c_int,
     pub qwen_image_zero_cond_t: bool,
+    pub text_encoder_path: *const c_char,
 }
 
 #[repr(C)]

@@ -81,6 +81,7 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
         diffusion_model_path: model_config.diffusion_model_path.clone().or(base_config.diffusion_model_path.clone()),
         vae_path: model_config.vae_path.clone().or(base_config.vae_path.clone()),
         control_net_path: model_config.control_net_path.clone().or(base_config.control_net_path.clone()),
+        text_encoder_path: model_config.text_encoder_path.clone().or(base_config.text_encoder_path.clone()),
         ..base_config.clone()
     }
 }
@@ -107,6 +108,7 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.control_net_path = strings.opt_cstr(&config.control_net_path);
     c_params.photo_maker_path = strings.opt_cstr(&config.photo_maker_path);
     c_params.tensor_type_rules = strings.opt_cstr(&config.tensor_type_rules);
+    c_params.text_encoder_path = strings.opt_cstr(&config.text_encoder_path);
 
     c_params.vae_decode_only = config.vae_decode_only;
     c_params.free_params_immediately = config.free_params_immediately;
@@ -364,9 +366,8 @@ impl InferenceBackend for LocalBackend {
     }
 
     fn generate_video(&self, params: VideoGenParams) -> InferenceResult<SdVideo> {
-        let model_config = ModelConfig::default();
         let mut cache = self.contexts.lock().unwrap();
-        let ctx = cache.get_or_create(&model_config, &self.base_config)?;
+        let ctx = cache.get_or_create(&params.model_config, &self.base_config)?;
 
         let mut strings = CStringHolder::new();
         let mut c_params: CVidGenParams = unsafe { std::mem::zeroed() };

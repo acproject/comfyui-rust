@@ -783,6 +783,9 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                 if let Some(path) = model.get("t5xxl_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_t5xxl(path);
                 }
+                if let Some(path) = model.get("text_encoder_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_text_encoder(path);
+                }
                 if let Some(path) = model.get("llm_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_llm(path);
                 }
@@ -1421,20 +1424,32 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
 
         let model_path = resolve_model_path("checkpoints", model_name);
 
+        let base = get_models_base_dir();
+        let te_dir = base.join("text_encoders");
+        let text_encoder_path = find_file_in_dir(&te_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]);
+
         Box::pin(async move {
-            let model_config = json!({
+            let mut model_json = json!({
                 "model_path": model_path,
                 "model_type": "ltx",
             });
-            let clip_config = json!({
+            if let Some(ref te_path) = text_encoder_path {
+                model_json["text_encoder_path"] = json!(te_path);
+            }
+            let mut clip_json = json!({
                 "type": "clip",
                 "source_model": model_path,
+                "model_type": "ltx",
             });
+            if let Some(ref te_path) = text_encoder_path {
+                clip_json["text_encoder_path"] = json!(te_path);
+            }
             let vae_config = json!({
                 "type": "vae",
                 "source_model": model_path,
+                "model_type": "ltx",
             });
-            Ok(vec![model_config, clip_config, vae_config])
+            Ok(vec![model_json, clip_json, vae_config])
         })
     }));
 }
@@ -4888,6 +4903,9 @@ fn register_sampler_custom_advanced(registry: &mut NodeRegistry) {
                 if let Some(path) = model.get("t5xxl_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_t5xxl(path);
                 }
+                if let Some(path) = model.get("text_encoder_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_text_encoder(path);
+                }
                 let mut lora_entries: Vec<comfy_inference::LoraEntry> = Vec::new();
                 if let Some(path) = model.get("lora_path").and_then(|v| v.as_str()) {
                     let multiplier = model.get("lora_strength").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
@@ -4908,6 +4926,11 @@ fn register_sampler_custom_advanced(registry: &mut NodeRegistry) {
                     if model_config.t5xxl_path.is_none() {
                         if let Some(path) = clip.get("t5xxl_path").and_then(|v| v.as_str()) {
                             model_config = model_config.with_t5xxl(path);
+                        }
+                    }
+                    if model_config.text_encoder_path.is_none() {
+                        if let Some(path) = clip.get("text_encoder_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_text_encoder(path);
                         }
                     }
                 }

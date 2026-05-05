@@ -184,6 +184,10 @@ impl CliBackend {
             args.push("--control-net".to_string());
             args.push(path.clone());
         }
+        if let Some(ref path) = model_config.text_encoder_path {
+            args.push("--text-encoder".to_string());
+            args.push(path.clone());
+        }
     }
 
     fn build_config_args(&self, args: &mut Vec<String>) {

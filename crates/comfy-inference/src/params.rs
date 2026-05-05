@@ -39,6 +39,7 @@ pub struct ContextConfig {
     pub vae_conv_direct: bool,
     pub circular_x: bool,
     pub circular_y: bool,
+    pub text_encoder_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +86,7 @@ impl Default for ContextConfig {
             vae_conv_direct: false,
             circular_x: false,
             circular_y: false,
+            text_encoder_path: None,
         }
     }
 }
@@ -151,6 +153,11 @@ impl ContextConfig {
         self.vae_decode_only = enable;
         self
     }
+
+    pub fn with_text_encoder(mut self, path: impl Into<String>) -> Self {
+        self.text_encoder_path = Some(path.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +197,7 @@ pub struct ModelConfig {
     pub diffusion_model_path: Option<String>,
     pub vae_path: Option<String>,
     pub control_net_path: Option<String>,
+    pub text_encoder_path: Option<String>,
 }
 
 impl Default for ModelConfig {
@@ -205,6 +213,7 @@ impl Default for ModelConfig {
             diffusion_model_path: None,
             vae_path: None,
             control_net_path: None,
+            text_encoder_path: None,
         }
     }
 }
@@ -264,6 +273,11 @@ impl ModelConfig {
         self
     }
 
+    pub fn with_text_encoder(mut self, path: impl Into<String>) -> Self {
+        self.text_encoder_path = Some(path.into());
+        self
+    }
+
     pub fn cache_key(&self) -> String {
         let mut parts = Vec::new();
         if let Some(ref p) = self.model_path { parts.push(format!("m:{}", p)); }
@@ -276,6 +290,7 @@ impl ModelConfig {
         if let Some(ref p) = self.diffusion_model_path { parts.push(format!("dm:{}", p)); }
         if let Some(ref p) = self.vae_path { parts.push(format!("vae:{}", p)); }
         if let Some(ref p) = self.control_net_path { parts.push(format!("cn:{}", p)); }
+        if let Some(ref p) = self.text_encoder_path { parts.push(format!("te:{}", p)); }
         if parts.is_empty() { "empty".to_string() } else { parts.join("|") }
     }
 }
