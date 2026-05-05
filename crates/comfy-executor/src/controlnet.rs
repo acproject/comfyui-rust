@@ -538,30 +538,46 @@ mod opencv_imp {
         let mut gray = opencv::core::Mat::default();
         opencv::imgproc::cvt_color_def(&mat, &mut gray, opencv::imgproc::COLOR_RGB2GRAY)
             .map_err(|e| format!("cvt_color to gray failed: {}", e))?;
+
         let mut blurred = opencv::core::Mat::default();
-        opencv::imgproc::gaussian_blur_def(&gray, &mut blurred, opencv::core::Size::new(5, 5), 0.0)
+        opencv::imgproc::gaussian_blur_def(&gray, &mut blurred, opencv::core::Size::new(7, 7), 0.0)
             .map_err(|e| format!("GaussianBlur failed: {}", e))?;
-        let mut grad_x = opencv::core::Mat::default();
-        let mut grad_y = opencv::core::Mat::default();
-        opencv::imgproc::sobel_def(&blurred, &mut grad_x, opencv::core::CV_32F, 1, 0)
-            .map_err(|e| format!("Sobel X failed: {}", e))?;
-        opencv::imgproc::sobel_def(&blurred, &mut grad_y, opencv::core::CV_32F, 0, 1)
-            .map_err(|e| format!("Sobel Y failed: {}", e))?;
-        let mut abs_grad_x = opencv::core::Mat::default();
-        let mut abs_grad_y = opencv::core::Mat::default();
-        opencv::core::convert_scale_abs(&grad_x, &mut abs_grad_x, 1.0, 0.0)
-            .map_err(|e| format!("convert_scale_abs X failed: {}", e))?;
-        opencv::core::convert_scale_abs(&grad_y, &mut abs_grad_y, 1.0, 0.0)
-            .map_err(|e| format!("convert_scale_abs Y failed: {}", e))?;
+
+        let mut laplacian = opencv::core::Mat::default();
+        opencv::imgproc::laplacian_def(&blurred, &mut laplacian, opencv::core::CV_32F)
+            .map_err(|e| format!("Laplacian failed: {}", e))?;
+
+        let mut abs_lap = opencv::core::Mat::default();
+        opencv::core::convert_scale_abs(&laplacian, &mut abs_lap, 1.0, 0.0)
+            .map_err(|e| format!("convert_scale_abs failed: {}", e))?;
+
+        let mut depth_coarse = opencv::core::Mat::default();
+        opencv::imgproc::gaussian_blur_def(&abs_lap, &mut depth_coarse, opencv::core::Size::new(31, 31), 0.0)
+            .map_err(|e| format!("GaussianBlur coarse failed: {}", e))?;
+
+        let mut depth_medium = opencv::core::Mat::default();
+        opencv::imgproc::gaussian_blur_def(&abs_lap, &mut depth_medium, opencv::core::Size::new(15, 15), 0.0)
+            .map_err(|e| format!("GaussianBlur medium failed: {}", e))?;
+
+        let mut depth_fine = opencv::core::Mat::default();
+        opencv::imgproc::gaussian_blur_def(&abs_lap, &mut depth_fine, opencv::core::Size::new(5, 5), 0.0)
+            .map_err(|e| format!("GaussianBlur fine failed: {}", e))?;
+
         let mut combined = opencv::core::Mat::default();
-        opencv::core::add_weighted(&abs_grad_x, 0.5, &abs_grad_y, 0.5, 0.0, &mut combined, opencv::core::CV_8U)
-            .map_err(|e| format!("add_weighted failed: {}", e))?;
+        opencv::core::add_weighted(&depth_coarse, 0.5, &depth_medium, 0.3, 0.0, &mut combined, opencv::core::CV_8U)
+            .map_err(|e| format!("add_weighted 1 failed: {}", e))?;
         let mut depth_map = opencv::core::Mat::default();
-        opencv::imgproc::gaussian_blur_def(&combined, &mut depth_map, opencv::core::Size::new(15, 15), 0.0)
-            .map_err(|e| format!("GaussianBlur depth failed: {}", e))?;
+        opencv::core::add_weighted(&combined, 0.8, &depth_fine, 0.2, 0.0, &mut depth_map, opencv::core::CV_8U)
+            .map_err(|e| format!("add_weighted 2 failed: {}", e))?;
+
+        let mut inverted = opencv::core::Mat::default();
+        opencv::core::bitwise_not_def(&depth_map, &mut inverted)
+            .map_err(|e| format!("bitwise_not failed: {}", e))?;
+
         let mut normalized = opencv::core::Mat::default();
-        opencv::core::normalize(&depth_map, &mut normalized, 0.0, 255.0, opencv::core::NORM_MINMAX, opencv::core::CV_8U, &opencv::core::no_array())
+        opencv::core::normalize(&inverted, &mut normalized, 0.0, 255.0, opencv::core::NORM_MINMAX, opencv::core::CV_8U, &opencv::core::no_array())
             .map_err(|e| format!("normalize failed: {}", e))?;
+
         let mut rgb_result = opencv::core::Mat::default();
         opencv::imgproc::cvt_color_def(&normalized, &mut rgb_result, opencv::imgproc::COLOR_GRAY2RGB)
             .map_err(|e| format!("cvt_color to rgb failed: {}", e))?;
@@ -573,18 +589,41 @@ mod opencv_imp {
         img: &image::DynamicImage,
         coarse: bool,
     ) -> Result<image::DynamicImage, String> {
-        let (low, high) = if coarse { (12.0, 50.0) } else { (25.0, 100.0) };
-        let result = canny_preprocess(img, low, high)?;
-        let rgb = result.to_rgb8();
-        let (width, height) = rgb.dimensions();
-        let mut inverted = image::RgbImage::new(width, height);
-        for y in 0..height {
-            for x in 0..width {
-                let p = rgb.get_pixel(x, y);
-                inverted.put_pixel(x, y, image::Rgb([255 - p[0], 255 - p[1], 255 - p[2]]));
-            }
-        }
-        Ok(image::DynamicImage::ImageRgb8(inverted))
+        let sd_img = super::imp::dynamic_to_sd_image(img)?;
+        let mat = sd_image_to_mat(&sd_img)?;
+        let mut gray = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&mat, &mut gray, opencv::imgproc::COLOR_RGB2GRAY)
+            .map_err(|e| format!("cvt_color to gray failed: {}", e))?;
+
+        let mut blurred = opencv::core::Mat::default();
+        let blur_size = if coarse { 5 } else { 3 };
+        opencv::imgproc::gaussian_blur_def(&gray, &mut blurred, opencv::core::Size::new(blur_size, blur_size), 0.0)
+            .map_err(|e| format!("GaussianBlur failed: {}", e))?;
+
+        let mut binary = opencv::core::Mat::default();
+        let block_size = if coarse { 31 } else { 15 };
+        opencv::imgproc::adaptive_threshold(
+            &blurred, &mut binary, 255.0,
+            opencv::imgproc::ADAPTIVE_THRESH_GAUSSIAN_C,
+            opencv::imgproc::THRESH_BINARY_INV,
+            block_size, 5.0,
+        ).map_err(|e| format!("adaptive_threshold failed: {}", e))?;
+
+        let kernel_size = if coarse { 3 } else { 1 };
+        let kernel = opencv::imgproc::get_structuring_element_def(
+            opencv::imgproc::MORPH_ELLIPSE,
+            opencv::core::Size::new(kernel_size, kernel_size),
+        ).map_err(|e| format!("get_structuring_element failed: {}", e))?;
+
+        let mut cleaned = opencv::core::Mat::default();
+        opencv::imgproc::morphology_ex_def(&binary, &mut cleaned, opencv::imgproc::MORPH_CLOSE, &kernel)
+            .map_err(|e| format!("morphology failed: {}", e))?;
+
+        let mut rgb_result = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&cleaned, &mut rgb_result, opencv::imgproc::COLOR_GRAY2RGB)
+            .map_err(|e| format!("cvt_color to rgb failed: {}", e))?;
+        let result = mat_to_sd_image(&rgb_result)?;
+        super::imp::sd_image_to_dynamic(&result)
     }
 
     pub fn threshold_preprocess(
@@ -624,6 +663,60 @@ mod opencv_imp {
         let sd_result = mat_to_sd_image(&result)?;
         super::imp::sd_image_to_dynamic(&sd_result)
     }
+
+    pub fn hed_preprocess(
+        img: &image::DynamicImage,
+        safe_steps: i32,
+    ) -> Result<image::DynamicImage, String> {
+        let sd_img = super::imp::dynamic_to_sd_image(img)?;
+        let mat = sd_image_to_mat(&sd_img)?;
+        let mut gray = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&mat, &mut gray, opencv::imgproc::COLOR_RGB2GRAY)
+            .map_err(|e| format!("cvt_color to gray failed: {}", e))?;
+
+        let mut gray_f32 = opencv::core::Mat::default();
+        gray.convert_to(&mut gray_f32, opencv::core::CV_32F, 1.0 / 255.0, 0.0)
+            .map_err(|e| format!("convert_to f32 failed: {}", e))?;
+
+        let sigma_c = 0.8;
+        let sigma_s = sigma_c * (1.6 + 0.3 * safe_steps as f64);
+
+        let mut gauss_c = opencv::core::Mat::default();
+        let mut gauss_s = opencv::core::Mat::default();
+        opencv::imgproc::gaussian_blur_def(&gray_f32, &mut gauss_c, opencv::core::Size::new(0, 0), sigma_c)
+            .map_err(|e| format!("GaussianBlur c failed: {}", e))?;
+        opencv::imgproc::gaussian_blur_def(&gray_f32, &mut gauss_s, opencv::core::Size::new(0, 0), sigma_s)
+            .map_err(|e| format!("GaussianBlur s failed: {}", e))?;
+
+        let rows = gray_f32.rows();
+        let cols = gray_f32.cols();
+        let gc_data = gauss_c.data_bytes().map_err(|e| format!("gauss_c data: {}", e))?;
+        let gs_data = gauss_s.data_bytes().map_err(|e| format!("gauss_s data: {}", e))?;
+
+        let mut xdog_data = vec![0u8; (rows * cols) as usize];
+        let tau: f32 = 0.98;
+        let epsilon: f32 = 10.0;
+
+        for i in 0..(rows * cols) as usize {
+            let gc = f32::from_le_bytes(gc_data[i * 4..i * 4 + 4].try_into().unwrap_or([0u8; 4]));
+            let gs = f32::from_le_bytes(gs_data[i * 4..i * 4 + 4].try_into().unwrap_or([0u8; 4]));
+            let diff = gc - tau * gs;
+            let val = if gc > 0.0 { diff / gc } else { 0.0 };
+            let result = if val > epsilon { 1.0 } else { 1.0 + f32::tanh((val - epsilon) * 5.0) };
+            xdog_data[i] = (result.min(1.0).max(0.0) * 255.0) as u8;
+        }
+
+        let xdog_mat = opencv::core::Mat::from_slice(&xdog_data)
+            .map_err(|e| format!("from_slice failed: {}", e))?;
+        let reshaped = xdog_mat.reshape(1, rows)
+            .map_err(|e| format!("reshape failed: {}", e))?;
+
+        let mut rgb_result = opencv::core::Mat::default();
+        opencv::imgproc::cvt_color_def(&reshaped, &mut rgb_result, opencv::imgproc::COLOR_GRAY2RGB)
+            .map_err(|e| format!("cvt_color to rgb failed: {}", e))?;
+        let result = mat_to_sd_image(&rgb_result)?;
+        super::imp::sd_image_to_dynamic(&result)
+    }
 }
 
 #[cfg(feature = "opencv")]
@@ -641,7 +734,7 @@ mod dispatch {
         super::opencv_imp::lineart_preprocess(img, coarse)
     }
     pub fn hed_preprocess(img: &image::DynamicImage, safe_steps: i32) -> Result<image::DynamicImage, String> {
-        super::imp::hed_preprocess(img, safe_steps)
+        super::opencv_imp::hed_preprocess(img, safe_steps)
     }
     pub fn threshold_preprocess(img: &image::DynamicImage, thresh: f32, invert: bool) -> Result<image::DynamicImage, String> {
         super::opencv_imp::threshold_preprocess(img, thresh, invert)
