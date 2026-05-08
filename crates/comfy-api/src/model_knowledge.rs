@@ -777,7 +777,7 @@ pub fn get_workflow_templates() -> Vec<WorkflowTemplate> {
                     title: "Load Upscale Model".into(),
                     x: 50,
                     y: 300,
-                    inputs: serde_json::json!({"model_name": ""}),
+                    inputs: serde_json::json!({"upscale_model_name": ""}),
                 },
                 TemplateNode {
                     id: "3".into(),

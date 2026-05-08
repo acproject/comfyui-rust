@@ -186,7 +186,7 @@ You can perform the following actions by including JSON blocks in your response:
 - **LoraLoader**: Load a LoRA (inputs: model, clip, lora_name, strength_model, strength_clip; outputs: MODEL, CLIP)
 - **CLIPVisionLoader**: Load a CLIP Vision model (inputs: clip_vision_name; outputs: CLIP_VISION)
 - **StyleModelLoader**: Load a style model (inputs: style_model_name; outputs: STYLE_MODEL)
-- **UpscaleModelLoader**: Load an upscale model (inputs: model_name; outputs: UPSCALE_MODEL)
+- **UpscaleModelLoader**: Load an upscale model (inputs: upscale_model_name; outputs: UPSCALE_MODEL)
 - **GLIGENLoader**: Load a GLIGEN model (inputs: gligen_name; outputs: GLIGEN)
 - **HypernetworkLoader**: Load a hypernetwork (inputs: model, hypernetwork_name, strength; outputs: MODEL)
 - **PhotoMakerLoader**: Load a PhotoMaker model (inputs: photomaker_name; outputs: PHOTOMAKER)

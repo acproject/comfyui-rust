@@ -4641,7 +4641,7 @@ fn register_latent_upscale_model_loader(registry: &mut NodeRegistry) {
         input_types: NodeInputTypes {
             required: {
                 let mut m = HashMap::new();
-                m.insert("model_name".to_string(), InputTypeSpec {
+                m.insert("latent_upscale_model_name".to_string(), InputTypeSpec {
                     type_name: "COMBO".to_string(),
                     extra: HashMap::new(),
                 });
@@ -4661,7 +4661,7 @@ fn register_latent_upscale_model_loader(registry: &mut NodeRegistry) {
     };
 
     registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
-        let model_name = node.inputs.get("model_name")
+        let model_name = node.inputs.get("latent_upscale_model_name")
             .and_then(|v| v.as_str())
             .unwrap_or("ltx-2.3-spatial-upscaler-x2-1.1.safetensors");
         let model_path = resolve_model_path("latent_upscale_models", model_name);
@@ -5861,7 +5861,7 @@ fn register_upscale_model_loader(registry: &mut NodeRegistry) {
         input_types: NodeInputTypes {
             required: {
                 let mut m = HashMap::new();
-                m.insert("model_name".to_string(), InputTypeSpec {
+                m.insert("upscale_model_name".to_string(), InputTypeSpec {
                     type_name: "COMBO".to_string(),
                     extra: HashMap::new(),
                 });
@@ -5881,7 +5881,7 @@ fn register_upscale_model_loader(registry: &mut NodeRegistry) {
     };
 
     registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
-        let model_name = node.inputs.get("model_name")
+        let model_name = node.inputs.get("upscale_model_name")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 

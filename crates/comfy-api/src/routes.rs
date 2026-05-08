@@ -206,8 +206,15 @@ pub async fn get_object_info(
         m.insert("clip_vision_name", "clip_vision");
         m.insert("control_net_name", "controlnet");
         m.insert("upscale_model_name", "upscale_models");
+        m.insert("latent_upscale_model_name", "latent_upscale_models");
         m.insert("embedding_name", "embeddings");
         m.insert("style_model_name", "style_models");
+        m.insert("gligen_name", "gligen");
+        m.insert("hypernetwork_name", "hypernetworks");
+        m.insert("photomaker_name", "photomarker");
+        m.insert("classifier_name", "classifiers");
+        m.insert("audio_encoder_name", "audio_encoders");
+        m.insert("patch_name", "model_patches");
         m.insert("image", "input_images");
         m.insert("llm_model_name", "llm");
         m.insert("audio", "input_audio");
