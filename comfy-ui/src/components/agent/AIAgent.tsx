@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type FC } from 'react';
 import { Send, Bot, User, Settings, Trash2, CheckCircle, XCircle, Loader2, Workflow, Sparkles, BookOpen } from 'lucide-react';
 import { useWorkflowStore } from '@/store/workflow';
+import { useCustomNodesStore } from '@/store/customNodes';
 import { api } from '@/api/client';
 import type {
   AgentConfig,
@@ -158,6 +159,51 @@ const AIAgent: FC = () => {
         case 'clear_workflow': {
           clearWorkflow();
           return { success: true, message: 'Workflow cleared' };
+        }
+        case 'create_custom_node': {
+          const p = action.payload as {
+            classType: string;
+            displayName: string;
+            category?: string;
+            description?: string;
+            inputs?: Array<{ name: string; type: string; required?: boolean; default?: unknown; extra?: Record<string, unknown> }>;
+            outputs?: Array<{ name: string; type: string }>;
+            isOutputNode?: boolean;
+            executeCode?: string;
+          };
+          if (!p.classType || !p.displayName) {
+            return { success: false, message: 'Missing classType or displayName for custom node' };
+          }
+          const customNode = {
+            id: crypto.randomUUID(),
+            classType: p.classType,
+            displayName: p.displayName,
+            category: p.category || 'custom',
+            description: p.description || '',
+            inputs: (p.inputs || []).map((inp) => ({
+              name: inp.name,
+              type: inp.type as import('@/types/api').IoType,
+              required: inp.required ?? true,
+              default: inp.default,
+              extra: inp.extra,
+            })),
+            outputs: (p.outputs || []).map((out) => ({
+              name: out.name,
+              type: out.type as import('@/types/api').IoType,
+            })),
+            isOutputNode: p.isOutputNode || false,
+            executeCode: p.executeCode,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          const addCustomNode = useCustomNodesStore.getState().addCustomNode;
+          addCustomNode(customNode).then(() => {
+            const store = useCustomNodesStore.getState();
+            const currentObjInfo = useWorkflowStore.getState().objectInfo;
+            const merged = store.mergeWithObjectInfo(currentObjInfo);
+            useWorkflowStore.getState().setObjectInfo(merged);
+          }).catch(() => {});
+          return { success: true, message: `Created custom node: ${p.displayName} (${p.classType})` };
         }
         default:
           return { success: false, message: `Unknown action: ${(action as AgentAction & { type: string }).type}` };

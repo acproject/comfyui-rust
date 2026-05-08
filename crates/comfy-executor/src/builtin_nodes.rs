@@ -185,6 +185,21 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_primitive_boolean(registry);
     register_primitive_string_multiline(registry);
     register_comfy_math_expression(registry);
+    register_clip_vision_loader(registry);
+    register_style_model_loader(registry);
+    register_upscale_model_loader(registry);
+    register_gligen_loader(registry);
+    register_hypernetwork_loader(registry);
+    register_photomaker_loader(registry);
+    register_embedding_loader(registry);
+    register_classifier_loader(registry);
+    register_audio_encoder_loader(registry);
+    register_model_patch_loader(registry);
+    register_vae_approx_loader(registry);
+    register_if_else_node(registry);
+    register_for_loop_node(registry);
+    register_switch_node(registry);
+    register_pure_function_call_node(registry);
 
     #[cfg(feature = "controlnet")]
     crate::controlnet::register_controlnet_nodes(registry);
@@ -5748,6 +5763,905 @@ fn register_comfy_math_expression(registry: &mut NodeRegistry) {
 
         Box::pin(async move {
             Ok(vec![json!(result), json!(result as i64)])
+        })
+    }));
+}
+
+fn register_clip_vision_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "CLIPVisionLoader".to_string(),
+        display_name: "Load CLIP Vision Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("clip_vision_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::ClipVision],
+        output_names: vec!["CLIP_VISION".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_clip_vision".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let clip_vision_name = node.inputs.get("clip_vision_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let clip_vision_path = resolve_model_path("clip_vision", clip_vision_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "clip_vision",
+                "clip_vision_path": clip_vision_path,
+            })])
+        })
+    }));
+}
+
+fn register_style_model_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "StyleModelLoader".to_string(),
+        display_name: "Load Style Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("style_model_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::StyleModel],
+        output_names: vec!["STYLE_MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_style_model".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let style_model_name = node.inputs.get("style_model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let style_model_path = resolve_model_path("style_models", style_model_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "style_model",
+                "style_model_path": style_model_path,
+            })])
+        })
+    }));
+}
+
+fn register_upscale_model_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "UpscaleModelLoader".to_string(),
+        display_name: "Load Upscale Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::UpscaleModel],
+        output_names: vec!["UPSCALE_MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_upscale_model".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let model_name = node.inputs.get("model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let model_path = resolve_model_path("upscale_models", model_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "upscale_model",
+                "path": model_path,
+            })])
+        })
+    }));
+}
+
+fn register_gligen_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "GLIGENLoader".to_string(),
+        display_name: "Load GLIGEN Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("gligen_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Gligen],
+        output_names: vec!["GLIGEN".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_gligen".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let gligen_name = node.inputs.get("gligen_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let gligen_path = resolve_model_path("gligen", gligen_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "gligen",
+                "gligen_path": gligen_path,
+            })])
+        })
+    }));
+}
+
+fn register_hypernetwork_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "HypernetworkLoader".to_string(),
+        display_name: "Load Hypernetwork".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("hypernetwork_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_hypernetwork".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model")
+            .unwrap_or_else(|_| json!({}));
+        let hypernetwork_name = ctx.resolve_input(node_id, "hypernetwork_name")
+            .unwrap_or_else(|_| json!(""))
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let strength = ctx.resolve_input(node_id, "strength")
+            .unwrap_or_else(|_| json!(1.0))
+            .as_f64()
+            .unwrap_or(1.0) as f32;
+
+        let hypernetwork_path = resolve_model_path("hypernetworks", &hypernetwork_name);
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("hypernetwork_path".to_string(), json!(hypernetwork_path));
+            model_out.insert("hypernetwork_strength".to_string(), json!(strength));
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+fn register_photomaker_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "PhotoMakerLoader".to_string(),
+        display_name: "Load PhotoMaker Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("photomaker_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Photomaker],
+        output_names: vec!["PHOTOMAKER".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_photomaker".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let photomaker_name = node.inputs.get("photomaker_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let photomaker_path = resolve_model_path("photomarker", photomaker_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "photomaker",
+                "photomaker_path": photomaker_path,
+            })])
+        })
+    }));
+}
+
+fn register_embedding_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "EmbeddingLoader".to_string(),
+        display_name: "Load Embedding".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("embedding_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Embedding],
+        output_names: vec!["EMBEDDING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_embedding".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let embedding_name = node.inputs.get("embedding_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let embedding_path = resolve_model_path("embeddings", embedding_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "embedding",
+                "embedding_path": embedding_path,
+                "embedding_name": embedding_name,
+            })])
+        })
+    }));
+}
+
+fn register_classifier_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ClassifierLoader".to_string(),
+        display_name: "Load Classifier Model".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("classifier_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Custom("CLASSIFIER".to_string())],
+        output_names: vec!["CLASSIFIER".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_classifier".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let classifier_name = node.inputs.get("classifier_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let classifier_path = resolve_model_path("classifiers", classifier_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "classifier",
+                "classifier_path": classifier_path,
+            })])
+        })
+    }));
+}
+
+fn register_audio_encoder_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "AudioEncoderLoader".to_string(),
+        display_name: "Load Audio Encoder".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("audio_encoder_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Custom("AUDIO_ENCODER".to_string())],
+        output_names: vec!["AUDIO_ENCODER".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_audio_encoder".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let audio_encoder_name = node.inputs.get("audio_encoder_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let audio_encoder_path = resolve_model_path("audio_encoders", audio_encoder_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "audio_encoder",
+                "audio_encoder_path": audio_encoder_path,
+            })])
+        })
+    }));
+}
+
+fn register_model_patch_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ModelPatchLoader".to_string(),
+        display_name: "Load Model Patch".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("patch_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_model_patch".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model")
+            .unwrap_or_else(|_| json!({}));
+        let patch_name = ctx.resolve_input(node_id, "patch_name")
+            .unwrap_or_else(|_| json!(""))
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let strength = ctx.resolve_input(node_id, "strength")
+            .unwrap_or_else(|_| json!(1.0))
+            .as_f64()
+            .unwrap_or(1.0) as f32;
+
+        let patch_path = resolve_model_path("model_patches", &patch_name);
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("model_patch_path".to_string(), json!(patch_path));
+            model_out.insert("model_patch_strength".to_string(), json!(strength));
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+fn register_vae_approx_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VAEApproxLoader".to_string(),
+        display_name: "Load VAE Approx (Preview)".to_string(),
+        category: "loaders".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("vae_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Vae],
+        output_names: vec!["VAE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_vae_approx".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let vae_name = node.inputs.get("vae_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let vae_path = resolve_model_path("vae_approx", vae_name);
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "vae",
+                "vae_path": vae_path,
+                "is_approx": true,
+            })])
+        })
+    }));
+}
+
+fn register_if_else_node(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "IfElseNode".to_string(),
+        display_name: "If/Else Conditional".to_string(),
+        category: "logic".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("condition".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("on_true".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("on_false".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Any],
+        output_names: vec!["OUTPUT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "if_else".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let condition = ctx.resolve_input(node_id, "condition")
+            .unwrap_or_else(|_| json!(true));
+        let on_true = ctx.resolve_input(node_id, "on_true")
+            .unwrap_or_else(|_| json!(null));
+        let on_false = ctx.resolve_input(node_id, "on_false")
+            .unwrap_or_else(|_| json!(null));
+
+        Box::pin(async move {
+            let result = if condition.as_bool().unwrap_or(true) {
+                on_true
+            } else {
+                on_false
+            };
+            Ok(vec![result])
+        })
+    }));
+}
+
+fn register_for_loop_node(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ForLoopNode".to_string(),
+        display_name: "For Loop".to_string(),
+        category: "logic".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("count".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("initial_value".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Any, IoType::Int],
+        output_names: vec!["OUTPUT".to_string(), "INDEX".to_string()],
+        output_is_list: vec![false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "for_loop".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let count = ctx.resolve_input(node_id, "count")
+            .unwrap_or_else(|_| json!(1));
+        let initial_value = ctx.resolve_input(node_id, "initial_value")
+            .unwrap_or_else(|_| json!(null));
+
+        Box::pin(async move {
+            let n = count.as_i64().unwrap_or(1).max(1).min(1000);
+            let mut result = initial_value;
+            for i in 0..n {
+                result = json!({
+                    "loop_index": i,
+                    "loop_count": n,
+                    "accumulated": result,
+                });
+            }
+            Ok(vec![result, json!(0)])
+        })
+    }));
+}
+
+fn register_switch_node(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "SwitchNode".to_string(),
+        display_name: "Switch (Multi-Branch)".to_string(),
+        category: "logic".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("selector".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("input_0".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("input_1".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("input_2".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("input_3".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Any],
+        output_names: vec!["OUTPUT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "switch".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let selector = ctx.resolve_input(node_id, "selector")
+            .unwrap_or_else(|_| json!(0));
+        let input_0 = ctx.resolve_input(node_id, "input_0")
+            .unwrap_or_else(|_| json!(null));
+        let input_1 = ctx.resolve_input(node_id, "input_1")
+            .unwrap_or_else(|_| json!(null));
+        let input_2 = ctx.resolve_input(node_id, "input_2")
+            .unwrap_or_else(|_| json!(null));
+        let input_3 = ctx.resolve_input(node_id, "input_3")
+            .unwrap_or_else(|_| json!(null));
+
+        Box::pin(async move {
+            let idx = selector.as_i64().unwrap_or(0).clamp(0, 3) as usize;
+            let inputs = [input_0, input_1, input_2, input_3];
+            Ok(vec![inputs[idx].clone()])
+        })
+    }));
+}
+
+fn register_pure_function_call_node(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "PureFunctionCallNode".to_string(),
+        display_name: "Pure Function Call".to_string(),
+        category: "logic".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("function_name".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("arg_0".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("arg_1".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("arg_2".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("arg_3".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("arg_4".to_string(), InputTypeSpec {
+                    type_name: "*".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Any],
+        output_names: vec!["OUTPUT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "call".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let function_name = node.inputs.get("function_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let args: Vec<Value> = (0..5)
+            .filter_map(|i| {
+                let key = format!("arg_{}", i);
+                node.inputs.get(&key).cloned()
+            })
+            .collect();
+
+        Box::pin(async move {
+            let result = match function_name.as_str() {
+                "string_concat" => {
+                    let s: String = args.iter()
+                        .filter_map(|a| a.as_str())
+                        .collect();
+                    json!(s)
+                }
+                "string_join" => {
+                    let separator = args.first().and_then(|a| a.as_str()).unwrap_or(",");
+                    let parts: Vec<&str> = args.iter().skip(1)
+                        .filter_map(|a| a.as_str())
+                        .collect();
+                    json!(parts.join(separator))
+                }
+                "math_add" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a + b)
+                }
+                "math_subtract" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a - b)
+                }
+                "math_multiply" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a * b)
+                }
+                "math_divide" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0);
+                    if b != 0.0 { json!(a / b) } else { json!(null) }
+                }
+                "math_modulo" => {
+                    let a = args.first().and_then(|v| v.as_i64()).unwrap_or(0);
+                    let b = args.get(1).and_then(|v| v.as_i64()).unwrap_or(1);
+                    if b != 0 { json!(a % b) } else { json!(null) }
+                }
+                "math_power" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0);
+                    json!(a.powf(b))
+                }
+                "math_min" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a.min(b))
+                }
+                "math_max" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a.max(b))
+                }
+                "math_abs" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a.abs())
+                }
+                "math_floor" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a.floor() as i64)
+                }
+                "math_ceil" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a.ceil() as i64)
+                }
+                "math_round" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a.round() as i64)
+                }
+                "logic_and" => {
+                    let a = args.first().and_then(|v| v.as_bool()).unwrap_or(false);
+                    let b = args.get(1).and_then(|v| v.as_bool()).unwrap_or(false);
+                    json!(a && b)
+                }
+                "logic_or" => {
+                    let a = args.first().and_then(|v| v.as_bool()).unwrap_or(false);
+                    let b = args.get(1).and_then(|v| v.as_bool()).unwrap_or(false);
+                    json!(a || b)
+                }
+                "logic_not" => {
+                    let a = args.first().and_then(|v| v.as_bool()).unwrap_or(false);
+                    json!(!a)
+                }
+                "compare_equals" => {
+                    let a = args.first();
+                    let b = args.get(1);
+                    json!(a == b)
+                }
+                "compare_greater" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a > b)
+                }
+                "compare_less" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a < b)
+                }
+                "compare_greater_equal" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a >= b)
+                }
+                "compare_less_equal" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let b = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a <= b)
+                }
+                "compare_not_equals" => {
+                    let a = args.first();
+                    let b = args.get(1);
+                    json!(a != b)
+                }
+                "type_to_string" => {
+                    json!(args.first().map(|v| v.to_string()).unwrap_or_default())
+                }
+                "string_length" => {
+                    let s = args.first().and_then(|v| v.as_str()).unwrap_or("");
+                    json!(s.len() as i64)
+                }
+                "string_upper" => {
+                    let s = args.first().and_then(|v| v.as_str()).unwrap_or("").to_uppercase();
+                    json!(s)
+                }
+                "string_lower" => {
+                    let s = args.first().and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                    json!(s)
+                }
+                "string_replace" => {
+                    let s = args.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let from = args.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let to = args.get(2).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    json!(s.replace(&from, &to))
+                }
+                "int_to_float" => {
+                    let a = args.first().and_then(|v| v.as_i64()).unwrap_or(0);
+                    json!(a as f64)
+                }
+                "float_to_int" => {
+                    let a = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    json!(a as i64)
+                }
+                _ => {
+                    json!({
+                        "type": "pure_function_call",
+                        "function_name": function_name,
+                        "args": args,
+                    })
+                }
+            };
+            Ok(vec![result])
         })
     }));
 }

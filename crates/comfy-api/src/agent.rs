@@ -172,6 +172,9 @@ You can perform the following actions by including JSON blocks in your response:
 8. **Clear workflow**: ```action
 {{"type": "clear_workflow", "payload": {{}}}}
 ```
+9. **Create custom node**: ```action
+{{"type": "create_custom_node", "payload": {{"classType": "Custom_NodeName", "displayName": "Node Display Name", "category": "custom", "description": "Description", "inputs": [{{"name": "input_name", "type": "STRING", "required": true, "default": ""}}], "outputs": [{{"name": "output_name", "type": "STRING"}}], "isOutputNode": false, "executeCode": "return [inputs.input_name];"}}}}
+```
 
 ## Common Node Types
 
@@ -181,6 +184,17 @@ You can perform the following actions by including JSON blocks in your response:
 - **DualCLIPLoader**: Load dual CLIP models for SDXL/Flux (inputs: clip_name1, clip_name2, type; outputs: CLIP)
 - **VAELoader**: Load a standalone VAE (inputs: vae_name; outputs: VAE)
 - **LoraLoader**: Load a LoRA (inputs: model, clip, lora_name, strength_model, strength_clip; outputs: MODEL, CLIP)
+- **CLIPVisionLoader**: Load a CLIP Vision model (inputs: clip_vision_name; outputs: CLIP_VISION)
+- **StyleModelLoader**: Load a style model (inputs: style_model_name; outputs: STYLE_MODEL)
+- **UpscaleModelLoader**: Load an upscale model (inputs: model_name; outputs: UPSCALE_MODEL)
+- **GLIGENLoader**: Load a GLIGEN model (inputs: gligen_name; outputs: GLIGEN)
+- **HypernetworkLoader**: Load a hypernetwork (inputs: model, hypernetwork_name, strength; outputs: MODEL)
+- **PhotoMakerLoader**: Load a PhotoMaker model (inputs: photomaker_name; outputs: PHOTOMAKER)
+- **EmbeddingLoader**: Load an embedding (inputs: embedding_name; outputs: EMBEDDING)
+- **ClassifierLoader**: Load a classifier model (inputs: classifier_name; outputs: CLASSIFIER)
+- **AudioEncoderLoader**: Load an audio encoder (inputs: audio_encoder_name; outputs: AUDIO_ENCODER)
+- **ModelPatchLoader**: Load a model patch (inputs: model, patch_name, strength; outputs: MODEL)
+- **VAEApproxLoader**: Load a VAE approx for preview (inputs: vae_name; outputs: VAE)
 
 ### Text Encoding
 - **CLIPTextEncode**: Encode text prompt (inputs: clip, text; outputs: CONDITIONING)
@@ -255,6 +269,20 @@ You can perform the following actions by including JSON blocks in your response:
 - **LoraLoaderModelOnly**: Load LoRA for model only (inputs: model, lora_name, strength_model; outputs: MODEL)
 - **PrimitiveInt/Float/Boolean/StringMultiline**: Primitive value nodes
 - **ComfyMathExpression**: Evaluate math expression (inputs: expression, [values.a, values.b, values.c]; outputs: FLOAT, INT)
+
+### Logic & Control Flow
+- **IfElseNode**: Conditional branching (inputs: condition [BOOLEAN], on_true [*], on_false [*]; outputs: OUTPUT [*])
+- **ForLoopNode**: Loop iteration (inputs: count [INT], initial_value [*]; outputs: OUTPUT [*], INDEX [INT])
+- **SwitchNode**: Multi-branch switch (inputs: selector [INT], input_0 [*], input_1 [*], [input_2, input_3]; outputs: OUTPUT [*])
+- **PureFunctionCallNode**: Pure function call (inputs: function_name [STRING], [arg_0..arg_4]; outputs: OUTPUT [*]). Available functions: string_concat, string_join, math_add, math_subtract, math_multiply, math_divide, math_modulo, math_power, math_min, math_max, math_abs, math_floor, math_ceil, math_round, logic_and, logic_or, logic_not, compare_equals, compare_greater, compare_less, compare_greater_equal, compare_less_equal, compare_not_equals, type_to_string, string_length, string_upper, string_lower, string_replace, int_to_float, float_to_int
+
+### Custom Node Creation
+You can create custom nodes for users by using the `create_custom_node` action. Custom nodes allow users to extend the workflow without programming. When creating custom nodes:
+- Define clear inputs and outputs with proper types
+- Use `executeCode` for JavaScript function body (receives `inputs` object, must return array matching output types)
+- Available types: STRING, INT, FLOAT, BOOLEAN, MODEL, CLIP, VAE, IMAGE, MASK, LATENT, CONDITIONING, CONTROL_NET, UPSCALE_MODEL, CLIP_VISION, STYLE_MODEL, GLIGEN, PHOTOMAKER, HYPERNETWORK, EMBEDDING, NOISE, SIGMAS, GUIDER, SAMPLER, COMBO
+- Use logic nodes (IfElseNode, SwitchNode, ForLoopNode) for conditional workflows
+- Use PureFunctionCallNode for data transformation and computation
 
 {model_section}
 

@@ -278,7 +278,7 @@ export interface AgentChatRequest {
 }
 
 export interface AgentAction {
-  type: 'add_node' | 'connect' | 'set_param' | 'load_workflow_template' | 'recommend_model' | 'run_workflow' | 'validate_workflow' | 'clear_workflow';
+  type: 'add_node' | 'connect' | 'set_param' | 'load_workflow_template' | 'recommend_model' | 'run_workflow' | 'validate_workflow' | 'clear_workflow' | 'create_custom_node';
   payload: Record<string, unknown>;
 }
 
