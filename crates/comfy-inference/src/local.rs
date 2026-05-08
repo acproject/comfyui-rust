@@ -70,7 +70,15 @@ impl Drop for ContextCache {
 }
 
 fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> ContextConfig {
-    ContextConfig {
+    let is_ltx_model = model_config.model_path.as_ref().map_or(false, |p| {
+        let p = p.to_lowercase();
+        p.contains("ltx")
+    }) || model_config.diffusion_model_path.as_ref().map_or(false, |p| {
+        let p = p.to_lowercase();
+        p.contains("ltx")
+    });
+
+    let mut config = ContextConfig {
         model_path: model_config.model_path.clone().or(base_config.model_path.clone()),
         clip_l_path: model_config.clip_l_path.clone().or(base_config.clip_l_path.clone()),
         clip_g_path: model_config.clip_g_path.clone().or(base_config.clip_g_path.clone()),
@@ -83,7 +91,17 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
         control_net_path: model_config.control_net_path.clone().or(base_config.control_net_path.clone()),
         text_encoder_path: model_config.text_encoder_path.clone().or(base_config.text_encoder_path.clone()),
         ..base_config.clone()
+    };
+
+    if is_ltx_model {
+        config.offload_params_to_cpu = true;
+        if matches!(config.wtype, SdType::Auto) {
+            config.wtype = SdType::Q8_0;
+        }
+        tracing::info!("LTX model detected: enabling offload_params_to_cpu, wtype={}", config.wtype);
     }
+
+    config
 }
 
 fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
@@ -113,7 +131,10 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.vae_decode_only = config.vae_decode_only;
     c_params.free_params_immediately = config.free_params_immediately;
     c_params.n_threads = config.n_threads;
-    c_params.wtype = CSdType::Count;
+    c_params.wtype = match config.wtype {
+        SdType::Auto => CSdType::Count,
+        other => unsafe { std::mem::transmute::<u32, CSdType>(other as u32) },
+    };
     c_params.rng_type = CRngType::Cuda;
     c_params.sampler_rng_type = CRngType::Count;
     c_params.prediction = CPredictionType::Count;
@@ -267,6 +288,7 @@ impl LocalBackend {
         strings: &mut CStringHolder,
     ) -> CImgGenParams {
         let mut c_params: CImgGenParams = unsafe { std::mem::zeroed() };
+        unsafe { sd_img_gen_params_init(&mut c_params) };
 
         c_params.prompt = strings.cstr(&params.prompt);
         c_params.negative_prompt = strings.cstr(&params.negative_prompt);
@@ -371,6 +393,7 @@ impl InferenceBackend for LocalBackend {
 
         let mut strings = CStringHolder::new();
         let mut c_params: CVidGenParams = unsafe { std::mem::zeroed() };
+        unsafe { sd_vid_gen_params_init(&mut c_params) };
 
         c_params.prompt = strings.cstr(&params.prompt);
         c_params.negative_prompt = strings.cstr(&params.negative_prompt);
@@ -410,6 +433,7 @@ impl InferenceBackend for LocalBackend {
         for i in 0..num_frames_out as usize {
             let c_img = unsafe { &*result.add(i) };
             if c_img.data.is_null() {
+                tracing::warn!("generate_video: frame {} has null data", i);
                 continue;
             }
             let len = (c_img.width * c_img.height * c_img.channel) as usize;
@@ -515,54 +539,56 @@ fn null_c_image() -> CSdImage {
 }
 
 fn build_c_sample_params(params: &SampleParams) -> CSampleParams {
-    CSampleParams {
-        guidance: CGuidanceParams {
-            txt_cfg: params.guidance.txt_cfg,
-            img_cfg: params.guidance.img_cfg.unwrap_or(f32::NAN),
-            distilled_guidance: params.guidance.distilled_guidance,
-            slg: CSlgParams {
-                layers: ptr::null_mut(),
-                layer_count: 0,
-                layer_start: params.guidance.slg.layer_start,
-                layer_end: params.guidance.slg.layer_end,
-                scale: params.guidance.slg.scale,
-            },
-        },
-        scheduler: match params.scheduler {
-            Scheduler::Discrete => CScheduler::Discrete,
-            Scheduler::Karras => CScheduler::Karras,
-            Scheduler::Exponential => CScheduler::Exponential,
-            Scheduler::Ays => CScheduler::Ays,
-            Scheduler::Gits => CScheduler::Gits,
-            Scheduler::SgmUniform => CScheduler::SgmUniform,
-            Scheduler::Simple => CScheduler::Simple,
-            Scheduler::Smoothstep => CScheduler::Smoothstep,
-            Scheduler::KlOptimal => CScheduler::KlOptimal,
-            Scheduler::Lcm => CScheduler::Lcm,
-            Scheduler::BongTangent => CScheduler::BongTangent,
-        },
-        sample_method: match params.sample_method {
-            SampleMethod::Euler => CSampleMethod::Euler,
-            SampleMethod::EulerA => CSampleMethod::EulerA,
-            SampleMethod::Heun => CSampleMethod::Heun,
-            SampleMethod::DPM2 => CSampleMethod::DPM2,
-            SampleMethod::DPMPP2SA => CSampleMethod::DPMPP2SA,
-            SampleMethod::DPMPP2M => CSampleMethod::DPMPP2M,
-            SampleMethod::DPMPP2Mv2 => CSampleMethod::DPMPP2Mv2,
-            SampleMethod::IPNDM => CSampleMethod::IPNDM,
-            SampleMethod::IPNDMV => CSampleMethod::IPNDMV,
-            SampleMethod::LCM => CSampleMethod::LCM,
-            SampleMethod::DDIMTrailing => CSampleMethod::DDIMTrailing,
-            SampleMethod::TCD => CSampleMethod::TCD,
-            SampleMethod::ResMultistep => CSampleMethod::ResMultistep,
-            SampleMethod::Res2S => CSampleMethod::Res2S,
-            SampleMethod::ErSde => CSampleMethod::ErSde,
-        },
-        sample_steps: params.sample_steps,
-        eta: params.eta.unwrap_or(f32::NAN),
-        shifted_timestep: params.shifted_timestep,
-        custom_sigmas: ptr::null_mut(),
-        custom_sigmas_count: 0,
-        flow_shift: params.flow_shift.unwrap_or(f32::NAN),
+    let mut c_params: CSampleParams = unsafe { std::mem::zeroed() };
+    unsafe { sd_sample_params_init(&mut c_params) };
+
+    c_params.guidance.txt_cfg = params.guidance.txt_cfg;
+    if let Some(img_cfg) = params.guidance.img_cfg {
+        c_params.guidance.img_cfg = img_cfg;
     }
+    c_params.guidance.distilled_guidance = params.guidance.distilled_guidance;
+    c_params.guidance.slg.layer_start = params.guidance.slg.layer_start;
+    c_params.guidance.slg.layer_end = params.guidance.slg.layer_end;
+    c_params.guidance.slg.scale = params.guidance.slg.scale;
+
+    c_params.scheduler = match params.scheduler {
+        Scheduler::Discrete => CScheduler::Discrete,
+        Scheduler::Karras => CScheduler::Karras,
+        Scheduler::Exponential => CScheduler::Exponential,
+        Scheduler::Ays => CScheduler::Ays,
+        Scheduler::Gits => CScheduler::Gits,
+        Scheduler::SgmUniform => CScheduler::SgmUniform,
+        Scheduler::Simple => CScheduler::Simple,
+        Scheduler::Smoothstep => CScheduler::Smoothstep,
+        Scheduler::KlOptimal => CScheduler::KlOptimal,
+        Scheduler::Lcm => CScheduler::Lcm,
+        Scheduler::BongTangent => CScheduler::BongTangent,
+    };
+    c_params.sample_method = match params.sample_method {
+        SampleMethod::Euler => CSampleMethod::Euler,
+        SampleMethod::EulerA => CSampleMethod::EulerA,
+        SampleMethod::Heun => CSampleMethod::Heun,
+        SampleMethod::DPM2 => CSampleMethod::DPM2,
+        SampleMethod::DPMPP2SA => CSampleMethod::DPMPP2SA,
+        SampleMethod::DPMPP2M => CSampleMethod::DPMPP2M,
+        SampleMethod::DPMPP2Mv2 => CSampleMethod::DPMPP2Mv2,
+        SampleMethod::IPNDM => CSampleMethod::IPNDM,
+        SampleMethod::IPNDMV => CSampleMethod::IPNDMV,
+        SampleMethod::LCM => CSampleMethod::LCM,
+        SampleMethod::DDIMTrailing => CSampleMethod::DDIMTrailing,
+        SampleMethod::TCD => CSampleMethod::TCD,
+        SampleMethod::ResMultistep => CSampleMethod::ResMultistep,
+        SampleMethod::Res2S => CSampleMethod::Res2S,
+        SampleMethod::ErSde => CSampleMethod::ErSde,
+    };
+    c_params.sample_steps = params.sample_steps;
+    if let Some(eta) = params.eta {
+        c_params.eta = eta;
+    }
+    c_params.shifted_timestep = params.shifted_timestep;
+    if let Some(flow_shift) = params.flow_shift {
+        c_params.flow_shift = flow_shift;
+    }
+
+    c_params
 }

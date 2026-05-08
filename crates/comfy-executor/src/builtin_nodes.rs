@@ -81,7 +81,7 @@ fn auto_detect_text_encoders(model_type: ModelType) -> (Option<String>, Option<S
         ModelType::SDXL => (true, true, false),
         ModelType::SD15 => (true, false, false),
         ModelType::Wan => (false, false, true),
-        ModelType::LTX => (true, false, true),
+        ModelType::LTX => (false, false, false),
         ModelType::Unknown => (true, true, true),
     };
 
@@ -347,7 +347,7 @@ fn register_sd3_loader(registry: &mut NodeRegistry) {
         input_types: NodeInputTypes {
             required: {
                 let mut m = HashMap::new();
-                m.insert("model_name".to_string(), InputTypeSpec {
+                m.insert("ckpt_name".to_string(), InputTypeSpec {
                     type_name: "COMBO".to_string(),
                     extra: HashMap::new(),
                 });
@@ -367,8 +367,9 @@ fn register_sd3_loader(registry: &mut NodeRegistry) {
     };
 
     registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
-        let model_name = node.inputs.get("model_name")
+        let model_name = node.inputs.get("ckpt_name")
             .and_then(|v| v.as_str())
+            .or_else(|| node.inputs.get("model_name").and_then(|v| v.as_str()))
             .unwrap_or("");
 
         let model_path = resolve_model_path("checkpoints", model_name);
@@ -836,6 +837,7 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                         "sdxl" => ModelType::SDXL,
                         "sd15" => ModelType::SD15,
                         "wan" => ModelType::Wan,
+                        "ltx" => ModelType::LTX,
                         _ => {
                             let ckpt = model.get("model_path")
                                 .or_else(|| model.get("diffusion_model_path"))
@@ -890,51 +892,6 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     }
                 }
 
-                let mut params = ImageGenParams::new(prompt_text)
-                    .with_negative_prompt(neg_prompt_text)
-                    .with_seed(seed.as_i64().unwrap_or(42))
-                    .with_sample_steps(steps.as_i64().unwrap_or(20) as i32)
-                    .with_cfg_scale(cfg.as_f64().unwrap_or(7.0) as f32)
-                    .with_sample_method(sample_method)
-                    .with_scheduler(sched)
-                    .with_dimensions(width, height)
-                    .with_model_config(model_config);
-
-                if let Some(loras) = model.get("loras").and_then(|v| v.as_array()) {
-                    for lora in loras {
-                        if let (Some(path), Some(mult)) = (
-                            lora.get("path").and_then(|v| v.as_str()),
-                            lora.get("multiplier").and_then(|v| v.as_f64()),
-                        ) {
-                            params = params.with_lora(path, mult as f32);
-                        }
-                    }
-                }
-
-                if let Some(cn) = positive.get("control_net") {
-                    if let Some(cn_path) = cn.get("path").and_then(|v| v.as_str()) {
-                        if !cn_path.is_empty() {
-                            params.model_config.control_net_path = Some(cn_path.to_string());
-                        }
-                    }
-                }
-                if let Some(cn_image) = positive.get("control_image") {
-                    if let Ok(sd_img) = serde_json::from_value::<comfy_inference::SdImage>(cn_image.clone()) {
-                        params.control_image = Some(sd_img);
-                    } else if let Some(img_obj) = cn_image.as_object() {
-                        if let Some(images) = img_obj.get("images").and_then(|v| v.as_array()) {
-                            if let Some(first) = images.first() {
-                                if let Ok(sd_img) = serde_json::from_value::<comfy_inference::SdImage>(first.clone()) {
-                                    params.control_image = Some(sd_img);
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some(cn_strength) = positive.get("control_strength") {
-                    params.control_strength = cn_strength.as_f64().unwrap_or(0.9) as f32;
-                }
-
                 let model_type_str = model.get("model_type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
@@ -953,61 +910,147 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                         detect_model_type(ckpt)
                     }
                 };
-                let (need_clip_l, need_clip_g, need_t5xxl) = match detected_type {
-                    ModelType::SD3 => (true, true, true),
-                    ModelType::Flux => (true, false, true),
-                    ModelType::SDXL => (true, true, false),
-                    ModelType::SD15 => (true, false, false),
-                    ModelType::Wan => (false, false, true),
-                    ModelType::LTX => (true, false, true),
-                    ModelType::Unknown => (false, false, false),
-                };
-                let mut missing_encoders = Vec::new();
-                if need_clip_l && params.model_config.clip_l_path.is_none() {
-                    missing_encoders.push("clip_l");
-                }
-                if need_clip_g && params.model_config.clip_g_path.is_none() {
-                    missing_encoders.push("clip_g");
-                }
-                if need_t5xxl && params.model_config.t5xxl_path.is_none() {
-                    missing_encoders.push("t5xxl");
-                }
-                if !missing_encoders.is_empty() {
-                    tracing::error!(
-                        "KSampler: {:?} model requires text encoders [{}] but they are missing. \
-                         Please download them to models/text_encoders/ directory.",
-                        detected_type,
-                        missing_encoders.join(", ")
-                    );
-                    return Err(ExecutorError::NodeExecutionFailed {
-                        node_id: node_id.to_string(),
-                        message: format!(
-                            "{:?} model requires text encoders [{}] but they are missing. \
+
+                if detected_type == ModelType::LTX {
+                    let mut video_frames = 1i32;
+                    if let Some(latent) = latent_image.as_object() {
+                        if let Some(len) = latent.get("length").and_then(|v| v.as_i64()) {
+                            video_frames = len as i32;
+                        }
+                    }
+                    let mut video_params = comfy_inference::VideoGenParams::new(prompt_text)
+                        .with_negative_prompt(neg_prompt_text)
+                        .with_seed(seed.as_i64().unwrap_or(42))
+                        .with_dimensions(width, height)
+                        .with_video_frames(video_frames)
+                        .with_model_config(model_config);
+                    video_params.sample_params.sample_steps = steps.as_i64().unwrap_or(20) as i32;
+                    video_params.sample_params.guidance.txt_cfg = cfg.as_f64().unwrap_or(7.0) as f32;
+                    video_params.sample_params.sample_method = sample_method;
+                    video_params.sample_params.scheduler = sched;
+
+                    match backend.generate_video(video_params) {
+                        Ok(video) => {
+                            let frame_count = video.frame_count();
+                            let frames: Vec<Value> = video.frames.iter().map(|img| {
+                                serde_json::to_value(img).unwrap_or_else(|_| json!({
+                                    "type": "image",
+                                    "width": img.width,
+                                    "height": img.height,
+                                    "channel": img.channel,
+                                }))
+                            }).collect();
+                            Ok(vec![json!({
+                                "type": "video",
+                                "frames": frames,
+                                "frame_count": frame_count,
+                                "fps": video.fps,
+                            })])
+                        }
+                        Err(e) => Err(ExecutorError::Inference(e)),
+                    }
+                } else {
+                    let (need_clip_l, need_clip_g, need_t5xxl) = match detected_type {
+                        ModelType::SD3 => (true, true, true),
+                        ModelType::Flux => (true, false, true),
+                        ModelType::SDXL => (true, true, false),
+                        ModelType::SD15 => (true, false, false),
+                        ModelType::Wan => (false, false, true),
+                        _ => (true, true, true),
+                    };
+
+                    let mut params = ImageGenParams::new(prompt_text)
+                        .with_negative_prompt(neg_prompt_text)
+                        .with_seed(seed.as_i64().unwrap_or(42))
+                        .with_sample_steps(steps.as_i64().unwrap_or(20) as i32)
+                        .with_cfg_scale(cfg.as_f64().unwrap_or(7.0) as f32)
+                        .with_sample_method(sample_method)
+                        .with_scheduler(sched)
+                        .with_dimensions(width, height)
+                        .with_model_config(model_config);
+
+                    if let Some(loras) = model.get("loras").and_then(|v| v.as_array()) {
+                        for lora in loras {
+                            if let (Some(path), Some(mult)) = (
+                                lora.get("path").and_then(|v| v.as_str()),
+                                lora.get("multiplier").and_then(|v| v.as_f64()),
+                            ) {
+                                params = params.with_lora(path, mult as f32);
+                            }
+                        }
+                    }
+
+                    if let Some(cn) = positive.get("control_net") {
+                        if let Some(cn_path) = cn.get("path").and_then(|v| v.as_str()) {
+                            if !cn_path.is_empty() {
+                                params.model_config.control_net_path = Some(cn_path.to_string());
+                            }
+                        }
+                    }
+                    if let Some(cn_image) = positive.get("control_image") {
+                        if let Ok(sd_img) = serde_json::from_value::<comfy_inference::SdImage>(cn_image.clone()) {
+                            params.control_image = Some(sd_img);
+                        } else if let Some(img_obj) = cn_image.as_object() {
+                            if let Some(images) = img_obj.get("images").and_then(|v| v.as_array()) {
+                                if let Some(first) = images.first() {
+                                    if let Ok(sd_img) = serde_json::from_value::<comfy_inference::SdImage>(first.clone()) {
+                                        params.control_image = Some(sd_img);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(cn_strength) = positive.get("control_strength") {
+                        params.control_strength = cn_strength.as_f64().unwrap_or(0.9) as f32;
+                    }
+
+                    let mut missing_encoders = Vec::new();
+                    if need_clip_l && params.model_config.clip_l_path.is_none() {
+                        missing_encoders.push("clip_l");
+                    }
+                    if need_clip_g && params.model_config.clip_g_path.is_none() {
+                        missing_encoders.push("clip_g");
+                    }
+                    if need_t5xxl && params.model_config.t5xxl_path.is_none() {
+                        missing_encoders.push("t5xxl");
+                    }
+                    if !missing_encoders.is_empty() {
+                        tracing::error!(
+                            "KSampler: {:?} model requires text encoders [{}] but they are missing. \
                              Please download them to models/text_encoders/ directory.",
                             detected_type,
                             missing_encoders.join(", ")
-                        ),
-                    });
-                }
-
-                match backend.generate_image(params) {
-                    Ok(images) => {
-                        let image_data: Vec<Value> = images.iter().map(|img| {
-                            serde_json::to_value(img).unwrap_or_else(|_| json!({
-                                "type": "image",
-                                "width": img.width,
-                                "height": img.height,
-                                "channel": img.channel,
-                            }))
-                        }).collect();
-                        Ok(vec![json!({
-                            "type": "latent",
-                            "samples": image_data,
-                            "seed": seed,
-                            "decoded_images": images.len(),
-                        })])
+                        );
+                        return Err(ExecutorError::NodeExecutionFailed {
+                            node_id: node_id.to_string(),
+                            message: format!(
+                                "{:?} model requires text encoders [{}] but they are missing. \
+                                 Please download them to models/text_encoders/ directory.",
+                                detected_type,
+                                missing_encoders.join(", ")
+                            ),
+                        });
                     }
-                    Err(e) => Err(ExecutorError::Inference(e)),
+
+                    match backend.generate_image(params) {
+                        Ok(images) => {
+                            let image_data: Vec<Value> = images.iter().map(|img| {
+                                serde_json::to_value(img).unwrap_or_else(|_| json!({
+                                    "type": "image",
+                                    "width": img.width,
+                                    "height": img.height,
+                                    "channel": img.channel,
+                                }))
+                            }).collect();
+                            Ok(vec![json!({
+                                "type": "latent",
+                                "samples": image_data,
+                                "seed": seed,
+                                "decoded_images": images.len(),
+                            })])
+                        }
+                        Err(e) => Err(ExecutorError::Inference(e)),
+                    }
                 }
             } else {
                 Ok(vec![json!({
@@ -1398,7 +1441,7 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
         input_types: NodeInputTypes {
             required: {
                 let mut m = HashMap::new();
-                m.insert("model_name".to_string(), InputTypeSpec {
+                m.insert("ckpt_name".to_string(), InputTypeSpec {
                     type_name: "COMBO".to_string(),
                     extra: HashMap::new(),
                 });
@@ -1418,15 +1461,61 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
     };
 
     registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
-        let model_name = node.inputs.get("model_name")
+        let model_name = node.inputs.get("ckpt_name")
             .and_then(|v| v.as_str())
+            .or_else(|| node.inputs.get("model_name").and_then(|v| v.as_str()))
             .unwrap_or("");
 
         let model_path = resolve_model_path("checkpoints", model_name);
+        tracing::info!("LTXLoader: loading model from {}", model_path);
 
         let base = get_models_base_dir();
         let te_dir = base.join("text_encoders");
-        let text_encoder_path = find_file_in_dir(&te_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]);
+        let llm_dir = base.join("llm");
+        let mut text_encoder_path: Option<String> = None;
+
+        if let Some(p) = find_file_in_dir(&te_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]) {
+            text_encoder_path = Some(p);
+        }
+        if text_encoder_path.is_none() && llm_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&llm_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let lower = name.to_lowercase();
+                    if lower.contains("gemma-3-12b") || lower.contains("gemma_3_12b") {
+                        let sub_dir = entry.path();
+                        if let Some(p) = find_file_in_dir(&sub_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]) {
+                            text_encoder_path = Some(p);
+                            break;
+                        }
+                        if sub_dir.is_dir() {
+                            if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
+                                let has_gguf = sub_entries.flatten().any(|e| {
+                                    e.file_name().to_string_lossy().to_string().ends_with(".gguf")
+                                });
+                                if has_gguf {
+                                    text_encoder_path = Some(sub_dir.to_string_lossy().to_string());
+                                    break;
+                                }
+                            }
+                            if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
+                                let has_safetensors = sub_entries.flatten().any(|e| {
+                                    e.file_name().to_string_lossy().to_string().starts_with("model-") &&
+                                    e.file_name().to_string_lossy().to_string().ends_with(".safetensors")
+                                });
+                                if has_safetensors {
+                                    text_encoder_path = Some(sub_dir.to_string_lossy().to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if text_encoder_path.is_some() {
+            tracing::info!("LTXLoader: found text encoder at {:?}", text_encoder_path);
+        }
 
         Box::pin(async move {
             let mut model_json = json!({
@@ -2633,6 +2722,15 @@ fn register_vae_decode(registry: &mut NodeRegistry) {
             .unwrap_or_else(|_| json!(null));
 
         Box::pin(async move {
+            if let Some(frames) = samples.get("frames").and_then(|v| v.as_array()) {
+                if !frames.is_empty() {
+                    return Ok(vec![json!({
+                        "type": "image",
+                        "images": frames,
+                    })]);
+                }
+            }
+
             if let Some(sample_arr) = samples.get("samples").and_then(|v| v.as_array()) {
                 if !sample_arr.is_empty() {
                     return Ok(vec![json!({
