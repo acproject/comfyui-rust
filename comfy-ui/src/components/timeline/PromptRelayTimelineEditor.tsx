@@ -26,6 +26,7 @@ interface PromptRelayTimelineEditorProps {
   localPrompts: string;
   segmentLengths: string;
   timelineData: string;
+  height?: number;
 }
 
 // Zoom limits
@@ -41,6 +42,7 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
   localPrompts,
   segmentLengths,
   timelineData: _timelineData,
+  height = 160,
 }) => {
   const updateNodeInput = useWorkflowStore((s) => s.updateNodeInput);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -472,6 +474,11 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
 
   const zoomPercent = Math.round(zoom * 100);
 
+  // Calculate canvas height from the total height prop
+  const toolbarH = 24;
+  const editorH = selectedSegment ? 64 : 0;
+  const canvasH = Math.max(50, height - toolbarH - editorH - 16);
+
   return (
     <div
       ref={containerRef}
@@ -523,7 +530,7 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
         ref={canvasRef}
         style={{
           width: '100%',
-          height: 70,
+          height: canvasH,
           borderRadius: 3,
           cursor: dragType === 'pan'
             ? 'grabbing'

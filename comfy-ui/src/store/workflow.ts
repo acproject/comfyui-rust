@@ -133,6 +133,8 @@ interface ComfyNodeData extends Record<string, unknown> {
   isNote?: boolean;
   noteText?: string;
   noteColor?: string;
+  customWidth?: number;
+  customHeight?: number;
 }
 
 interface OutputImage {
@@ -176,6 +178,7 @@ interface WorkflowState {
   updateNoteNode: (nodeId: string, text: string, color: string) => void;
   removeNode: (nodeId: string) => void;
   updateNodeInput: (nodeId: string, inputName: string, value: unknown) => void;
+  updateNodeData: (nodeId: string, updates: Partial<ComfyNodeData>) => void;
   connectNodes: (source: string, sourceHandle: string, target: string, targetHandle: string) => ValidationError | null;
   disconnectNode: (edgeId: string) => void;
 
@@ -348,6 +351,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       nodes: nodes.map((n) =>
         n.id === nodeId
           ? { ...n, data: { ...n.data, inputs: { ...n.data.inputs, [inputName]: value } } }
+          : n
+      ),
+    });
+  },
+
+  updateNodeData: (nodeId: string, updates: Partial<ComfyNodeData>) => {
+    const { nodes } = get();
+    set({
+      nodes: nodes.map((n) =>
+        n.id === nodeId
+          ? { ...n, data: { ...n.data, ...updates } }
           : n
       ),
     });

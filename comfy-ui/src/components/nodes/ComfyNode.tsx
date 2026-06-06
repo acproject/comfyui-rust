@@ -1,4 +1,4 @@
-import { memo, type FC, useCallback, useRef, useState } from 'react';
+import { memo, type FC, useCallback, useRef, useState, useEffect } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { ComfyNodeData } from '@/store/workflow';
 import { useWorkflowStore } from '@/store/workflow';
@@ -6,6 +6,16 @@ import { api } from '@/api/client';
 import { getTypeColor, getCategoryColor, isCustomNode } from '@/components/nodes/nodeColors';
 import { AudioVideoTimeline } from '@/components/timeline/AudioVideoTimeline';
 import { PromptRelayTimelineEditor } from '@/components/timeline/PromptRelayTimelineEditor';
+
+// Node types that support custom resizing
+const RESIZABLE_NODE_TYPES = new Set([
+  'PromptRelayEncodeTimeline',
+]);
+
+const DEFAULT_NODE_WIDTH = 280;
+const MIN_NODE_WIDTH = 220;
+const MIN_NODE_HEIGHT = 200;
+const DEFAULT_TIMELINE_HEIGHT = 160;
 
 interface ComfyNodeProps {
   id: string;
@@ -75,6 +85,51 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const isSaveVideoWithAudioNode = classType === 'SaveVideoWithAudio';
   const isPromptRelayTimeline = classType === 'PromptRelayEncodeTimeline';
 
+  const isResizable = RESIZABLE_NODE_TYPES.has(classType);
+  const customWidth = (data.customWidth as number) || DEFAULT_NODE_WIDTH;
+  const customHeight = (data.customHeight as number) || DEFAULT_TIMELINE_HEIGHT;
+
+  // Resize drag state
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      w: customWidth,
+      h: customHeight,
+    };
+  }, [customWidth, customHeight]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizeStartRef.current) return;
+      const dx = e.clientX - resizeStartRef.current.x;
+      const dy = e.clientY - resizeStartRef.current.y;
+      const newW = Math.max(MIN_NODE_WIDTH, resizeStartRef.current.w + dx);
+      const newH = Math.max(MIN_NODE_HEIGHT, resizeStartRef.current.h + dy);
+      useWorkflowStore.getState().updateNodeData(id, {
+        customWidth: newW,
+        customHeight: newH,
+      });
+    };
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      resizeStartRef.current = null;
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, id]);
+
   const isPrimitive = (typeName: string) =>
     ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
 
@@ -88,7 +143,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
     if (isSaveAudioNode) y += 60;
     if (isLoadAudioNode) y += 60;
     if (isSaveVideoWithAudioNode) y += 260;
-    if (isPromptRelayTimeline) y += 160;
+    if (isPromptRelayTimeline) y += customHeight;
   }
 
   const inputHandleY: Record<string, number> = {};
@@ -120,8 +175,9 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
             : selected
               ? '2px solid #fff'
               : '1px solid #333',
-        minWidth: 220,
-        maxWidth: 280,
+        minWidth: MIN_NODE_WIDTH,
+        width: isResizable ? customWidth : undefined,
+        maxWidth: isResizable ? 1200 : DEFAULT_NODE_WIDTH,
         fontSize: 12,
         color: '#e2e8f0',
         boxShadow: isExecuting
@@ -131,7 +187,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
             : selected
               ? '0 0 12px rgba(100, 150, 255, 0.4)'
               : '0 2px 8px rgba(0,0,0,0.3)',
-        transition: 'border-color 0.3s, box-shadow 0.3s',
+        transition: isResizing ? 'none' : 'border-color 0.3s, box-shadow 0.3s',
+        position: 'relative',
       }}
     >
       {nonPrimitiveInputs.map((spec) => (
@@ -265,6 +322,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
               localPrompts={String(data.inputs['local_prompts'] || '')}
               segmentLengths={String(data.inputs['segment_lengths'] || '')}
               timelineData={String(data.inputs['timeline_data'] || '')}
+              height={customHeight}
             />
           )}
 
@@ -377,6 +435,35 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
             </>
           )}
         </>
+      )}
+      {/* Resize handle for resizable nodes */}
+      {isResizable && !collapsed && (
+        <div
+          className="nodrag"
+          onMouseDown={handleResizeMouseDown}
+          style={{
+            position: 'absolute',
+            right: 0,
+            bottom: 0,
+            width: 18,
+            height: 18,
+            cursor: 'nwse-resize',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'flex-end',
+            padding: '0 3px 3px 0',
+            opacity: 0.7,
+            zIndex: 10,
+            transition: 'opacity 0.15s',
+          }}
+          onMouseEnter={(e) => { (e.currentTarget.style.opacity = '1'); }}
+          onMouseLeave={(e) => { (e.currentTarget.style.opacity = '0.7'); }}
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <line x1="9" y1="1" x2="1" y2="9" stroke="#ccc" strokeWidth="1.5" />
+            <line x1="9" y1="5" x2="5" y2="9" stroke="#ccc" strokeWidth="1.5" />
+          </svg>
+        </div>
       )}
     </div>
   );
