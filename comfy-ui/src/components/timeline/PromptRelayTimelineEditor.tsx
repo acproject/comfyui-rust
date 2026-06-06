@@ -30,9 +30,12 @@ interface PromptRelayTimelineEditorProps {
 }
 
 // Zoom limits
-const MIN_ZOOM = 0.1;   // 10% (fit all)
-const MAX_ZOOM = 20.0;  // 2000% (very detailed)
-const ZOOM_STEP = 1.2;  // per wheel notch / button click
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 20.0;
+const ZOOM_STEP = 1.2;
+
+// Drag threshold in px — below this, treat as click (select), above as drag (reorder)
+const DRAG_THRESHOLD = 5;
 
 export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = memo(({
   nodeId,
@@ -50,13 +53,14 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
 
   // Zoom & pan state
   const [zoom, setZoom] = useState<number>(1.0);
-  const [scrollX, setScrollX] = useState<number>(0); // in frame units
+  const [scrollX, setScrollX] = useState<number>(0);
 
   const [selectedIdx, setSelectedIdx] = useState<number>(-1);
   const [dragIdx, setDragIdx] = useState<number>(-1);
-  const [dragType, setDragType] = useState<'move' | 'resize-left' | 'resize-right' | 'pan' | null>(null);
+  const [dragType, setDragType] = useState<'select' | 'reorder' | 'resize-left' | 'resize-right' | 'pan' | null>(null);
   const [dragStartX, setDragStartX] = useState(0);
   const [dragStartScrollX, setDragStartScrollX] = useState(0);
+  const [reorderTarget, setReorderTarget] = useState<number>(-1); // target index for reorder drop
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -94,21 +98,49 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
     const containerW = containerRef.current.clientWidth;
     const totalLen = segments.reduce((sum, s) => sum + s.length, 0) || maxFrames;
     const fitZoom = containerW / totalLen;
-    // Only auto-fit on initial load or large changes
     if (zoom === 1.0 || fitZoom < zoom * 0.3 || fitZoom > zoom * 4) {
       setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fitZoom)));
       setScrollX(0);
     }
-    // Only run when segments/maxFrames change, not zoom/scrollX
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segments, maxFrames]);
+
+  // Register non-passive wheel event on canvas so preventDefault works
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom centered on cursor
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const frameUnderCursor = scrollX + mx / zoom;
+        const factor = e.deltaY > 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
+        setZoom((z) => {
+          const newZ = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
+          setScrollX(() => Math.max(0, frameUnderCursor - mx / newZ));
+          return newZ;
+        });
+      } else {
+        // Pan
+        const w = canvas.clientWidth;
+        const totalLen = segments.reduce((sum, s) => sum + s.length, 0) || maxFrames;
+        const viewableFrames = w / zoom;
+        const panDelta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+        const frameDelta = panDelta / zoom;
+        setScrollX((sx) => Math.max(0, Math.min(totalLen - viewableFrames, sx - frameDelta)));
+      }
+    };
+    canvas.addEventListener('wheel', handler, { passive: false });
+    return () => canvas.removeEventListener('wheel', handler);
+  }, [zoom, scrollX, segments, maxFrames]);
 
   // Sync segments back to node inputs
   const syncToInputs = useCallback((segs: TimelineSegment[]) => {
     const lp = segs.map((s) => s.text).join(' | ');
     const sl = segs.map((s) => s.length).join(',');
     const td = JSON.stringify(segs.map((s) => ({ text: s.text, length: s.length })));
-
     updateNodeInput(nodeId, 'local_prompts', lp);
     updateNodeInput(nodeId, 'segment_lengths', sl);
     updateNodeInput(nodeId, 'timeline_data', td);
@@ -173,43 +205,17 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
     setZoom((z) => Math.max(MIN_ZOOM, z / ZOOM_STEP));
   }, []);
 
-  // Wheel zoom (centered on mouse position)
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
-      // Pinch-zoom or Ctrl+scroll: zoom centered on cursor
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left; // px within canvas
-      // Convert mx to frame coordinate under cursor before zoom
-      const frameUnderCursor = scrollX + mx / zoom;
-
-      const factor = e.deltaY > 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
-      setZoom((z) => {
-        const newZ = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
-        // Adjust scroll so the frame under cursor stays under the mouse
-        setScrollX(() => {
-          const newSx = frameUnderCursor - mx / newZ;
-          return Math.max(0, newSx);
-        });
-        return newZ;
-      });
-    } else {
-      // Horizontal scroll: pan
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const w = canvas.clientWidth;
-      const totalLen = segments.reduce((sum, s) => sum + s.length, 0) || maxFrames;
-      const viewableFrames = w / zoom;
-      const panDelta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
-      const frameDelta = panDelta / zoom;
-      setScrollX((sx) => {
-        const newSx = sx - frameDelta;
-        return Math.max(0, Math.min(totalLen - viewableFrames, newSx));
-      });
+  // Helper: find segment index at screen x position
+  const findSegmentAtX = useCallback((mx: number): number => {
+    let xFrame = 0;
+    for (let i = 0; i < segments.length; i++) {
+      const segX_px = (xFrame - scrollX) * zoom;
+      const segW_px = segments[i].length * zoom;
+      if (mx >= segX_px && mx < segX_px + segW_px) return i;
+      xFrame += segments[i].length;
     }
-  }, [zoom, scrollX, segments, maxFrames]);
+    return -1;
+  }, [segments, scrollX, zoom]);
 
   // Canvas drawing
   useEffect(() => {
@@ -234,7 +240,7 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
     const segY = rulerH + 4;
     const segH = h - segY - 4;
     const viewableFrames = w / zoom;
-    const pxPerFrame = zoom; // pixels per frame at current zoom level
+    const pxPerFrame = zoom;
 
     // Draw ruler background
     ctx.fillStyle = '#1a1a2e';
@@ -248,7 +254,7 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
 
     // Ruler ticks - adaptive based on zoom level
     let tickStep = 10;
-    const minTickPx = 30; // minimum pixels between ticks
+    const minTickPx = 30;
     while (tickStep * pxPerFrame < minTickPx && tickStep < totalLen) {
       tickStep *= 2;
     }
@@ -259,7 +265,6 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
     ctx.font = '9px monospace';
     ctx.textAlign = 'center';
 
-    // Calculate visible range in frames
     const startFrame = Math.floor(scrollX);
     const endFrame = Math.ceil(scrollX + viewableFrames);
 
@@ -271,7 +276,6 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
       ctx.moveTo(x, rulerH - 6);
       ctx.lineTo(x, rulerH);
       ctx.stroke();
-
       const label = timeUnits === 'seconds' && fps > 0
         ? (f / fps).toFixed(1) + 's'
         : String(f);
@@ -279,21 +283,23 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
     }
 
     // Draw segments
-    let xFrame = 0; // position of current segment start in frame space
+    let xFrame = 0;
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       const segW_px = seg.length * pxPerFrame;
-      const segX_px = (xFrame - scrollX) * pxPerFrame; // pixel position on screen
+      const segX_px = (xFrame - scrollX) * pxPerFrame;
 
-      // Skip if completely off-screen to the left
-      if (segX_px + segW_px < 0) {
-        xFrame += seg.length;
-        continue;
-      }
-      // Stop if completely off-screen to the right
+      if (segX_px + segW_px < 0) { xFrame += seg.length; continue; }
       if (segX_px > w) break;
 
       const isSelected = i === selectedIdx;
+      const isReorderTarget = i === reorderTarget && dragType === 'reorder';
+
+      // Reorder drop indicator
+      if (isReorderTarget && dragIdx >= 0 && dragIdx !== i) {
+        ctx.fillStyle = '#ffffff33';
+        ctx.fillRect(segX_px, segY, 3, segH);
+      }
 
       // Segment block
       ctx.fillStyle = isSelected ? seg.color : seg.color + '88';
@@ -312,7 +318,6 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
         ctx.fillStyle = '#fff';
         ctx.font = `${Math.min(11, Math.max(8, Math.round(pxPerFrame * 0.8)))}px sans-serif`;
         ctx.textAlign = 'left';
-
         const words = seg.text.split(' ');
         let line1 = '';
         let line2 = '';
@@ -354,7 +359,7 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
       xFrame += seg.length;
     }
 
-    // Draw viewport indicator bar (shows where we are in the full timeline)
+    // Viewport indicator bar
     if (viewableFrames < totalLen * 0.95) {
       const indicatorH = 3;
       const indicatorY = h - indicatorH;
@@ -365,20 +370,22 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
       ctx.fillStyle = '#aaa';
       ctx.fillRect(indicatorX, indicatorY, Math.max(indicatorW, 4), indicatorH);
     }
-  }, [segments, selectedIdx, maxFrames, timeUnits, fps, zoom, scrollX]);
+  }, [segments, selectedIdx, maxFrames, timeUnits, fps, zoom, scrollX, dragType, dragIdx, reorderTarget]);
 
-  // Canvas mouse handling
+  // Canvas mouse handling — left click selects, drag reorders
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Only handle left click
+    if (e.button !== 0) return;
+    e.stopPropagation();
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    const pxPerFrame = zoom;
     const rulerH = 26;
-    const segY = rulerH;
 
-    if (mx < 0 || my < segY) {
+    if (mx < 0 || my < rulerH) {
       // Click on ruler area -> start panning
       setDragType('pan');
       setDragIdx(-1);
@@ -387,56 +394,79 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
       return;
     }
 
-    // Find which segment was clicked (in frame space)
-    let xFrame = 0;
-    for (let i = 0; i < segments.length; i++) {
-      const segW_px = segments[i].length * pxPerFrame;
-      const segX_px = (xFrame - scrollX) * pxPerFrame;
-      if (mx >= segX_px && mx < segX_px + segW_px) {
-        // Check if near edges for resize
-        if (i === selectedIdx) {
-          if (mx - segX_px < 6) {
-            setDragType('resize-left');
-            setDragIdx(i);
-            setDragStartX(e.clientX);
-            return;
-          }
-          if (segX_px + segW_px - mx < 6) {
-            setDragType('resize-right');
-            setDragIdx(i);
-            setDragStartX(e.clientX);
-            return;
-          }
-        }
-        setSelectedIdx(i);
-        setDragType('move');
-        setDragIdx(i);
+    // Find which segment was clicked
+    const clickedIdx = findSegmentAtX(mx);
+    if (clickedIdx < 0) {
+      setSelectedIdx(-1);
+      return;
+    }
+
+    // Check if near edges for resize (only on already-selected segment)
+    if (clickedIdx === selectedIdx) {
+      let xFrame = 0;
+      for (let i = 0; i < clickedIdx; i++) xFrame += segments[i].length;
+      const segX_px = (xFrame - scrollX) * zoom;
+      const segW_px = segments[clickedIdx].length * zoom;
+
+      if (mx - segX_px < 6) {
+        setDragType('resize-left');
+        setDragIdx(clickedIdx);
         setDragStartX(e.clientX);
         return;
       }
-      xFrame += segments[i].length;
+      if (segX_px + segW_px - mx < 6) {
+        setDragType('resize-right');
+        setDragIdx(clickedIdx);
+        setDragStartX(e.clientX);
+        return;
+      }
     }
-    setSelectedIdx(-1);
-  }, [segments, selectedIdx, maxFrames, zoom, scrollX]);
+
+    // Start as 'select' — will upgrade to 'reorder' if dragged beyond threshold
+    setSelectedIdx(clickedIdx);
+    setDragType('select');
+    setDragIdx(clickedIdx);
+    setDragStartX(e.clientX);
+    setReorderTarget(-1);
+  }, [segments, selectedIdx, zoom, scrollX, findSegmentAtX]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (dragType === null) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
     if (dragType === 'pan') {
       const dx = e.clientX - dragStartX;
       const frameDx = dx / zoom;
       const totalLen = segments.reduce((sum, s) => sum + s.length, 0) || maxFrames;
-      const canvas = canvasRef.current;
-      const w = canvas ? canvas.clientWidth : 300;
+      const w = canvas.clientWidth;
       const viewableFrames = w / zoom;
       setScrollX(Math.max(0, Math.min(totalLen - viewableFrames, dragStartScrollX - frameDx)));
+      return;
+    }
+
+    if (dragType === 'select') {
+      // Check if dragged beyond threshold -> upgrade to reorder
+      const dx = Math.abs(e.clientX - dragStartX);
+      if (dx > DRAG_THRESHOLD) {
+        setDragType('reorder');
+      }
+      return;
+    }
+
+    if (dragType === 'reorder' && dragIdx >= 0) {
+      // Determine which segment the cursor is over (reorder target)
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const targetIdx = findSegmentAtX(mx);
+      setReorderTarget(targetIdx >= 0 ? targetIdx : -1);
       return;
     }
 
     if (dragIdx < 0) return;
     const dx = e.clientX - dragStartX;
     const frameDelta = Math.round(dx / zoom);
-
     if (frameDelta === 0) return;
 
     const newSegs = [...segments];
@@ -458,15 +488,27 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
         setDragStartX(e.clientX);
       }
     }
-  }, [dragType, dragIdx, dragStartX, dragStartScrollX, segments, maxFrames, zoom]);
+  }, [dragType, dragIdx, dragStartX, dragStartScrollX, segments, maxFrames, zoom, findSegmentAtX]);
 
   const handleCanvasMouseUp = useCallback(() => {
-    if (dragType !== null && dragType !== 'pan') {
+    if (dragType === 'reorder' && dragIdx >= 0 && reorderTarget >= 0 && dragIdx !== reorderTarget) {
+      // Perform reorder: move dragIdx to reorderTarget position
+      const newSegs = [...segments];
+      const [moved] = newSegs.splice(dragIdx, 1);
+      newSegs.splice(reorderTarget > dragIdx ? reorderTarget : reorderTarget, 0, moved);
+      // Recolor
+      const recolored = newSegs.map((s, i) => ({ ...s, color: getSegmentColor(i) }));
+      setSegments(recolored);
+      setSelectedIdx(reorderTarget > dragIdx ? reorderTarget : reorderTarget);
+      syncToInputs(recolored);
+    } else if (dragType === 'resize-left' || dragType === 'resize-right') {
       syncToInputs(segments);
     }
+    // 'select' type just keeps the selection made in mousedown
     setDragType(null);
     setDragIdx(-1);
-  }, [dragType, segments, syncToInputs]);
+    setReorderTarget(-1);
+  }, [dragType, dragIdx, reorderTarget, segments, syncToInputs]);
 
   const selectedSegment = selectedIdx >= 0 && selectedIdx < segments.length
     ? segments[selectedIdx]
@@ -482,6 +524,7 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
   return (
     <div
       ref={containerRef}
+      className="nodrag nowheel"
       style={{
         borderBottom: '1px solid #333',
         padding: '4px 6px',
@@ -495,7 +538,6 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
         marginBottom: 2,
         fontSize: 10,
       }}>
-        {/* Zoom controls */}
         <button onClick={handleZoomOut} title="Zoom out" style={btnStyle}>−</button>
         <span
           title={`${zoomPercent}%`}
@@ -534,15 +576,16 @@ export const PromptRelayTimelineEditor: FC<PromptRelayTimelineEditorProps> = mem
           borderRadius: 3,
           cursor: dragType === 'pan'
             ? 'grabbing'
-            : dragType
+            : dragType === 'reorder'
               ? 'grabbing'
-              : 'pointer',
+              : dragType === 'resize-left' || dragType === 'resize-right'
+                ? 'col-resize'
+                : 'pointer',
         }}
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleCanvasMouseMove}
         onMouseUp={handleCanvasMouseUp}
         onMouseLeave={handleCanvasMouseUp}
-        onWheel={handleWheel}
       />
 
       {/* Selected segment editor */}
