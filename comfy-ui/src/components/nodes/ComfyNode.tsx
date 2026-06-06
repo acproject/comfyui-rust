@@ -4,6 +4,8 @@ import type { ComfyNodeData } from '@/store/workflow';
 import { useWorkflowStore } from '@/store/workflow';
 import { api } from '@/api/client';
 import { getTypeColor, getCategoryColor, isCustomNode } from '@/components/nodes/nodeColors';
+import { AudioVideoTimeline } from '@/components/timeline/AudioVideoTimeline';
+import { PromptRelayTimelineEditor } from '@/components/timeline/PromptRelayTimelineEditor';
 
 interface ComfyNodeProps {
   id: string;
@@ -35,6 +37,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
     optional: boolean;
     choices?: string[];
     multiline?: boolean;
+    timelineHidden?: boolean;
   }> = [];
 
   if (objectInfo?.input_types?.required) {
@@ -46,6 +49,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         optional: false,
         choices: (spec.extra?.choices as string[]) || undefined,
         multiline: spec.extra?.multiline === true || (k === 'text' && spec.type_name === 'STRING'),
+        timelineHidden: spec.extra?.timelineHidden === true,
       });
     }
   }
@@ -58,6 +62,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         optional: true,
         choices: (spec.extra?.choices as string[]) || undefined,
         multiline: spec.extra?.multiline === true || (k === 'text' && spec.type_name === 'STRING'),
+        timelineHidden: spec.extra?.timelineHidden === true,
       });
     }
   }
@@ -67,6 +72,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const isSaveVideoNode = classType === 'SaveVideo';
   const isSaveAudioNode = classType === 'SaveAudio';
   const isLoadAudioNode = classType === 'LoadAudio';
+  const isSaveVideoWithAudioNode = classType === 'SaveVideoWithAudio';
+  const isPromptRelayTimeline = classType === 'PromptRelayEncodeTimeline';
 
   const isPrimitive = (typeName: string) =>
     ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO'].includes(typeName);
@@ -80,6 +87,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
     if (isSaveVideoNode) y += 80;
     if (isSaveAudioNode) y += 60;
     if (isLoadAudioNode) y += 60;
+    if (isSaveVideoWithAudioNode) y += 260;
+    if (isPromptRelayTimeline) y += 160;
   }
 
   const inputHandleY: Record<string, number> = {};
@@ -244,9 +253,23 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           {(isLoadAudioNode) && (
             <AudioPreview nodeId={id} />
           )}
+          {(isSaveVideoWithAudioNode) && (
+            <VideoWithAudioTimeline nodeId={id} />
+          )}
+          {(isPromptRelayTimeline) && (
+            <PromptRelayTimelineEditor
+              nodeId={id}
+              maxFrames={Number(data.inputs['max_frames'] || 129)}
+              fps={Number(data.inputs['fps'] || 24.0)}
+              timeUnits={String(data.inputs['time_units'] || 'frames')}
+              localPrompts={String(data.inputs['local_prompts'] || '')}
+              segmentLengths={String(data.inputs['segment_lengths'] || '')}
+              timelineData={String(data.inputs['timeline_data'] || '')}
+            />
+          )}
 
           <div style={{ padding: '2px 0' }}>
-            {allInputSpecs.map((spec) => {
+            {allInputSpecs.filter((s) => !s.timelineHidden).map((spec) => {
               const { name, typeName, choices, multiline } = spec;
               const value = data.inputs[name];
               const typeColor = getTypeColor(typeName);
@@ -599,6 +622,60 @@ const AudioPreview: FC<{ nodeId: string }> = memo(({ nodeId }) => {
 });
 
 AudioPreview.displayName = 'AudioPreview';
+
+const VideoWithAudioTimeline: FC<{ nodeId: string }> = memo(({ nodeId }) => {
+  const outputImages = useWorkflowStore((s) => s.outputImages);
+  const outputAudios = useWorkflowStore((s) => s.outputAudios);
+  
+  const videos = outputImages[nodeId] || [];
+  const audios = outputAudios[nodeId] || [];
+
+  let videoUrl: string | undefined;
+  let audioUrl: string | undefined;
+
+  if (videos.length > 0) {
+    videoUrl = `${window.location.origin}/view_video?filename=${encodeURIComponent(videos[0].filename)}&subfolder=${encodeURIComponent(videos[0].subfolder || '')}`;
+  }
+
+  if (audios.length > 0) {
+    audioUrl = `${window.location.origin}/view_audio?filename=${encodeURIComponent(audios[0].filename)}&subfolder=${encodeURIComponent(audios[0].subfolder || '')}`;
+  }
+
+  if (!videoUrl && !audioUrl) {
+    return (
+      <div style={{
+        padding: '4px 6px',
+        borderBottom: '1px solid #333',
+      }}>
+        <div style={{
+          height: 240,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: '#111',
+          borderRadius: 3,
+          margin: '4px 0',
+        }}>
+          <span style={{ fontSize: 10, color: '#666' }}>Timeline Preview</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      padding: '4px 6px',
+      borderBottom: '1px solid #333',
+    }}>
+      <AudioVideoTimeline
+        videoSource={videoUrl}
+        audioSource={audioUrl}
+      />
+    </div>
+  );
+});
+
+VideoWithAudioTimeline.displayName = 'VideoWithAudioTimeline';
 
 interface NodeInputFieldProps {
   nodeId: string;

@@ -14,6 +14,8 @@ import { AIAgent } from '@/components/agent/AIAgent';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useInitApp } from '@/hooks/useInitApp';
 import { useWorkflowStore } from '@/store/workflow';
+import { getPluginManager } from '@/plugins/manager';
+import promptRelayPlugin from '@/plugins/promptRelayPlugin';
 
 type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'models' | 'custom' | 'llm';
 
@@ -25,6 +27,12 @@ export interface PanelVisibility {
 const AppInner: FC = () => {
   useWebSocket();
   useInitApp();
+
+  // Register plugins
+  const pluginManager = getPluginManager();
+  if (!pluginManager.getPlugin('PromptRelay')) {
+    pluginManager.registerPlugin(promptRelayPlugin);
+  }
 
   const [activeTab, setActiveTab] = useState<SidebarTab>('nodes');
   const [showSidebar, setShowSidebar] = useState(true);

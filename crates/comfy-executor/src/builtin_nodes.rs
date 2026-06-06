@@ -168,6 +168,9 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_ltxv_latent_upsampler(registry);
     register_latent_upscale_model_loader(registry);
     register_lora_loader_model_only(registry);
+    register_guider_parameters(registry);
+    register_multimodal_guider(registry);
+    register_save_video_with_audio(registry);
     register_random_noise(registry);
     register_ksampler_select(registry);
     register_manual_sigmas(registry);
@@ -201,10 +204,52 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_switch_node(registry);
     register_pure_function_call_node(registry);
 
+    register_ltxv_add_guide_advanced(registry);
+    register_ltxv_add_guide_advanced_attention(registry);
+    register_stg_guider_node(registry);
+    register_stg_guider_advanced_node(registry);
+    register_stg_advanced_presets_node(registry);
+    register_ltxv_apply_stg(registry);
+    register_ltxv_base_sampler(registry);
+    register_ltxv_extend_sampler(registry);
+    register_ltxv_in_context_sampler(registry);
+    register_ltxv_normalizing_sampler(registry);
+    register_linear_overlap_latent_transition(registry);
+    register_ltxv_looping_sampler(registry);
+    register_ltxv_tiled_sampler(registry);
+    register_ltxv_tiled_vae_decode(registry);
+    register_ltx_add_video_ic_lora_guide(registry);
+    register_ltx_add_video_ic_lora_guide_advanced(registry);
+    register_ltx_iclora_loader_model_only(registry);
+    register_ltxv_set_audio_ref_tokens(registry);
+    register_ltxv_adain_latent(registry);
+    register_ltxv_stat_norm_latent(registry);
+    register_ltxv_per_step_adain_patcher(registry);
+    register_ltxv_per_step_stat_norm_patcher(registry);
+    register_ltxv_add_latent_guide(registry);
+    register_ltxv_img_to_video_condition_only(registry);
+    register_ltxv_select_latents(registry);
+    register_ltxv_set_video_latent_noise_masks(registry);
+    register_ltxv_laplacian_pyramid_blend(registry);
+    register_float_to_int(registry);
+    register_image_to_cpu(registry);
+    register_ltxv_hdr_decode_postprocess(registry);
+    register_ltxv_dilate_video_mask(registry);
+    register_ltxv_inpaint_preprocess(registry);
+    register_ltxv_patcher_vae(registry);
+    register_ltxv_q8_patch(registry);
+    register_ltxv_q8_lora_model_loader(registry);
+    register_decoder_noise(registry);
+    register_ltxv_draw_tracks(registry);
+    register_ltxv_sparse_track_editor(registry);
+    register_ltxv_load_conditioning(registry);
+    register_ltxv_save_conditioning(registry);
+
     #[cfg(feature = "controlnet")]
     crate::controlnet::register_controlnet_nodes(registry);
 
     crate::mask::register_mask_nodes(registry);
+    crate::prompt_relay::register_prompt_relay_nodes(registry);
 }
 
 fn resolve_model_path(model_type: &str, filename: &str) -> String {
@@ -6662,6 +6707,2107 @@ fn register_pure_function_call_node(registry: &mut NodeRegistry) {
                 }
             };
             Ok(vec![result])
+        })
+    }));
+}
+
+fn register_guider_parameters(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "GuiderParameters".to_string(),
+        display_name: "Guider Parameters".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("modality".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["VIDEO", "AUDIO"]));
+                        e
+                    },
+                });
+                m.insert("cfg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("stg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("perturb_attn".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("rescale".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("modality_scale".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("skip_step".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("cross_attn".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("parameters".to_string(), InputTypeSpec {
+                    type_name: "GUIDER_PARAMETERS".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::GuiderParameters],
+        output_names: vec!["GUIDER_PARAMETERS".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "get_guider_params".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let modality = ctx.resolve_input(node_id, "modality").unwrap_or_else(|_| json!("VIDEO"));
+        let cfg = ctx.resolve_input(node_id, "cfg").unwrap_or_else(|_| json!(1.0));
+        let stg = ctx.resolve_input(node_id, "stg").unwrap_or_else(|_| json!(0.0));
+        let perturb_attn = ctx.resolve_input(node_id, "perturb_attn").unwrap_or_else(|_| json!(false));
+        let rescale = ctx.resolve_input(node_id, "rescale").unwrap_or_else(|_| json!(1.0));
+        let modality_scale = ctx.resolve_input(node_id, "modality_scale").unwrap_or_else(|_| json!(1.0));
+        let skip_step = ctx.resolve_input(node_id, "skip_step").unwrap_or_else(|_| json!(0));
+        let cross_attn = ctx.resolve_input(node_id, "cross_attn").unwrap_or_else(|_| json!(true));
+        let prev_params = ctx.resolve_input(node_id, "parameters").ok();
+
+        Box::pin(async move {
+            let mut current_params = json!({
+                "modality": modality,
+                "cfg": cfg,
+                "stg": stg,
+                "perturb_attn": perturb_attn,
+                "rescale": rescale,
+                "modality_scale": modality_scale,
+                "skip_step": skip_step,
+                "cross_attn": cross_attn,
+            });
+
+            if let Some(prev) = prev_params {
+                let mut combined = prev.clone();
+                if let Some(obj) = combined.as_object_mut() {
+                    if let Some(curr_obj) = current_params.as_object() {
+                        for (k, v) in curr_obj {
+                            obj.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                current_params = combined;
+            }
+
+            Ok(vec![current_params])
+        })
+    }));
+}
+
+fn register_multimodal_guider(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "MultimodalGuider".to_string(),
+        display_name: "Multimodal Guider".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("positive".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("negative".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("parameters".to_string(), InputTypeSpec {
+                    type_name: "GUIDER_PARAMETERS".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("skip_blocks".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Guider],
+        output_names: vec!["GUIDER".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "get_multimodal_guider".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let positive = ctx.resolve_input(node_id, "positive").unwrap_or_else(|_| json!({}));
+        let negative = ctx.resolve_input(node_id, "negative").unwrap_or_else(|_| json!({}));
+        let parameters = ctx.resolve_input(node_id, "parameters").unwrap_or_else(|_| json!({}));
+        let skip_blocks = ctx.resolve_input(node_id, "skip_blocks").unwrap_or_else(|_| json!(""));
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "multimodal_guider",
+                "model": model,
+                "positive": positive,
+                "negative": negative,
+                "parameters": parameters,
+                "skip_blocks": skip_blocks,
+            })])
+        })
+    }));
+}
+
+fn register_save_video_with_audio(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "SaveVideoWithAudio".to_string(),
+        display_name: "Save Video with Audio".to_string(),
+        category: "output".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("audio".to_string(), InputTypeSpec {
+                    type_name: "AUDIO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("filename_prefix".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("format".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["mp4", "webm"]));
+                        e
+                    },
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video],
+        output_names: vec!["VIDEO".to_string()],
+        output_is_list: vec![false],
+        is_output_node: true,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "save_video_with_audio".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let video = ctx.resolve_input(node_id, "video").unwrap_or_else(|_| json!({}));
+        let audio = ctx.resolve_input(node_id, "audio").unwrap_or_else(|_| json!({}));
+        let filename_prefix = ctx.resolve_input(node_id, "filename_prefix").unwrap_or_else(|_| json!("ltx_output"));
+        let format = ctx.resolve_input(node_id, "format").unwrap_or_else(|_| json!("mp4"));
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "video": video,
+                "audio": audio,
+                "filename_prefix": filename_prefix,
+                "format": format,
+            })])
+        })
+    }));
+}
+
+// ============ STG 相关节点 ============
+
+fn register_stg_guider_node(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "STGGuiderNode".to_string(),
+        display_name: "STG Guider".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("stg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Guider],
+        output_names: vec!["GUIDER".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "stg_guider".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let stg = ctx.resolve_input(node_id, "stg").unwrap_or_else(|_| json!(0.0));
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "stg_guider",
+                "model": model,
+                "stg": stg,
+            })])
+        })
+    }));
+}
+
+fn register_stg_guider_advanced_node(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "STGGuiderAdvancedNode".to_string(),
+        display_name: "STG Guider Advanced".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("stg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("start_step".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("end_step".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("batch_size".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Guider],
+        output_names: vec!["GUIDER".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "stg_guider_advanced".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let stg = ctx.resolve_input(node_id, "stg").unwrap_or_else(|_| json!(0.0));
+        let start_step = ctx.resolve_input(node_id, "start_step").unwrap_or_else(|_| json!(0));
+        let end_step = ctx.resolve_input(node_id, "end_step").unwrap_or_else(|_| json!(999));
+        let batch_size = ctx.resolve_input(node_id, "batch_size").unwrap_or_else(|_| json!(1));
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "stg_guider_advanced",
+                "model": model,
+                "stg": stg,
+                "start_step": start_step,
+                "end_step": end_step,
+                "batch_size": batch_size,
+            })])
+        })
+    }));
+}
+
+fn register_stg_advanced_presets_node(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "STGAdvancedPresetsNode".to_string(),
+        display_name: "STG Advanced Presets".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("preset".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["default", "slow_start", "fast_end", "linear_decay", "custom"]));
+                        e
+                    },
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("stg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Guider],
+        output_names: vec!["GUIDER".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "stg_presets".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let preset = ctx.resolve_input(node_id, "preset").unwrap_or_else(|_| json!("default"));
+        let stg = ctx.resolve_input(node_id, "stg").unwrap_or_else(|_| json!(0.0));
+
+        Box::pin(async move {
+            let stg_curve = match preset.as_str().unwrap_or("default") {
+                "slow_start" => json!({"type": "slow_start", "stg": stg}),
+                "fast_end" => json!({"type": "fast_end", "stg": stg}),
+                "linear_decay" => json!({"type": "linear_decay", "stg": stg}),
+                "custom" => json!({"type": "custom", "stg": stg}),
+                _ => json!({"type": "default", "stg": stg}),
+            };
+            Ok(vec![json!({
+                "type": "stg_guider_advanced",
+                "stg_curve": stg_curve,
+            })])
+        })
+    }));
+}
+
+fn register_ltxv_apply_stg(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVApplySTG".to_string(),
+        display_name: "LTXV Apply STG".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("stg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "apply_stg".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let stg = ctx.resolve_input(node_id, "stg").unwrap_or_else(|_| json!(0.0));
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("stg".to_string(), stg);
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+// ============ 基础采样器节点 ============
+
+fn register_ltxv_base_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVBaseSampler".to_string(),
+        display_name: "LTXV Base Sampler".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guider".to_string(), InputTypeSpec {
+                    type_name: "GUIDER".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_image".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("sampler_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["euler", "euler_ancestral", "dpm_2", "dpm_2_ancestral", "dpmpp_2m", "dpmpp_sde", "ddim"]));
+                        e
+                    },
+                });
+                m.insert("scheduler".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["normal", "karras", "exponential", "simple", "ddim_uniform"]));
+                        e
+                    },
+                });
+                m.insert("denoise".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "ltxv_base_sampler".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        Box::pin(async move {
+            let latent = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!({}));
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_extend_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVExtendSampler".to_string(),
+        display_name: "LTXV Extend Sampler".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guider".to_string(), InputTypeSpec {
+                    type_name: "GUIDER".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_image".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("extend_frames".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("overlap".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "ltxv_extend_sampler".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        Box::pin(async move {
+            let latent = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!({}));
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_in_context_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVInContextSampler".to_string(),
+        display_name: "LTXV In-Context Sampler".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guider".to_string(), InputTypeSpec {
+                    type_name: "GUIDER".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_image".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("context_frames".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "ltxv_in_context_sampler".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        Box::pin(async move {
+            let latent = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!({}));
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_normalizing_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVNormalizingSampler".to_string(),
+        display_name: "LTXV Normalizing Sampler".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guider".to_string(), InputTypeSpec {
+                    type_name: "GUIDER".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_image".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("reference".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "ltxv_normalizing_sampler".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        Box::pin(async move {
+            let latent = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!({}));
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_linear_overlap_latent_transition(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LinearOverlapLatentTransition".to_string(),
+        display_name: "Linear Overlap Latent Transition".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("latent_a".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_b".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("overlap_frames".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "linear_overlap_transition".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let latent_a = ctx.resolve_input(node_id, "latent_a").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![latent_a])
+        })
+    }));
+}
+
+// ============ 高级采样器节点 ============
+
+fn register_ltxv_looping_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVLoopingSampler".to_string(),
+        display_name: "LTXV Looping Sampler".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guider".to_string(), InputTypeSpec {
+                    type_name: "GUIDER".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_image".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("loop_count".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "ltxv_looping_sampler".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        Box::pin(async move {
+            let latent = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!({}));
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_tiled_sampler(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVTiledSampler".to_string(),
+        display_name: "LTXV Tiled Sampler".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guider".to_string(), InputTypeSpec {
+                    type_name: "GUIDER".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_image".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("tile_size".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("overlap".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "ltxv_tiled_sampler".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        Box::pin(async move {
+            let latent = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!({}));
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_tiled_vae_decode(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVTiledVAEDecode".to_string(),
+        display_name: "LTXV Tiled VAE Decode".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("samples".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("vae".to_string(), InputTypeSpec {
+                    type_name: "VAE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("tile_size".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "ltxv_tiled_vae_decode".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "tiled_vae_decode",
+                "samples": node.inputs.get("samples"),
+            })])
+        })
+    }));
+}
+
+// ============ IC-LoRA 节点 ============
+
+fn register_ltx_add_video_ic_lora_guide(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXAddVideoICLoRAGuide".to_string(),
+        display_name: "LTX Add Video IC-LoRA Guide".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("iclora".to_string(), InputTypeSpec {
+                    type_name: "LORA".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "add_ic_lora_guide".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let iclora = ctx.resolve_input(node_id, "iclora").unwrap_or_else(|_| json!({}));
+        let strength = ctx.resolve_input(node_id, "strength").unwrap_or_else(|_| json!(1.0));
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("ic_lora".to_string(), iclora);
+            model_out.insert("ic_lora_strength".to_string(), strength);
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+fn register_ltx_add_video_ic_lora_guide_advanced(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXAddVideoICLoRAGuideAdvanced".to_string(),
+        display_name: "LTX Add Video IC-LoRA Guide Advanced".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("iclora".to_string(), InputTypeSpec {
+                    type_name: "LORA".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("start_step".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("end_step".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "add_ic_lora_guide_advanced".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let iclora = ctx.resolve_input(node_id, "iclora").unwrap_or_else(|_| json!({}));
+        let strength = ctx.resolve_input(node_id, "strength").unwrap_or_else(|_| json!(1.0));
+        let start_step = ctx.resolve_input(node_id, "start_step").unwrap_or_else(|_| json!(0));
+        let end_step = ctx.resolve_input(node_id, "end_step").unwrap_or_else(|_| json!(999));
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("ic_lora".to_string(), iclora);
+            model_out.insert("ic_lora_strength".to_string(), strength);
+            model_out.insert("ic_lora_start_step".to_string(), start_step);
+            model_out.insert("ic_lora_end_step".to_string(), end_step);
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+fn register_ltx_iclora_loader_model_only(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXICLoRALoaderModelOnly".to_string(),
+        display_name: "LTX IC-LoRA Loader".to_string(),
+        category: "loaders/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("iclora_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Lora],
+        output_names: vec!["LORA".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_iclora".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let iclora_name = node.inputs.get("iclora_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "iclora",
+                "name": iclora_name,
+            })])
+        })
+    }));
+}
+
+fn register_ltxv_set_audio_ref_tokens(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVSetAudioRefTokens".to_string(),
+        display_name: "LTXV Set Audio Reference Tokens".to_string(),
+        category: "conditioning/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("audio_ref".to_string(), InputTypeSpec {
+                    type_name: "AUDIO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("ref_tokens".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Conditioning],
+        output_names: vec!["CONDITIONING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "set_audio_ref_tokens".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let audio_ref = ctx.resolve_input(node_id, "audio_ref").unwrap_or_else(|_| json!({}));
+        let ref_tokens = ctx.resolve_input(node_id, "ref_tokens").unwrap_or_else(|_| json!(0));
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "audio_ref_tokens",
+                "audio_ref": audio_ref,
+                "ref_tokens": ref_tokens,
+            })])
+        })
+    }));
+}
+
+// ============ Latent 归一化节点 ============
+
+fn register_ltxv_adain_latent(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVAdainLatent".to_string(),
+        display_name: "LTXV AdaIN Latent".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("latent".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("reference".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "adain_latent".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let latent = ctx.resolve_input(node_id, "latent").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_stat_norm_latent(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVStatNormLatent".to_string(),
+        display_name: "LTXV Stat Norm Latent".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("latent".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("mean".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("std".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "stat_norm_latent".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let latent = ctx.resolve_input(node_id, "latent").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_per_step_adain_patcher(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVPerStepAdainPatcher".to_string(),
+        display_name: "LTXV Per-Step AdaIN Patcher".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("reference".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "per_step_adain_patcher".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("per_step_adain".to_string(), json!(true));
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+fn register_ltxv_per_step_stat_norm_patcher(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVPerStepStatNormPatcher".to_string(),
+        display_name: "LTXV Per-Step Stat Norm Patcher".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("mean".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("std".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "per_step_stat_norm_patcher".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let mean = ctx.resolve_input(node_id, "mean").unwrap_or_else(|_| json!(0.0));
+        let std = ctx.resolve_input(node_id, "std").unwrap_or_else(|_| json!(1.0));
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("per_step_stat_norm".to_string(), json!(true));
+            model_out.insert("stat_norm_mean".to_string(), mean);
+            model_out.insert("stat_norm_std".to_string(), std);
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+// ============ Latent 操作节点 ============
+
+fn register_ltxv_add_latent_guide(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVAddLatentGuide".to_string(),
+        display_name: "LTXV Add Latent Guide".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("latent".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guide".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "add_latent_guide".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let latent = ctx.resolve_input(node_id, "latent").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![latent])
+        })
+    }));
+}
+
+fn register_ltxv_img_to_video_condition_only(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVImgToVideoConditionOnly".to_string(),
+        display_name: "LTXV Image to Video (Condition Only)".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "img_to_video_condition".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, _node, _node_id| {
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "img_to_video_condition",
+            })])
+        })
+    }));
+}
+
+fn register_ltxv_select_latents(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVSelectLatents".to_string(),
+        display_name: "LTXV Select Latents".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("latents".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("start_frame".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("end_frame".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "select_latents".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let latents = ctx.resolve_input(node_id, "latents").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![latents])
+        })
+    }));
+}
+
+fn register_ltxv_set_video_latent_noise_masks(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVSetVideoLatentNoiseMasks".to_string(),
+        display_name: "LTXV Set Video Latent Noise Masks".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("samples".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("mask".to_string(), InputTypeSpec {
+                    type_name: "MASK".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "set_video_noise_masks".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let samples = ctx.resolve_input(node_id, "samples").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![samples])
+        })
+    }));
+}
+
+fn register_ltxv_laplacian_pyramid_blend(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVLaplacianPyramidBlend".to_string(),
+        display_name: "LTXV Laplacian Pyramid Blend".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("latent_a".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("latent_b".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("mask".to_string(), InputTypeSpec {
+                    type_name: "MASK".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("levels".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "laplacian_pyramid_blend".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let latent_a = ctx.resolve_input(node_id, "latent_a").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![latent_a])
+        })
+    }));
+}
+
+// ============ 辅助工具节点 ============
+
+fn register_float_to_int(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "FloatToInt".to_string(),
+        display_name: "Float to Int".to_string(),
+        category: "utils".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("value".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Int],
+        output_names: vec!["INT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "float_to_int".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let value = ctx.resolve_input(node_id, "value").unwrap_or_else(|_| json!(0.0));
+        let int_val = value.as_f64().unwrap_or(0.0) as i64;
+        Box::pin(async move {
+            Ok(vec![json!(int_val)])
+        })
+    }));
+}
+
+fn register_image_to_cpu(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ImageToCPU".to_string(),
+        display_name: "Image to CPU".to_string(),
+        category: "utils".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("images".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "image_to_cpu".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let images = ctx.resolve_input(node_id, "images").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![images])
+        })
+    }));
+}
+
+fn register_ltxv_hdr_decode_postprocess(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVHDRDecodePostprocess".to_string(),
+        display_name: "LTXV HDR Decode Postprocess".to_string(),
+        category: "image/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("images".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("exposure".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("gamma".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "hdr_decode".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let images = ctx.resolve_input(node_id, "images").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![images])
+        })
+    }));
+}
+
+fn register_ltxv_dilate_video_mask(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVDilateVideoMask".to_string(),
+        display_name: "LTXV Dilate Video Mask".to_string(),
+        category: "mask/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("mask".to_string(), InputTypeSpec {
+                    type_name: "MASK".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("dilate".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Mask],
+        output_names: vec!["MASK".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "dilate_video_mask".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let mask = ctx.resolve_input(node_id, "mask").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![mask])
+        })
+    }));
+}
+
+fn register_ltxv_inpaint_preprocess(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVInpaintPreprocess".to_string(),
+        display_name: "LTXV Inpaint Preprocess".to_string(),
+        category: "mask/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("mask".to_string(), InputTypeSpec {
+                    type_name: "MASK".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("feather".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Mask],
+        output_names: vec!["MASK".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "inpaint_preprocess".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let mask = ctx.resolve_input(node_id, "mask").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![mask])
+        })
+    }));
+}
+
+fn register_ltxv_patcher_vae(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVPatcherVAE".to_string(),
+        display_name: "LTXV Patcher VAE".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("vae".to_string(), InputTypeSpec {
+                    type_name: "VAE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("patch_type".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["scale", "residual", "additive"]));
+                        e
+                    },
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Vae],
+        output_names: vec!["VAE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "patcher_vae".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let vae = ctx.resolve_input(node_id, "vae").unwrap_or_else(|_| json!({}));
+        let patch_type = ctx.resolve_input(node_id, "patch_type").unwrap_or_else(|_| json!("scale"));
+        let strength = ctx.resolve_input(node_id, "strength").unwrap_or_else(|_| json!(1.0));
+
+        Box::pin(async move {
+            let mut vae_out = vae.as_object().cloned().unwrap_or_default();
+            vae_out.insert("patch_type".to_string(), patch_type);
+            vae_out.insert("patch_strength".to_string(), strength);
+            Ok(vec![json!(vae_out)])
+        })
+    }));
+}
+
+fn register_ltxv_q8_patch(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVQ8Patch".to_string(),
+        display_name: "LTXV Q8 Patch".to_string(),
+        category: "model_patches/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("q8_patch".to_string(), InputTypeSpec {
+                    type_name: "LORA".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "q8_patch".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let q8_patch = ctx.resolve_input(node_id, "q8_patch").unwrap_or_else(|_| json!({}));
+        let strength = ctx.resolve_input(node_id, "strength").unwrap_or_else(|_| json!(1.0));
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("q8_patch".to_string(), q8_patch);
+            model_out.insert("q8_strength".to_string(), strength);
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+fn register_ltxv_q8_lora_model_loader(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVQ8LoraModelLoader".to_string(),
+        display_name: "LTXV Q8 LoRA Model Loader".to_string(),
+        category: "loaders/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("q8_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Lora],
+        output_names: vec!["LORA".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_q8_lora".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let q8_name = node.inputs.get("q8_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "q8_lora",
+                "name": q8_name,
+            })])
+        })
+    }));
+}
+
+fn register_decoder_noise(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "DecoderNoise".to_string(),
+        display_name: "Decoder Noise".to_string(),
+        category: "latent/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("samples".to_string(), InputTypeSpec {
+                    type_name: "LATENT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("noise_strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Latent],
+        output_names: vec!["LATENT".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "decoder_noise".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let samples = ctx.resolve_input(node_id, "samples").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![samples])
+        })
+    }));
+}
+
+fn register_ltxv_draw_tracks(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVDrawTracks".to_string(),
+        display_name: "LTXV Draw Tracks".to_string(),
+        category: "mask/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("tracks".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "draw_tracks".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let image = ctx.resolve_input(node_id, "image").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![image])
+        })
+    }));
+}
+
+fn register_ltxv_sparse_track_editor(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVSparseTrackEditor".to_string(),
+        display_name: "LTXV Sparse Track Editor".to_string(),
+        category: "mask/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("tracks".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("frame".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "sparse_track_editor".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "sparse_track",
+                "tracks": node.inputs.get("tracks"),
+            })])
+        })
+    }));
+}
+
+fn register_ltxv_load_conditioning(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVLoadConditioning".to_string(),
+        display_name: "LTXV Load Conditioning".to_string(),
+        category: "loaders/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("filename".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Conditioning],
+        output_names: vec!["CONDITIONING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_conditioning".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|_ctx, node, _node_id| {
+        let filename = node.inputs.get("filename")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        Box::pin(async move {
+            Ok(vec![json!({
+                "type": "conditioning",
+                "filename": filename,
+            })])
+        })
+    }));
+}
+
+fn register_ltxv_save_conditioning(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVSaveConditioning".to_string(),
+        display_name: "LTXV Save Conditioning".to_string(),
+        category: "output/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("conditioning".to_string(), InputTypeSpec {
+                    type_name: "CONDITIONING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("filename".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Conditioning],
+        output_names: vec!["CONDITIONING".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "save_conditioning".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let conditioning = ctx.resolve_input(node_id, "conditioning").unwrap_or_else(|_| json!({}));
+        Box::pin(async move {
+            Ok(vec![conditioning])
+        })
+    }));
+}
+
+fn register_ltxv_add_guide_advanced(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVAddGuideAdvanced".to_string(),
+        display_name: "LTXV Add Guide Advanced".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guide_type".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["attn", "res", "all"]));
+                        e
+                    },
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "add_guide_advanced".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let guide_type = ctx.resolve_input(node_id, "guide_type").unwrap_or_else(|_| json!("all"));
+        let strength = ctx.resolve_input(node_id, "strength").unwrap_or_else(|_| json!(1.0));
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("guide_type".to_string(), guide_type);
+            model_out.insert("guide_strength".to_string(), strength);
+            Ok(vec![json!(model_out)])
+        })
+    }));
+}
+
+fn register_ltxv_add_guide_advanced_attention(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "LTXVAddGuideAdvancedAttention".to_string(),
+        display_name: "LTXV Add Guide Advanced Attention".to_string(),
+        category: "sampling/ltx".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("model".to_string(), InputTypeSpec {
+                    type_name: "MODEL".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("guide_type".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["cross_attn", "self_attn", "all"]));
+                        e
+                    },
+                });
+                m.insert("strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("layers".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: HashMap::new(),
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Model],
+        output_names: vec!["MODEL".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "add_guide_advanced_attention".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let model = ctx.resolve_input(node_id, "model").unwrap_or_else(|_| json!({}));
+        let guide_type = ctx.resolve_input(node_id, "guide_type").unwrap_or_else(|_| json!("all"));
+        let strength = ctx.resolve_input(node_id, "strength").unwrap_or_else(|_| json!(1.0));
+        let layers = ctx.resolve_input(node_id, "layers").unwrap_or_else(|_| json!(""));
+
+        Box::pin(async move {
+            let mut model_out = model.as_object().cloned().unwrap_or_default();
+            model_out.insert("guide_type".to_string(), guide_type);
+            model_out.insert("guide_strength".to_string(), strength);
+            model_out.insert("guide_layers".to_string(), layers);
+            Ok(vec![json!(model_out)])
         })
     }));
 }
