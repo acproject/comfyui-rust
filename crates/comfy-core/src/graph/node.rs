@@ -130,6 +130,7 @@ pub enum IoType {
     Lora,
     LatentUpscaleModel,
     RelayOptions,
+    GuideData,
     Combo(Vec<String>),
     Custom(String),
 }
@@ -168,6 +169,7 @@ impl IoType {
             IoType::Lora => "LORA".to_string(),
             IoType::LatentUpscaleModel => "LATENT_UPSCALE_MODEL".to_string(),
             IoType::RelayOptions => "RELAY_OPTIONS".to_string(),
+            IoType::GuideData => "GUIDE_DATA".to_string(),
             IoType::Combo(opts) => opts.join(","),
             IoType::Custom(s) => s.clone(),
         }
@@ -206,6 +208,7 @@ impl IoType {
             "LORA" => IoType::Lora,
             "LATENT_UPSCALE_MODEL" => IoType::LatentUpscaleModel,
             "RELAY_OPTIONS" => IoType::RelayOptions,
+            "GUIDE_DATA" => IoType::GuideData,
             other => IoType::Custom(other.to_string()),
         }
     }

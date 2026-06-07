@@ -10,6 +10,7 @@ import { PromptRelayTimelineEditor } from '@/components/timeline/PromptRelayTime
 // Node types that support custom resizing
 const RESIZABLE_NODE_TYPES = new Set([
   'PromptRelayEncodeTimeline',
+  'LTXDirector',
 ]);
 
 const DEFAULT_NODE_WIDTH = 280;
@@ -83,7 +84,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const isSaveAudioNode = classType === 'SaveAudio';
   const isLoadAudioNode = classType === 'LoadAudio';
   const isSaveVideoWithAudioNode = classType === 'SaveVideoWithAudio';
-  const isPromptRelayTimeline = classType === 'PromptRelayEncodeTimeline';
+  const isPromptRelayTimeline = classType === 'PromptRelayEncodeTimeline' || classType === 'LTXDirector';
 
   const isResizable = RESIZABLE_NODE_TYPES.has(classType);
   const customWidth = (data.customWidth as number) || DEFAULT_NODE_WIDTH;
@@ -316,9 +317,9 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           {(isPromptRelayTimeline) && (
             <PromptRelayTimelineEditor
               nodeId={id}
-              maxFrames={Number(data.inputs['max_frames'] || 129)}
-              fps={Number(data.inputs['fps'] || 24.0)}
-              timeUnits={String(data.inputs['time_units'] || 'frames')}
+              maxFrames={Number(data.inputs['max_frames'] || data.inputs['duration_frames'] || 129)}
+              fps={Number(data.inputs['fps'] || data.inputs['frame_rate'] || 24.0)}
+              timeUnits={String(data.inputs['time_units'] || data.inputs['display_mode'] || 'frames')}
               localPrompts={String(data.inputs['local_prompts'] || '')}
               segmentLengths={String(data.inputs['segment_lengths'] || '')}
               timelineData={String(data.inputs['timeline_data'] || '')}

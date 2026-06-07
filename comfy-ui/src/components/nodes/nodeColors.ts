@@ -28,6 +28,8 @@ const TYPE_COLORS: Record<string, string> = {
   FLOAT: '#7986cb',
   STRING: '#ce93d8',
   BOOLEAN: '#ce93d8',
+  RELAY_OPTIONS: '#cddc39',
+  GUIDE_DATA: '#26c6da',
   COMBO: '#90a4ae',
   '*': '#9e9e9e',
 };
@@ -44,6 +46,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   image: '#bf5b7a',
   mask: '#8b5bbf',
   custom: '#8b6bbf',
+  whatdreamscost: '#1e88e5',
   _default: '#4a5568',
 };
 
