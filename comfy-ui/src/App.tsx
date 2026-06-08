@@ -6,6 +6,7 @@ import { ProgressBar } from '@/components/editor/ProgressBar';
 import { NodePanel } from '@/components/sidebar/NodePanel';
 import { PropertyPanel } from '@/components/sidebar/PropertyPanel';
 import ImageGallery from '@/components/sidebar/ImageGallery';
+import Gaussian3DPanel from '@/components/sidebar/Gaussian3DPanel';
 import WorkflowManager from '@/components/sidebar/WorkflowManager';
 import { ModelManager } from '@/components/sidebar/ModelManager';
 import { LlmSettings } from '@/components/sidebar/LlmSettings';
@@ -17,7 +18,7 @@ import { useWorkflowStore } from '@/store/workflow';
 import { getPluginManager } from '@/plugins/manager';
 import promptRelayPlugin from '@/plugins/promptRelayPlugin';
 
-type SidebarTab = 'nodes' | 'properties' | 'images' | 'workflows' | 'models' | 'custom' | 'llm';
+type SidebarTab = 'nodes' | 'properties' | 'images' | '3d' | 'workflows' | 'models' | 'custom' | 'llm';
 
 export interface PanelVisibility {
   showSidebar: boolean;
@@ -37,6 +38,8 @@ const AppInner: FC = () => {
   const [activeTab, setActiveTab] = useState<SidebarTab>('nodes');
   const [showSidebar, setShowSidebar] = useState(true);
   const [showAgent, setShowAgent] = useState(true);
+  const [gaussian3DFile, setGaussian3DFile] = useState<string>('');
+  const [gaussian3DFormat, setGaussian3DFormat] = useState<'ply' | 'splat'>('ply');
   const loadWorkflowFromJson = useWorkflowStore((s) => s.loadWorkflowFromJson);
   const getWorkflowAsJson = useWorkflowStore((s) => s.getWorkflowAsJson);
 
@@ -72,7 +75,7 @@ const AppInner: FC = () => {
           <div style={{ width: '260px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #2d3748', background: '#1a202c' }}>
             <div style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #2d3748' }}>
               {([
-                ['nodes', 'properties', 'images'],
+                ['nodes', 'properties', 'images', '3d'],
                 ['workflows', 'models', 'custom', 'llm'],
               ] as SidebarTab[][]).map((row, rowIdx) => (
                 <div key={rowIdx} style={{ display: 'flex' }}>
@@ -92,7 +95,7 @@ const AppInner: FC = () => {
                         textTransform: 'capitalize',
                       }}
                     >
-                      {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab === 'llm' ? '🤖' : tab}
+                      {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab === 'llm' ? '🤖' : tab === '3d' ? '🎮' : tab}
                     </button>
                   ))}
                 </div>
@@ -102,6 +105,34 @@ const AppInner: FC = () => {
               {activeTab === 'nodes' && <NodePanel />}
               {activeTab === 'properties' && <PropertyPanel />}
               {activeTab === 'images' && <ImageGallery />}
+              {activeTab === '3d' && gaussian3DFile && (
+                <Gaussian3DPanel
+                  filePath={gaussian3DFile}
+                  format={gaussian3DFormat}
+                />
+              )}
+              {activeTab === '3d' && !gaussian3DFile && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    height: '100%',
+                    color: '#718096',
+                    fontSize: '13px',
+                    textAlign: 'center',
+                    padding: '20px',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '32px', marginBottom: '12px' }}>🎮</div>
+                    <div>No 3D Gaussian data to display</div>
+                    <div style={{ fontSize: '11px', marginTop: '8px', opacity: 0.7 }}>
+                      Run a TripoSplat node to generate 3D output
+                    </div>
+                  </div>
+                </div>
+              )}
               {activeTab === 'workflows' && (
                 <WorkflowManager
                   onLoadWorkflow={handleLoadWorkflow}

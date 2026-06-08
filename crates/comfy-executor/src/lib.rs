@@ -9,6 +9,7 @@ pub mod controlnet;
 
 pub mod mask;
 pub mod prompt_relay;
+pub mod triposplat;
 
 pub use error::{ExecutorError, ErrorDetail, NodeErrorInfo, ValidationResult};
 pub use execution_context::{ExecutionContext, NodeOutput};

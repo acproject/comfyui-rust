@@ -131,6 +131,7 @@ pub enum IoType {
     LatentUpscaleModel,
     RelayOptions,
     GuideData,
+    Gaussian3D,
     Combo(Vec<String>),
     Custom(String),
 }
@@ -189,6 +190,7 @@ impl IoType {
             IoType::LatentUpscaleModel => "LATENT_UPSCALE_MODEL".to_string(),
             IoType::RelayOptions => "RELAY_OPTIONS".to_string(),
             IoType::GuideData => "GUIDE_DATA".to_string(),
+            IoType::Gaussian3D => "GAUSSIAN_3D".to_string(),
             IoType::Combo(opts) => opts.join(","),
             IoType::Custom(s) => s.clone(),
         }
@@ -228,6 +230,7 @@ impl IoType {
             "LATENT_UPSCALE_MODEL" => IoType::LatentUpscaleModel,
             "RELAY_OPTIONS" => IoType::RelayOptions,
             "GUIDE_DATA" => IoType::GuideData,
+            "GAUSSIAN_3D" => IoType::Gaussian3D,
             other => IoType::Custom(other.to_string()),
         }
     }

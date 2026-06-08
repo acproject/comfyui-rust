@@ -436,6 +436,7 @@ impl ComfyConfig {
             "model_patches",
             "audio_encoders",
             "llm",
+            "triposplat",
         ]
     }
 

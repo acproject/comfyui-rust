@@ -104,6 +104,7 @@ export const COMPLEX_TYPES: IoType[] = [
   'GUIDER',
   'SAMPLER',
   'COMBO',
+  'GAUSSIAN_3D',
 ];
 
 export const COMMON_TYPES: IoType[] = [...COMPLEX_TYPES];

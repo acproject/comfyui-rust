@@ -250,6 +250,7 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
 
     crate::mask::register_mask_nodes(registry);
     crate::prompt_relay::register_prompt_relay_nodes(registry);
+    crate::triposplat::register_triposplat_nodes(registry);
 }
 
 fn resolve_model_path(model_type: &str, filename: &str) -> String {

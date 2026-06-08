@@ -218,6 +218,7 @@ pub async fn get_object_info(
         m.insert("image", "input_images");
         m.insert("llm_model_name", "llm");
         m.insert("audio", "input_audio");
+        m.insert("triposplat_model_name", "triposplat");
         m
     };
 

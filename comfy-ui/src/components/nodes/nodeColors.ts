@@ -30,6 +30,7 @@ const TYPE_COLORS: Record<string, string> = {
   BOOLEAN: '#ce93d8',
   RELAY_OPTIONS: '#cddc39',
   GUIDE_DATA: '#26c6da',
+  GAUSSIAN_3D: '#00e676',
   COMBO: '#90a4ae',
   '*': '#9e9e9e',
 };
@@ -45,6 +46,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   latent: '#7a5bbf',
   image: '#bf5b7a',
   mask: '#8b5bbf',
+  '3d': '#00897b',
   custom: '#8b6bbf',
   whatdreamscost: '#1e88e5',
   _default: '#4a5568',
