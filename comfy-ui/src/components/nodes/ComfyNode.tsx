@@ -15,7 +15,7 @@ const RESIZABLE_NODE_TYPES = new Set([
 
 const DEFAULT_NODE_WIDTH = 280;
 const MIN_NODE_WIDTH = 220;
-const MIN_NODE_HEIGHT = 841;
+const MIN_NODE_HEIGHT = 200;
 const DEFAULT_TIMELINE_HEIGHT = 160;
 
 interface ComfyNodeProps {
@@ -178,11 +178,11 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         minWidth: MIN_NODE_WIDTH,
         width: isResizable ? customWidth : undefined,
         maxWidth: isResizable ? 1200 : DEFAULT_NODE_WIDTH,
-        minHeight: isResizable ? Math.max(MIN_NODE_HEIGHT, y + (isResizable ? 20 : 0)) : undefined,
+        minHeight: isResizable ? Math.min(MIN_NODE_HEIGHT, 815) : undefined,
         fontSize: 12,
         color: '#e2e8f0',
         boxShadow: isExecuting
-          ? '0 0 16px rgba(245, 158, 11, 0.6), 0 0 4px rgba(245, 158, 11, 0.3)'
+          ? '0 0 16px rgba(245, 158, 11, 0.6), 0 16px rgba(245, 158, 11, 0.6), 0 0 4px rgba(245, 158, 11, 0.3)'
           : isCompleted
             ? '0 0 12px rgba(34, 197, 94, 0.4)'
             : selected
@@ -373,7 +373,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           {outputs.length > 0 && (
             <>
               <div style={{ height: SEP_H, background: '#333' }} />
-              <div style={{ padding: '2px 0', paddingBottom: isResizable ? 20 : 2 }}>
+              <div style={{ padding: '2px 0', paddingBottom: isResizable ? 18 : 2 }}>
                 {outputs.map((output) => {
                   const typeColor = getTypeColor(output.type);
                   return (
@@ -868,10 +868,17 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
 
   if (typeName === 'COMBO') {
     const isImageField = classType === 'LoadImage' && name === 'image';
+    const choicesArray = choices || [];
+    const currentValue = String(value || '');
+    // Ensure value matches one of the choices, otherwise use first choice or empty string
+    const safeValue = choicesArray.length > 0 && choicesArray.includes(currentValue)
+      ? currentValue
+      : (choicesArray.length > 0 ? choicesArray[0] : '');
+
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1 }}>
         <select
-          value={String(value || '')}
+          value={safeValue}
           onChange={(e) => handleChange(e.target.value)}
           style={{
             ...baseStyle,
@@ -879,7 +886,10 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
             cursor: 'pointer',
           }}
         >
-          {(choices || []).map((c) => (
+          {choicesArray.length === 0 && (
+            <option value="" disabled>No options available</option>
+          )}
+          {choicesArray.map((c) => (
             <option key={c} value={c}>
               {c.length > 16 ? c.slice(0, 13) + '…' : c}
             </option>

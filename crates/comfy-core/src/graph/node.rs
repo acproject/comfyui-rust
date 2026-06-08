@@ -97,7 +97,7 @@ pub enum HiddenInputKind {
     UniqueId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IoType {
     Any,
     String,
@@ -133,6 +133,25 @@ pub enum IoType {
     GuideData,
     Combo(Vec<String>),
     Custom(String),
+}
+
+impl serde::Serialize for IoType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.io_type_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for IoType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(IoType::from_io_type_str(&s))
+    }
 }
 
 impl IoType {
