@@ -158,9 +158,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
     y += SEP_H;
   }
 
-  const outputHandleY: Record<string, number> = {};
-  for (const output of outputs) {
-    outputHandleY[output.name] = y + ROW_H / 2;
+  // Output rows height (for minHeight calculation)
+  for (const _output of outputs) {
     y += ROW_H;
   }
 
@@ -179,6 +178,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         minWidth: MIN_NODE_WIDTH,
         width: isResizable ? customWidth : undefined,
         maxWidth: isResizable ? 1200 : DEFAULT_NODE_WIDTH,
+        minHeight: isResizable ? Math.max(MIN_NODE_HEIGHT, y + (isResizable ? 20 : 0)) : undefined,
         fontSize: 12,
         color: '#e2e8f0',
         boxShadow: isExecuting
@@ -204,22 +204,6 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
             height: 12,
             border: '2px solid #1e1e2e',
             top: inputHandleY[spec.name],
-          }}
-        />
-      ))}
-
-      {outputs.map((output) => (
-        <Handle
-          key={`out-${output.name}`}
-          type="source"
-          position={Position.Right}
-          id={output.name}
-          style={{
-            background: getTypeColor(output.type),
-            width: 12,
-            height: 12,
-            border: '2px solid #1e1e2e',
-            top: outputHandleY[output.name],
           }}
         />
       ))}
@@ -389,7 +373,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
           {outputs.length > 0 && (
             <>
               <div style={{ height: SEP_H, background: '#333' }} />
-              <div style={{ padding: '2px 0' }}>
+              <div style={{ padding: '2px 0', paddingBottom: isResizable ? 20 : 2 }}>
                 {outputs.map((output) => {
                   const typeColor = getTypeColor(output.type);
                   return (
@@ -397,21 +381,22 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
                       key={output.name}
                       style={{
                         padding: '2px 8px',
-                        textAlign: 'right',
                         fontSize: 10,
                         color: '#a0aec0',
                         height: ROW_H,
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'flex-end',
+                        justifyContent: 'space-between',
                         gap: 4,
                         boxSizing: 'border-box',
-                        paddingRight: 18,
+                        paddingRight: isResizable ? 24 : 18,
+                        position: 'relative',
                       }}
                     >
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {output.name}
                       </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                       <span style={{
                         fontSize: 8,
                         color: typeColor,
@@ -421,14 +406,22 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
                       }}>
                         {output.type}
                       </span>
-                      <span style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        background: typeColor,
-                        border: '1.5px solid #1e1e2e',
-                        flexShrink: 0,
-                      }} />
+                      <Handle
+                        type="source"
+                        position={Position.Right}
+                        id={output.name}
+                        style={{
+                          background: typeColor,
+                          width: 12,
+                          height: 12,
+                          border: '2px solid #1e1e2e',
+                          position: 'absolute',
+                          right: -6,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                        }}
+                      />
+                      </div>
                     </div>
                   );
                 })}
