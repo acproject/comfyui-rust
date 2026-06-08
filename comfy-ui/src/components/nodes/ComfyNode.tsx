@@ -15,7 +15,7 @@ const RESIZABLE_NODE_TYPES = new Set([
 
 const DEFAULT_NODE_WIDTH = 280;
 const MIN_NODE_WIDTH = 220;
-const MIN_NODE_HEIGHT = 200;
+const MIN_NODE_HEIGHT = 841;
 const DEFAULT_TIMELINE_HEIGHT = 160;
 
 interface ComfyNodeProps {
