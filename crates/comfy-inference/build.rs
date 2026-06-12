@@ -56,7 +56,28 @@ fn main() {
 
     emit_link_libs(&search_dirs);
 
+    emit_cpp_rerun_hints(&sd_cpp_dir);
+
     println!("cargo:rerun-if-env-changed=SD_LIB_DIR");
+}
+
+fn emit_cpp_rerun_hints(sd_cpp_dir: &std::path::Path) {
+    for rel in ["CMakeLists.txt", "src", "include", "ggml/src", "ggml/include"] {
+        emit_rerun_if_changed_recursive(&sd_cpp_dir.join(rel));
+    }
+}
+
+fn emit_rerun_if_changed_recursive(path: &std::path::Path) {
+    println!("cargo:rerun-if-changed={}", path.display());
+    if let Ok(metadata) = std::fs::metadata(path) {
+        if metadata.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    emit_rerun_if_changed_recursive(&entry.path());
+                }
+            }
+        }
+    }
 }
 
 fn link_prebuilt_library(sd_cpp_dir: &std::path::Path, sd_lib_dir_env: Option<&str>) -> Vec<std::path::PathBuf> {
@@ -129,8 +150,6 @@ fn build_and_link_cpp_library(sd_cpp_dir: &std::path::Path) -> Vec<std::path::Pa
 
     println!("cargo:rustc-link-search=native={}", out_path.display());
     search_dirs.push(out_path.to_path_buf());
-
-    println!("cargo:rerun-if-changed={}", sd_cpp_dir.join("CMakeLists.txt").display());
 
     search_dirs
 }

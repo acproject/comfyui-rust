@@ -3,11 +3,97 @@ use crate::types::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Gaussian3DParams {
+    pub model_config: ModelConfig,
+    pub input_image: Option<SdImage>,
+    pub seed: i64,
+    pub steps: i32,
+    pub guidance_scale: f32,
+    pub num_gaussians: i32,
+    pub erode_radius: i32,
+    pub output_path: Option<String>,
+    pub output_format: i32, // 0=PLY, 1=SPLAT
+}
+
+impl Default for Gaussian3DParams {
+    fn default() -> Self {
+        Self {
+            model_config: ModelConfig::default(),
+            input_image: None,
+            seed: 42,
+            steps: 20,
+            guidance_scale: 3.0,
+            num_gaussians: 262144,
+            erode_radius: 1,
+            output_path: None,
+            output_format: 0,
+        }
+    }
+}
+
+impl Gaussian3DParams {
+    pub fn new(model_config: ModelConfig) -> Self {
+        Self {
+            model_config,
+            ..Default::default()
+        }
+    }
+
+    pub fn with_input_image(mut self, image: SdImage) -> Self {
+        self.input_image = Some(image);
+        self
+    }
+
+    pub fn with_seed(mut self, seed: i64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    pub fn with_steps(mut self, steps: i32) -> Self {
+        self.steps = steps;
+        self
+    }
+
+    pub fn with_guidance_scale(mut self, scale: f32) -> Self {
+        self.guidance_scale = scale;
+        self
+    }
+
+    pub fn with_num_gaussians(mut self, n: i32) -> Self {
+        self.num_gaussians = n;
+        self
+    }
+
+    pub fn with_output_path(mut self, path: impl Into<String>) -> Self {
+        self.output_path = Some(path.into());
+        self
+    }
+
+    pub fn with_output_format(mut self, format: i32) -> Self {
+        self.output_format = format;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Gaussian3DOutput {
+    pub xyz: Vec<f32>,
+    pub features_dc: Vec<f32>,
+    pub opacity: Vec<f32>,
+    pub scaling: Vec<f32>,
+    pub rotation: Vec<f32>,
+    pub num_gaussians: usize,
+    pub output_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextConfig {
     pub model_path: Option<String>,
     pub clip_l_path: Option<String>,
     pub clip_g_path: Option<String>,
     pub clip_vision_path: Option<String>,
+    pub decoder_path: Option<String>,
+    pub rmbg_path: Option<String>,
     pub t5xxl_path: Option<String>,
     pub llm_path: Option<String>,
     pub llm_vision_path: Option<String>,
@@ -55,6 +141,8 @@ impl Default for ContextConfig {
             clip_l_path: None,
             clip_g_path: None,
             clip_vision_path: None,
+            decoder_path: None,
+            rmbg_path: None,
             t5xxl_path: None,
             llm_path: None,
             llm_vision_path: None,
@@ -116,6 +204,16 @@ impl ContextConfig {
 
     pub fn with_t5xxl(mut self, path: impl Into<String>) -> Self {
         self.t5xxl_path = Some(path.into());
+        self
+    }
+
+    pub fn with_decoder(mut self, path: impl Into<String>) -> Self {
+        self.decoder_path = Some(path.into());
+        self
+    }
+
+    pub fn with_rmbg(mut self, path: impl Into<String>) -> Self {
+        self.rmbg_path = Some(path.into());
         self
     }
 
@@ -191,6 +289,8 @@ pub struct ModelConfig {
     pub clip_l_path: Option<String>,
     pub clip_g_path: Option<String>,
     pub clip_vision_path: Option<String>,
+    pub decoder_path: Option<String>,
+    pub rmbg_path: Option<String>,
     pub t5xxl_path: Option<String>,
     pub llm_path: Option<String>,
     pub llm_vision_path: Option<String>,
@@ -207,6 +307,8 @@ impl Default for ModelConfig {
             clip_l_path: None,
             clip_g_path: None,
             clip_vision_path: None,
+            decoder_path: None,
+            rmbg_path: None,
             t5xxl_path: None,
             llm_path: None,
             llm_vision_path: None,
@@ -240,6 +342,16 @@ impl ModelConfig {
 
     pub fn with_clip_vision(mut self, path: impl Into<String>) -> Self {
         self.clip_vision_path = Some(path.into());
+        self
+    }
+
+    pub fn with_decoder(mut self, path: impl Into<String>) -> Self {
+        self.decoder_path = Some(path.into());
+        self
+    }
+
+    pub fn with_rmbg(mut self, path: impl Into<String>) -> Self {
+        self.rmbg_path = Some(path.into());
         self
     }
 
@@ -284,6 +396,8 @@ impl ModelConfig {
         if let Some(ref p) = self.clip_l_path { parts.push(format!("cl:{}", p)); }
         if let Some(ref p) = self.clip_g_path { parts.push(format!("cg:{}", p)); }
         if let Some(ref p) = self.clip_vision_path { parts.push(format!("cv:{}", p)); }
+        if let Some(ref p) = self.decoder_path { parts.push(format!("dec:{}", p)); }
+        if let Some(ref p) = self.rmbg_path { parts.push(format!("rmbg:{}", p)); }
         if let Some(ref p) = self.t5xxl_path { parts.push(format!("t5:{}", p)); }
         if let Some(ref p) = self.llm_path { parts.push(format!("llm:{}", p)); }
         if let Some(ref p) = self.llm_vision_path { parts.push(format!("llmv:{}", p)); }

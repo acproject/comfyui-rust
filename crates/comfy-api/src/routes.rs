@@ -219,6 +219,7 @@ pub async fn get_object_info(
         m.insert("llm_model_name", "llm");
         m.insert("audio", "input_audio");
         m.insert("triposplat_model_name", "triposplat");
+        m.insert("rmbg_model_name", "background_removal");
         m
     };
 
@@ -326,7 +327,13 @@ pub async fn get_object_info(
                                                     }
                                                     audios
                                                 } else {
-                                                    model_cache.get(model_type).cloned().unwrap_or_default()
+                                                    let files = model_cache.get(model_type).cloned().unwrap_or_default();
+                                                    // Filter triposplat models by filename
+                                                    if model_type == "triposplat" {
+                                                        files.into_iter().filter(|f| f.to_lowercase().contains("triposplat")).collect()
+                                                    } else {
+                                                        files
+                                                    }
                                                 }
                                             } else {
                                                 vec![]

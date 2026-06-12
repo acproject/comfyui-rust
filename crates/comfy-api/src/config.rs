@@ -70,6 +70,10 @@ pub struct ModelPathsConfig {
     pub audio_encoders: String,
     #[serde(default = "default_llm_dir")]
     pub llm: String,
+    #[serde(default = "default_triposplat_dir")]
+    pub triposplat: String,
+    #[serde(default = "default_background_removal_dir")]
+    pub background_removal: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +158,8 @@ impl Default for ModelPathsConfig {
             model_patches: default_model_patches_dir(),
             audio_encoders: default_audio_encoders_dir(),
             llm: default_llm_dir(),
+            triposplat: default_triposplat_dir(),
+            background_removal: default_background_removal_dir(),
         }
     }
 }
@@ -279,6 +285,14 @@ fn default_audio_encoders_dir() -> String {
 
 fn default_llm_dir() -> String {
     "llm".to_string()
+}
+
+fn default_triposplat_dir() -> String {
+    "diffusion_models".to_string()
+}
+
+fn default_background_removal_dir() -> String {
+    "background_removal".to_string()
 }
 
 fn default_backend() -> String {
@@ -410,6 +424,8 @@ impl ComfyConfig {
             "classifiers" => self.models.classifiers.clone(),
             "model_patches" => self.models.model_patches.clone(),
             "audio_encoders" => self.models.audio_encoders.clone(),
+            "triposplat" => self.models.triposplat.clone(),
+            "background_removal" => self.models.background_removal.clone(),
             _ => model_type.to_string(),
         }
     }
@@ -437,6 +453,7 @@ impl ComfyConfig {
             "audio_encoders",
             "llm",
             "triposplat",
+            "background_removal",
         ]
     }
 

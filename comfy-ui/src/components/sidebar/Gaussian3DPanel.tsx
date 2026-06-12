@@ -9,7 +9,7 @@ interface Gaussian3DPanelProps {
 
 /**
  * 3D Gaussian Preview Panel
- * Displays in the sidebar with the 3D viewer
+ * Full-featured panel with real-time Gaussian splat rendering
  */
 const Gaussian3DPanel: React.FC<Gaussian3DPanelProps> = ({
   filePath,
@@ -31,33 +31,48 @@ const Gaussian3DPanel: React.FC<Gaussian3DPanelProps> = ({
         background: '#1a1a2e',
       }}
     >
-      {/* Header */}
+      {/* Header bar */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '12px 16px',
+          padding: '10px 14px',
           background: '#16213e',
           borderBottom: '1px solid #0f3460',
+          flexShrink: 0,
         }}
       >
-        <h3 style={{ margin: 0, color: '#e2e2e2', fontSize: '14px', fontWeight: 600 }}>
-          3D Gaussian Preview
-        </h3>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '16px' }}>🎮</span>
+          <h3 style={{ margin: 0, color: '#e2e2e2', fontSize: '13px', fontWeight: 600 }}>
+            3D Gaussian Viewer
+          </h3>
+          <span
+            style={{
+              fontSize: '10px',
+              color: '#00e676',
+              background: 'rgba(0,230,118,0.1)',
+              padding: '2px 6px',
+              borderRadius: '4px',
+            }}
+          >
+            {format.toUpperCase()}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '6px' }}>
           <button
             onClick={handleRefresh}
             style={{
               background: '#0f3460',
-              border: 'none',
+              border: '1px solid #1a4a8a',
               color: '#e2e2e2',
               padding: '4px 8px',
               borderRadius: '4px',
               cursor: 'pointer',
               fontSize: '12px',
             }}
-            title="Refresh"
+            title="Reload viewer"
           >
             ↻
           </button>
@@ -66,7 +81,7 @@ const Gaussian3DPanel: React.FC<Gaussian3DPanelProps> = ({
               onClick={onClose}
               style={{
                 background: '#0f3460',
-                border: 'none',
+                border: '1px solid #1a4a8a',
                 color: '#e2e2e2',
                 padding: '4px 8px',
                 borderRadius: '4px',
@@ -81,29 +96,36 @@ const Gaussian3DPanel: React.FC<Gaussian3DPanelProps> = ({
         </div>
       </div>
 
-      {/* Viewer */}
-      <div style={{ flex: 1, minHeight: 0 }}>
+      {/* 3D Viewer - fills remaining space */}
+      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <Gaussian3DViewer
           key={viewerKey}
           filePath={filePath}
           format={format}
-          width={400}
-          height={500}
         />
       </div>
 
-      {/* File info */}
+      {/* File info footer */}
       <div
         style={{
-          padding: '8px 16px',
+          padding: '6px 14px',
           background: '#16213e',
           borderTop: '1px solid #0f3460',
           fontSize: '11px',
           color: '#a2a2b2',
+          flexShrink: 0,
         }}
       >
-        <div style={{ wordBreak: 'break-all' }}>{filePath}</div>
-        <div style={{ marginTop: '4px', textTransform: 'uppercase' }}>{format}</div>
+        <div
+          style={{
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={filePath}
+        >
+          {filePath}
+        </div>
       </div>
     </div>
   );

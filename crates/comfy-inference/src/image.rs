@@ -168,7 +168,110 @@ impl SdVideo {
             return Err(ImageError::PngEncodeError("No frames to encode".to_string()));
         }
 
-        let tmp_dir = std::env::temp_dir().join(format!("comfyui_ffmpeg_{}", std::process::id()));
+        // Try full-featured ffmpeg with rawvideo pipe first
+        if let Some(ffmpeg_path) = Self::find_full_ffmpeg() {
+            return self.encode_with_ffmpeg_rawvideo(&ffmpeg_path, output_path, fps, crf);
+        }
+
+        // Fallback: use PNG-based encoding (works with minimal ffmpeg that has png decoder + image2 demuxer)
+        self.encode_with_ffmpeg_png(output_path, fps, crf)
+    }
+
+    /// Encode video by piping raw frames to ffmpeg (requires rawvideo decoder)
+    fn encode_with_ffmpeg_rawvideo(&self, ffmpeg_path: &str, output_path: &std::path::Path, fps: i32, _crf: i32) -> Result<(), ImageError> {
+        let first = &self.frames[0];
+        let w = first.width;
+        let h = first.height;
+        let ch = first.channel;
+        let pix_fmt = if ch == 4 { "rgba" } else { "rgb24" };
+
+        tracing::info!("encode_with_ffmpeg: using {} to pipe {} frames ({}x{}, {}) via stdin",
+            ffmpeg_path, self.frames.len(), w, h, pix_fmt);
+
+        let mut child = std::process::Command::new(ffmpeg_path)
+            .args([
+                "-y",
+                "-f", "rawvideo",
+                "-pix_fmt", pix_fmt,
+                "-s", &format!("{}x{}", w, h),
+                "-framerate", &fps.to_string(),
+                "-i", "pipe:0",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "medium",
+                "-movflags", "+faststart",
+                output_path.to_str().unwrap_or(""),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to spawn ffmpeg: {}", e)))?;
+
+        // Take stderr handle to read in a separate thread
+        let stderr_handle = child.stderr.take();
+
+        // Spawn thread to collect stderr output
+        let stderr_thread = stderr_handle.map(|stderr| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut output = String::new();
+                let mut reader = stderr;
+                let _ = reader.read_to_string(&mut output);
+                output
+            })
+        });
+
+        // Write raw frame data to ffmpeg stdin
+        if let Some(ref mut stdin) = child.stdin {
+            use std::io::Write;
+            for (i, frame) in self.frames.iter().enumerate() {
+                let expected = (w * h * ch) as usize;
+                if frame.data.len() != expected {
+                    return Err(ImageError::PngEncodeError(format!(
+                        "Frame {} has {} bytes, expected {}", i, frame.data.len(), expected
+                    )));
+                }
+                if let Err(e) = stdin.write_all(&frame.data) {
+                    // Wait for stderr to get error details
+                    let stderr_output = stderr_thread
+                        .and_then(|t| t.join().ok())
+                        .unwrap_or_default();
+                    return Err(ImageError::PngEncodeError(format!(
+                        "Failed to write frame {} to ffmpeg: {}. ffmpeg stderr: {}",
+                        i, e, stderr_output
+                    )));
+                }
+            }
+        }
+        // Drop stdin to signal EOF
+        drop(child.stdin.take());
+
+        let output = child.wait_with_output()
+            .map_err(|e| ImageError::PngEncodeError(format!("Failed to wait for ffmpeg: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = stderr_thread
+                .and_then(|t| t.join().ok())
+                .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).to_string());
+            return Err(ImageError::PngEncodeError(format!(
+                "ffmpeg exited with code {:?}: {}", output.status.code(), stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Encode video using PNG frames piped to ffmpeg (works with minimal ffmpeg builds)
+    fn encode_with_ffmpeg_png(&self, output_path: &std::path::Path, fps: i32, _crf: i32) -> Result<(), ImageError> {
+        let ffmpeg_path = Self::find_any_ffmpeg()
+            .ok_or_else(|| ImageError::PngEncodeError("No ffmpeg found".to_string()))?;
+
+        tracing::info!("encode_with_ffmpeg_png: using {} (PNG pipe mode) for {} frames",
+            ffmpeg_path, self.frames.len());
+
+        // Write PNG frames to temp directory
+        let tmp_dir = std::env::temp_dir().join(format!("comfyui_ffmpeg_mp4_{}", std::process::id()));
         std::fs::create_dir_all(&tmp_dir)
             .map_err(|e| ImageError::PngEncodeError(format!("Failed to create temp dir: {}", e)))?;
 
@@ -181,14 +284,13 @@ impl SdVideo {
         }
 
         let input_pattern = tmp_dir.join("frame_%06d.png");
-        let status = std::process::Command::new("ffmpeg")
+        let status = std::process::Command::new(&ffmpeg_path)
             .args([
                 "-y",
                 "-framerate", &fps.to_string(),
                 "-i", input_pattern.to_str().unwrap_or(""),
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
-                "-crf", &crf.to_string(),
                 "-preset", "medium",
                 "-movflags", "+faststart",
                 output_path.to_str().unwrap_or(""),
@@ -207,6 +309,79 @@ impl SdVideo {
         }
 
         Ok(())
+    }
+
+    /// Find any available ffmpeg binary
+    fn find_any_ffmpeg() -> Option<String> {
+        let candidates = [
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+            "/bin/ffmpeg",
+        ];
+
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+
+        // Check PATH
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some("ffmpeg".to_string());
+        }
+
+        None
+    }
+
+    /// Find a full-featured ffmpeg that supports rawvideo demuxer and pipe protocol
+    fn find_full_ffmpeg() -> Option<String> {
+        // Check common locations for full ffmpeg
+        let candidates = [
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/bin/ffmpeg",
+        ];
+
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                // Check if it supports rawvideo demuxer
+                // ffmpeg -demuxers outputs to stdout
+                let output = std::process::Command::new(path)
+                    .args(["-demuxers"])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .ok()?;
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.contains("rawvideo") {
+                    tracing::info!("Found full-featured ffmpeg at {}", path);
+                    return Some(path.to_string());
+                }
+            }
+        }
+
+        // Fallback to PATH
+        let output = std::process::Command::new("ffmpeg")
+            .args(["-demuxers"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("rawvideo") {
+            tracing::info!("Using ffmpeg from PATH");
+            return Some("ffmpeg".to_string());
+        }
+
+        None
     }
 
     pub fn encode_webm_with_ffmpeg(&self, output_path: &std::path::Path, fps: i32, crf: i32) -> Result<(), ImageError> {
@@ -303,13 +478,7 @@ impl SdVideo {
     }
 
     pub fn is_ffmpeg_available() -> bool {
-        std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        Self::find_any_ffmpeg().is_some()
     }
 }
 

@@ -6,6 +6,7 @@ use std::os::raw::{c_char, c_float, c_int, c_void};
 
 pub type SdCtxT = c_void;
 pub type UpscalerCtxT = c_void;
+pub type SdGaussian3dT = c_void;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +149,8 @@ pub struct CSdCtxParams {
     pub clip_l_path: *const c_char,
     pub clip_g_path: *const c_char,
     pub clip_vision_path: *const c_char,
+    pub decoder_path: *const c_char,
+    pub rmbg_path: *const c_char,
     pub t5xxl_path: *const c_char,
     pub llm_path: *const c_char,
     pub llm_vision_path: *const c_char,
@@ -354,6 +357,30 @@ pub struct CVidGenParams {
     pub cache: CCacheParams,
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct CGaussian3D {
+    pub xyz: *mut c_float,
+    pub features_dc: *mut c_float,
+    pub opacity: *mut c_float,
+    pub scaling: *mut c_float,
+    pub rotation: *mut c_float,
+    pub num_gaussians: c_int,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct C3dGenParams {
+    pub input_image: CSdImage,
+    pub seed: i64,
+    pub steps: c_int,
+    pub guidance_scale: c_float,
+    pub num_gaussians: c_int,
+    pub erode_radius: c_int,
+    pub output_path: *const c_char,
+    pub output_format: c_int, // 0=PLY, 1=SPLAT
+}
+
 pub type SdLogCb = Option<unsafe extern "C" fn(level: u32, text: *const c_char, data: *mut c_void)>;
 pub type SdProgressCb = Option<unsafe extern "C" fn(step: c_int, steps: c_int, time: c_float, data: *mut c_void)>;
 pub type SdPreviewCb = Option<unsafe extern "C" fn(step: c_int, frame_count: c_int, frames: *mut CSdImage, is_noisy: bool, data: *mut c_void)>;
@@ -368,6 +395,7 @@ extern "C" {
     pub fn sd_get_system_info() -> *const c_char;
     pub fn sd_ctx_supports_image_generation(ctx: *const SdCtxT) -> bool;
     pub fn sd_ctx_supports_video_generation(ctx: *const SdCtxT) -> bool;
+    pub fn sd_ctx_supports_3d_generation(ctx: *const SdCtxT) -> bool;
 
     pub fn sd_type_name(sd_type: CSdType) -> *const c_char;
     pub fn str_to_sd_type(str: *const c_char) -> CSdType;
@@ -393,6 +421,9 @@ extern "C" {
 
     pub fn sd_vid_gen_params_init(params: *mut CVidGenParams);
     pub fn generate_video(ctx: *mut SdCtxT, params: *const CVidGenParams, num_frames_out: *mut c_int) -> *mut CSdImage;
+
+    pub fn generate_3d_gaussian(ctx: *mut SdCtxT, params: *const C3dGenParams) -> *mut CGaussian3D;
+    pub fn free_sd_gaussian_3d(gaussian: *mut CGaussian3D);
 
     pub fn new_upscaler_ctx(
         esrgan_path: *const c_char,

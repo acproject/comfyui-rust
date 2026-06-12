@@ -8,12 +8,19 @@ use std::pin::Pin;
 pub trait InferenceBackend: Send + Sync {
     fn supports_image_generation(&self) -> bool;
     fn supports_video_generation(&self) -> bool;
+    fn supports_3d_generation(&self) -> bool {
+        false
+    }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>>;
 
     fn generate_video(&self, params: VideoGenParams) -> InferenceResult<SdVideo>;
 
     fn upscale(&self, image: SdImage, params: UpscaleParams) -> InferenceResult<SdImage>;
+
+    fn generate_3d_gaussian(&self, _params: Gaussian3DParams) -> InferenceResult<Gaussian3DOutput> {
+        Err(InferenceError::BackendNotAvailable("3D generation not implemented".to_string()))
+    }
 
     fn decode_video_latent(&self, _latent: &Value, _params: &VideoGenParams) -> InferenceResult<SdVideo> {
         Err(InferenceError::BackendNotAvailable("decode_video_latent not implemented".to_string()))
@@ -23,6 +30,7 @@ pub trait InferenceBackend: Send + Sync {
         BackendCapabilities {
             supports_image_generation: self.supports_image_generation(),
             supports_video_generation: self.supports_video_generation(),
+            supports_3d_generation: self.supports_3d_generation(),
         }
     }
 }
@@ -61,6 +69,7 @@ impl<B: InferenceBackend> AsyncInferenceBackend for B {
 pub struct BackendCapabilities {
     pub supports_image_generation: bool,
     pub supports_video_generation: bool,
+    pub supports_3d_generation: bool,
 }
 
 pub struct NullBackend;

@@ -1817,11 +1817,15 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                     Ok(video) => {
                         let frame_count = video.frame_count();
                         tracing::info!("LTXVideoSampler: generated {} video frames", frame_count);
+                        let video_val = serde_json::to_value(&video).unwrap_or(json!({}));
                         Ok(vec![json!({
                             "type": "video",
                             "frame_count": frame_count,
                             "fps": video.fps,
                             "num_frames_per_seed": num_frames_per_seed,
+                            "frames": video_val.get("frames").cloned().unwrap_or(json!([])),
+                            "width": width,
+                            "height": height,
                         })])
                     }
                     Err(e) => {
@@ -2980,7 +2984,11 @@ fn register_video_vae_decode(registry: &mut NodeRegistry) {
                     }
                     Err(e) => {
                         tracing::warn!("VideoVAEDecode: backend decode_video_latent failed: {}, falling back to passthrough", e);
-                        Ok(vec![json!({
+                        // Pass through frames if input already contains decoded frames
+                        let passthrough_frames = samples.get("frames")
+                            .and_then(|v| v.as_array())
+                            .cloned();
+                        let mut result = json!({
                             "type": "video",
                             "frame_count": frame_count,
                             "fps": fps,
@@ -2989,7 +2997,11 @@ fn register_video_vae_decode(registry: &mut NodeRegistry) {
                             "source": "video_vae_decode",
                             "latent": samples,
                             "vae": vae,
-                        })])
+                        });
+                        if let Some(frames) = passthrough_frames {
+                            result["frames"] = json!(frames);
+                        }
+                        Ok(vec![result])
                     }
                 }
             } else {

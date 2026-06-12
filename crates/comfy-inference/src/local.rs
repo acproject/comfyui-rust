@@ -83,6 +83,8 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
         clip_l_path: model_config.clip_l_path.clone().or(base_config.clip_l_path.clone()),
         clip_g_path: model_config.clip_g_path.clone().or(base_config.clip_g_path.clone()),
         clip_vision_path: model_config.clip_vision_path.clone().or(base_config.clip_vision_path.clone()),
+        decoder_path: model_config.decoder_path.clone().or(base_config.decoder_path.clone()),
+        rmbg_path: model_config.rmbg_path.clone().or(base_config.rmbg_path.clone()),
         t5xxl_path: model_config.t5xxl_path.clone().or(base_config.t5xxl_path.clone()),
         llm_path: model_config.llm_path.clone().or(base_config.llm_path.clone()),
         llm_vision_path: model_config.llm_vision_path.clone().or(base_config.llm_vision_path.clone()),
@@ -105,6 +107,9 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
 }
 
 fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
+    tracing::info!("Creating SD context with model_path={:?}, diffusion_model_path={:?}, clip_vision_path={:?}, decoder_path={:?}, vae_path={:?}, rmbg_path={:?}",
+        config.model_path, config.diffusion_model_path, config.clip_vision_path, config.decoder_path, config.vae_path, config.rmbg_path);
+
     let mut c_params: CSdCtxParams = unsafe { std::mem::zeroed() };
 
     unsafe {
@@ -116,6 +121,8 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.clip_l_path = strings.opt_cstr(&config.clip_l_path);
     c_params.clip_g_path = strings.opt_cstr(&config.clip_g_path);
     c_params.clip_vision_path = strings.opt_cstr(&config.clip_vision_path);
+    c_params.decoder_path = strings.opt_cstr(&config.decoder_path);
+    c_params.rmbg_path = strings.opt_cstr(&config.rmbg_path);
     c_params.t5xxl_path = strings.opt_cstr(&config.t5xxl_path);
     c_params.llm_path = strings.opt_cstr(&config.llm_path);
     c_params.llm_vision_path = strings.opt_cstr(&config.llm_vision_path);
@@ -149,6 +156,7 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
 
     let ctx = unsafe { new_sd_ctx(&c_params) };
     if ctx.is_null() {
+        tracing::error!("new_sd_ctx returned null - C++ context creation failed. Check stderr for C++ log output.");
         return Err(InferenceError::ContextCreationFailed);
     }
 
@@ -241,8 +249,31 @@ pub fn get_num_physical_cores() -> i32 {
     unsafe { sd_get_num_physical_cores() }
 }
 
+/// C++ log callback - forwards C++ LOG_* output to Rust tracing
+unsafe extern "C" fn sd_log_callback(level: u32, text: *const c_char, _data: *mut c_void) {
+    if text.is_null() {
+        return;
+    }
+    let msg = std::ffi::CStr::from_ptr(text).to_string_lossy();
+    let trimmed = msg.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // SD_LOG_DEBUG=0, SD_LOG_INFO=1, SD_LOG_WARN=2, SD_LOG_ERROR=3
+    match level {
+        3 => tracing::error!("[C++] {}", trimmed),
+        2 => tracing::warn!("[C++] {}", trimmed),
+        1 => tracing::info!("[C++] {}", trimmed),
+        _ => tracing::debug!("[C++] {}", trimmed),
+    }
+}
+
 impl LocalBackend {
     pub fn new(config: ContextConfig) -> InferenceResult<Self> {
+        // Set up C++ log callback to forward to Rust tracing
+        unsafe {
+            sd_set_log_callback(Some(sd_log_callback), std::ptr::null_mut());
+        }
         Ok(Self {
             contexts: Mutex::new(ContextCache::new()),
             base_config: config,
@@ -341,6 +372,10 @@ impl InferenceBackend for LocalBackend {
     }
 
     fn supports_video_generation(&self) -> bool {
+        true
+    }
+
+    fn supports_3d_generation(&self) -> bool {
         true
     }
 
@@ -486,6 +521,98 @@ impl InferenceBackend for LocalBackend {
 
         SdImage::from_raw(c_result.width, c_result.height, c_result.channel, data)
             .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))
+    }
+
+    fn generate_3d_gaussian(&self, params: Gaussian3DParams) -> InferenceResult<Gaussian3DOutput> {
+        let mut cache = self.contexts.lock().unwrap();
+        let ctx = cache.get_or_create(&params.model_config, &self.base_config)?;
+
+        if !unsafe { sd_ctx_supports_3d_generation(ctx) } {
+            return Err(InferenceError::BackendNotAvailable(
+                "stable-diffusion.cpp in this checkout does not expose a usable native 3D generation pipeline"
+                    .to_string(),
+            ));
+        }
+
+        let mut strings = CStringHolder::new();
+
+        let c_input_image = params
+            .input_image
+            .as_ref()
+            .map(|img| image_to_c(img))
+            .unwrap_or_else(null_c_image);
+
+        let c_output_path = params
+            .output_path
+            .as_deref()
+            .map(|s| strings.cstr(s))
+            .unwrap_or(ptr::null());
+
+        let c_params = C3dGenParams {
+            input_image: c_input_image,
+            seed: params.seed,
+            steps: params.steps,
+            guidance_scale: params.guidance_scale,
+            num_gaussians: params.num_gaussians,
+            erode_radius: params.erode_radius,
+            output_path: c_output_path,
+            output_format: params.output_format,
+        };
+
+        let result = unsafe { generate_3d_gaussian(ctx, &c_params) };
+
+        if result.is_null() {
+            return Err(InferenceError::GenerationFailed(
+                "generate_3d_gaussian returned null".to_string(),
+            ));
+        }
+
+        let c_gaussian = unsafe { &*result };
+        let n = c_gaussian.num_gaussians as usize;
+
+        let xyz = if !c_gaussian.xyz.is_null() && n > 0 {
+            unsafe { std::slice::from_raw_parts(c_gaussian.xyz, n * 3) }.to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let features_dc = if !c_gaussian.features_dc.is_null() && n > 0 {
+            unsafe { std::slice::from_raw_parts(c_gaussian.features_dc, n * 3) }.to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let opacity = if !c_gaussian.opacity.is_null() && n > 0 {
+            unsafe { std::slice::from_raw_parts(c_gaussian.opacity, n) }.to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let scaling = if !c_gaussian.scaling.is_null() && n > 0 {
+            unsafe { std::slice::from_raw_parts(c_gaussian.scaling, n * 3) }.to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let rotation = if !c_gaussian.rotation.is_null() && n > 0 {
+            unsafe { std::slice::from_raw_parts(c_gaussian.rotation, n * 4) }.to_vec()
+        } else {
+            Vec::new()
+        };
+
+        unsafe {
+            free_sd_gaussian_3d(result as *mut CGaussian3D);
+        }
+
+        Ok(Gaussian3DOutput {
+            xyz,
+            features_dc,
+            opacity,
+            scaling,
+            rotation,
+            num_gaussians: n,
+            output_file: params.output_path,
+        })
     }
 }
 

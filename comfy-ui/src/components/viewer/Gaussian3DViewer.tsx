@@ -1,341 +1,135 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import React, { useRef, useEffect, useState } from 'react';
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
 
 interface Gaussian3DViewerProps {
   filePath: string;
   format?: 'ply' | 'splat';
-  width?: number;
-  height?: number;
 }
 
 /**
- * 3D Gaussian Viewer component
- * Renders 3D Gaussian splats (PLY or SPLAT format) using Three.js
- * Inspired by SuperSplat and SparkGLS viewers
+ * 3D Gaussian Splat Viewer - Real-time Gaussian splatting renderer
+ * Uses @mkkellogg/gaussian-splats-3d for production-quality rendering
+ * Similar to SuperSplat / Super GLB Viewer experience
  */
 const Gaussian3DViewer: React.FC<Gaussian3DViewerProps> = ({
   filePath,
   format = 'ply',
-  width = 800,
-  height = 600,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const controlsRef = useRef<OrbitControls | null>(null);
-  const pointsRef = useRef<THREE.Points | null>(null);
+  const viewerRef = useRef<GaussianSplats3D.Viewer | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [gaussianCount, setGaussianCount] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
+  const [splatCount, setSplatCount] = useState(0);
+  const [fps, setFps] = useState(0);
 
-  // Initialize Three.js scene
+  // Initialize viewer
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Scene setup
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a2e);
-    sceneRef.current = scene;
-
-    // Camera setup
-    const camera = new THREE.PerspectiveCamera(
-      75,
-      width / height,
-      0.1,
-      1000
-    );
-    camera.position.set(0, 0, 2);
-    cameraRef.current = camera;
-
-    // Renderer setup
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
+    const viewer = new GaussianSplats3D.Viewer({
+      rootElement: containerRef.current,
+      cameraUp: [0, 1, 0],
+      initialCameraPosition: [0, 1.5, 3],
+      initialCameraLookAt: [0, 0, 0],
+      sharedMemoryForWorkers: false,
+      integerBasedSort: true,
+      halfPrecisionCovariancesOnGPU: true,
+      dynamicScene: false,
+      gaussianSphereColors: {
+        0: [0.5, 0.5, 0.5],
+        1: [0.5, 0.5, 0.5],
+        2: [0.5, 0.5, 0.5],
+        3: [0.5, 0.5, 0.5],
+      },
     });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    containerRef.current.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
 
-    // Orbit controls
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controlsRef.current = controls;
-
-    // Add some lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 5, 5);
-    scene.add(directionalLight);
-
-    // Animation loop
-    let animationId: number;
-    const animate = () => {
-      animationId = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    };
-    animate();
-
-    // Handle resize
-    const handleResize = () => {
-      if (!containerRef.current || !cameraRef.current || !rendererRef.current) return;
-      const newWidth = containerRef.current.clientWidth;
-      const newHeight = containerRef.current.clientHeight;
-      cameraRef.current.aspect = newWidth / newHeight;
-      cameraRef.current.updateProjectionMatrix();
-      rendererRef.current.setSize(newWidth, newHeight);
-    };
-
-    window.addEventListener('resize', handleResize);
+    viewerRef.current = viewer;
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      cancelAnimationFrame(animationId);
-      if (containerRef.current && renderer.domElement.parentNode === containerRef.current) {
-        containerRef.current.removeChild(renderer.domElement);
-      }
-      renderer.dispose();
-      controls.dispose();
+      viewer.dispose();
+      viewerRef.current = null;
     };
-  }, [width, height]);
+  }, []);
 
-  // Load and parse 3D Gaussian data
-  const loadGaussians = useCallback(async () => {
-    if (!filePath || !sceneRef.current) return;
+  // Load scene when file path changes
+  useEffect(() => {
+    if (!viewerRef.current || !filePath) return;
 
     setLoading(true);
     setError(null);
 
-    try {
-      let positions: Float32Array;
-      let colors: Float32Array;
-      let opacities: Float32Array;
-      let counts: number;
+    const loadScene = async () => {
+      try {
+        const viewer = viewerRef.current;
+        if (!viewer) return;
 
-      if (format === 'splat') {
-        // Parse .splat format
-        // Each record: xyz(12 bytes) + scale(12 bytes) + rgba(4 bytes) + rot(4 bytes) = 32 bytes
-        const response = await fetch(filePath);
-        if (!response.ok) throw new Error(`Failed to load: ${response.status}`);
-        const buffer = await response.arrayBuffer();
-        const data = new DataView(buffer);
-        counts = data.byteLength / 32;
+        // Determine format from file extension
+        const actualFormat = format === 'splat' ? GaussianSplats3D.SceneFormat.Splat : GaussianSplats3D.SceneFormat.PLY;
 
-        positions = new Float32Array(counts * 3);
-        colors = new Float32Array(counts * 3);
-        opacities = new Float32Array(counts);
-
-        for (let i = 0; i < counts; i++) {
-          const offset = i * 32;
-          
-          // xyz (float32, 3 components)
-          positions[i * 3] = data.getFloat32(offset, true);
-          positions[i * 3 + 1] = data.getFloat32(offset + 4, true);
-          positions[i * 3 + 2] = data.getFloat32(offset + 8, true);
-
-          // rgba (uint8, 4 components) - convert to color
-          const r = data.getUint8(offset + 24);
-          const g = data.getUint8(offset + 25);
-          const b = data.getUint8(offset + 26);
-          const a = data.getUint8(offset + 27);
-          
-          colors[i * 3] = r / 255;
-          colors[i * 3 + 1] = g / 255;
-          colors[i * 3 + 2] = b / 255;
-          opacities[i] = a / 255;
-        }
-      } else {
-        // Parse .ply format (binary, little-endian)
-        const response = await fetch(filePath);
-        if (!response.ok) throw new Error(`Failed to load: ${response.status}`);
-        const buffer = await response.arrayBuffer();
-        const data = new DataView(buffer);
-        const textDecoder = new TextDecoder();
-
-        // Read header
-        let headerEnd = 8; // "ply\n" + "1.0\n"
-        while (true) {
-          const line = textDecoder.decode(
-            new Uint8Array(buffer, headerEnd, buffer.byteLength - headerEnd)
-          ).split('\n')[0];
-          headerEnd += line.length + 1;
-          if (line === 'end_header') break;
-        }
-
-        // Parse header to get vertex count and property info
-        const headerText = textDecoder.decode(
-          new Uint8Array(buffer, 0, headerEnd)
-        );
-        const vertexMatch = headerText.match(/element vertex (\d+)/);
-        if (!vertexMatch) throw new Error('Invalid PLY header');
-        counts = parseInt(vertexMatch[1]);
-
-        // Find property offsets
-        const props: Record<string, number> = {};
-        headerText.split('\n').forEach((line) => {
-          const match = line.match(/property (\w+) (\w+)/);
-          if (match) {
-            const type = match[1];
-            const name = match[2];
-            // Simple size calculation
-            let size = 0;
-            if (type === 'float') size = 4;
-            else if (type === 'int') size = 4;
-            else if (type === 'uchar') size = 1;
-            props[name] = size;
-          }
+        await viewer.addSplatScene(filePath, {
+          splatAlphaRemovalThreshold: 5,
+          showLoadingUI: false,
+          position: [0, 0, 0],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+          format: actualFormat,
         });
 
-        // Calculate offsets
-        const offsets: Record<string, number> = {};
-        let currentOffset = 0;
-        Object.keys(props).forEach((key) => {
-          offsets[key] = currentOffset;
-          currentOffset += props[key];
-        });
+        viewer.start();
 
-        positions = new Float32Array(counts * 3);
-        colors = new Float32Array(counts * 3);
-        opacities = new Float32Array(counts);
-
-        const vertexDataStart = headerEnd;
-        for (let i = 0; i < counts; i++) {
-          const base = vertexDataStart + i * currentOffset;
-
-          // xyz
-          positions[i * 3] = data.getFloat32(base + offsets['x'], true);
-          positions[i * 3 + 1] = data.getFloat32(base + offsets['y'], true);
-          positions[i * 3 + 2] = data.getFloat32(base + offsets['z'], true);
-
-          // f_dc_0, f_dc_1, f_dc_2 (SH coefficients for color)
-          // Standard conversion from SH DC term to RGB
-          const f_dc_0 = data.getFloat32(base + offsets['f_dc_0'], true);
-          const f_dc_1 = data.getFloat32(base + offsets['f_dc_1'], true);
-          const f_dc_2 = data.getFloat32(base + offsets['f_dc_2'], true);
-          
-          const C0 = 0.28209479177387814;
-          colors[i * 3] = Math.max(0, Math.min(1, 0.5 + C0 * f_dc_0));
-          colors[i * 3 + 1] = Math.max(0, Math.min(1, 0.5 + C0 * f_dc_1));
-          colors[i * 3 + 2] = Math.max(0, Math.min(1, 0.5 + C0 * f_dc_2));
-
-          // opacity
-          const opacity_val = data.getFloat32(base + offsets['opacity'], true);
-          opacities[i] = 1 / (1 + Math.exp(-opacity_val)); // sigmoid
-        }
+        // Get splat count
+        const count = viewer.getSplatCount();
+        setSplatCount(count);
+        setLoading(false);
+      } catch (err) {
+        console.error('Error loading 3D Gaussians:', err);
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        setLoading(false);
       }
+    };
 
-      // Create Three.js Points
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-      // Create vertex colors material
-      const material = new THREE.PointsMaterial({
-        size: 0.02,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.8,
-        sizeAttenuation: true,
-        depthWrite: false,
-      });
-
-      const points = new THREE.Points(geometry, material);
-      
-      // Remove old points if exists
-      if (pointsRef.current) {
-        sceneRef.current.remove(pointsRef.current);
-        pointsRef.current.geometry.dispose();
-        const mat = pointsRef.current.material;
-        if (!Array.isArray(mat)) {
-          mat.dispose();
-        }
-      }
-
-      sceneRef.current.add(points);
-      pointsRef.current = points;
-      setGaussianCount(counts);
-      setLoading(false);
-
-      // Adjust camera to fit the scene
-      const posAttr = geometry.attributes.position as THREE.BufferAttribute;
-      const box = new THREE.Box3().setFromBufferAttribute(posAttr);
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z);
-      
-      if (controlsRef.current) {
-        controlsRef.current.target.copy(center);
-        controlsRef.current.update();
-      }
-      
-      if (cameraRef.current) {
-        cameraRef.current.position.set(
-          center.x + maxDim * 2,
-          center.y + maxDim,
-          center.z + maxDim * 2
-        );
-        cameraRef.current.near = maxDim * 0.01;
-        cameraRef.current.far = maxDim * 100;
-        cameraRef.current.updateProjectionMatrix();
-      }
-
-    } catch (err) {
-      console.error('Error loading 3D Gaussians:', err);
-      setError(err instanceof Error ? err.message : 'Unknown error');
-      setLoading(false);
-    }
+    loadScene();
   }, [filePath, format]);
 
-  // Load when file path changes
+  // FPS counter
   useEffect(() => {
-    loadGaussians();
-  }, [loadGaussians]);
+    let frameCount = 0;
+    let lastTime = performance.now();
+    let animId: number;
 
-  // Drag and drop support
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  }, []);
+    const updateFps = () => {
+      frameCount++;
+      const now = performance.now();
+      if (now - lastTime >= 1000) {
+        setFps(frameCount);
+        frameCount = 0;
+        lastTime = now;
+      }
+      animId = requestAnimationFrame(updateFps);
+    };
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    
-    const file = e.dataTransfer.files[0];
-    if (file && (file.name.endsWith('.ply') || file.name.endsWith('.splat'))) {
-      const url = URL.createObjectURL(file);
-      // We can't update the prop, but we can trigger a reload
-      // For now, just log it
-      console.log('Dropped file:', file.name);
-      URL.revokeObjectURL(url);
-    }
+    animId = requestAnimationFrame(updateFps);
+    return () => cancelAnimationFrame(animId);
   }, []);
 
   return (
     <div
-      ref={containerRef}
       style={{
         width: '100%',
         height: '100%',
         position: 'relative',
-        cursor: isDragging ? 'pointer' : 'grab',
+        background: '#1a1a2e',
       }}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
     >
+      {/* Viewer container */}
+      <div
+        ref={containerRef}
+        style={{
+          width: '100%',
+          height: '100%',
+        }}
+      />
+
       {/* Loading overlay */}
       {loading && (
         <div
@@ -348,12 +142,26 @@ const Gaussian3DViewer: React.FC<Gaussian3DViewerProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'rgba(0, 0, 0, 0.5)',
+            background: 'rgba(0, 0, 0, 0.6)',
             zIndex: 10,
           }}
         >
-          <div style={{ color: 'white', fontSize: '16px' }}>
-            Loading 3D Gaussians...
+          <div style={{ textAlign: 'center', color: 'white' }}>
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                border: '3px solid rgba(255,255,255,0.2)',
+                borderTopColor: '#4a9eff',
+                borderRadius: '50%',
+                animation: 'spin 1s linear infinite',
+                margin: '0 auto 12px',
+              }}
+            />
+            <div style={{ fontSize: '14px' }}>Loading 3D Gaussians...</div>
+            <div style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>
+              Parsing and sorting splat data
+            </div>
           </div>
         </div>
       )}
@@ -382,8 +190,8 @@ const Gaussian3DViewer: React.FC<Gaussian3DViewerProps> = ({
         </div>
       )}
 
-      {/* Info overlay */}
-      {!loading && gaussianCount > 0 && (
+      {/* Info overlay - top left */}
+      {!loading && splatCount > 0 && (
         <div
           style={{
             position: 'absolute',
@@ -393,17 +201,48 @@ const Gaussian3DViewer: React.FC<Gaussian3DViewerProps> = ({
             fontSize: '12px',
             background: 'rgba(0, 0, 0, 0.6)',
             padding: '8px 12px',
-            borderRadius: '4px',
+            borderRadius: '6px',
             zIndex: 5,
             pointerEvents: 'none',
+            backdropFilter: 'blur(4px)',
           }}
         >
-          <div>{gaussianCount.toLocaleString()} Gaussians</div>
-          <div style={{ opacity: 0.7, marginTop: '4px' }}>
-            Drag to rotate • Scroll to zoom
-          </div>
+          <div style={{ fontWeight: 600, marginBottom: '4px' }}>3D Gaussian Splat</div>
+          <div>{splatCount.toLocaleString()} splats</div>
+          <div style={{ opacity: 0.7, marginTop: '2px' }}>{fps} FPS</div>
         </div>
       )}
+
+      {/* Controls hint - bottom */}
+      {!loading && splatCount > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '10px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            color: 'rgba(255,255,255,0.5)',
+            fontSize: '11px',
+            background: 'rgba(0, 0, 0, 0.4)',
+            padding: '6px 14px',
+            borderRadius: '12px',
+            zIndex: 5,
+            pointerEvents: 'none',
+            backdropFilter: 'blur(4px)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Left drag: Orbit &nbsp;|&nbsp; Right drag: Pan &nbsp;|&nbsp; Scroll: Zoom &nbsp;|&nbsp; Click: Focus
+        </div>
+      )}
+
+      {/* Spinner animation */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 };
