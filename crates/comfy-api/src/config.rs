@@ -93,11 +93,17 @@ pub struct InferenceConfig {
     #[serde(default)]
     pub offload_params_to_cpu: bool,
     #[serde(default)]
+    pub multi_gpu: bool,
+    #[serde(default)]
     pub remote_url: Option<String>,
     #[serde(default)]
     pub sd_cli_path: Option<String>,
     #[serde(default)]
     pub hf_token: Option<String>,
+    #[serde(default)]
+    pub embeddings_connectors_path: Option<String>,
+    #[serde(default)]
+    pub audio_vae_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,9 +180,12 @@ impl Default for InferenceConfig {
             enable_mmap: true,
             flash_attn: false,
             offload_params_to_cpu: false,
+            multi_gpu: false,
             remote_url: None,
             sd_cli_path: None,
             hf_token: None,
+            embeddings_connectors_path: None,
+            audio_vae_path: None,
         }
     }
 }

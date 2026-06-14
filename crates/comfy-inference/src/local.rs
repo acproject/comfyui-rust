@@ -6,11 +6,38 @@ use crate::params::*;
 use crate::types::*;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CString, NulError};
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::Mutex;
 
 extern "C" {
     fn free(ptr: *mut c_void);
+}
+
+/// Derive the models base directory from a model path like "models/checkpoints/model.safetensors"
+fn derive_models_base_dir(model_path: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(model_path);
+    // Go up from "checkpoints/model.safetensors" to get the base "models" dir
+    path.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf())
+}
+
+/// Find a file in a directory whose name contains any of the given substrings
+fn find_file_in_dir(dir: &PathBuf, substrings: &[&str]) -> Option<String> {
+    if !dir.exists() {
+        return None;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lower = name.to_lowercase();
+            for sub in substrings {
+                if lower.contains(sub) {
+                    return Some(entry.path().to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 pub struct LocalBackend {
@@ -92,23 +119,61 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
         vae_path: model_config.vae_path.clone().or(base_config.vae_path.clone()),
         control_net_path: model_config.control_net_path.clone().or(base_config.control_net_path.clone()),
         text_encoder_path: model_config.text_encoder_path.clone().or(base_config.text_encoder_path.clone()),
+        embeddings_connectors_path: base_config.embeddings_connectors_path.clone(),
+        audio_vae_path: base_config.audio_vae_path.clone(),
         ..base_config.clone()
     };
 
     if is_ltx_model {
         config.offload_params_to_cpu = true;
-        if matches!(config.wtype, SdType::Auto) {
-            config.wtype = SdType::Q8_0;
+        // Don't auto-set Q8_0 for LTX models - CUDA binbcast doesn't support quantized types.
+        // The fp8 safetensors file is already mapped to bf16 internally.
+        // if matches!(config.wtype, SdType::Auto) {
+        //     config.wtype = SdType::Q8_0;
+        // }
+        // For LTX models, text_encoder_path should map to llm_path if llm_path is not set
+        if config.llm_path.is_none() {
+            if let Some(ref te_path) = config.text_encoder_path {
+                config.llm_path = Some(te_path.clone());
+            }
         }
-        tracing::info!("LTX model detected: enabling offload_params_to_cpu, wtype={}", config.wtype);
+
+        // Auto-detect embeddings_connectors_path for LTX-2.3 models
+        if config.embeddings_connectors_path.is_none() {
+            if let Some(ref model_path) = config.model_path {
+                if let Some(base_dir) = derive_models_base_dir(model_path) {
+                    let te_dir = base_dir.join("text_encoders");
+                    if let Some(path) = find_file_in_dir(&te_dir, &["embeddings_connectors", "embedding_connector"]) {
+                        config.embeddings_connectors_path = Some(path);
+                        tracing::info!("LTX: auto-detected embeddings_connectors_path={:?}", config.embeddings_connectors_path);
+                    }
+                }
+            }
+        }
+
+        // Auto-detect audio_vae_path for LTX-2.3 models
+        if config.audio_vae_path.is_none() {
+            if let Some(ref model_path) = config.model_path {
+                if let Some(base_dir) = derive_models_base_dir(model_path) {
+                    let vae_dir = base_dir.join("vae");
+                    if let Some(path) = find_file_in_dir(&vae_dir, &["audio_vae", "ltx-2.3"]) {
+                        config.audio_vae_path = Some(path);
+                        tracing::info!("LTX: auto-detected audio_vae_path={:?}", config.audio_vae_path);
+                    }
+                }
+            }
+        }
+
+        tracing::info!("LTX model detected: enabling offload_params_to_cpu, wtype={:?}, llm_path={:?}, embeddings_connectors_path={:?}, audio_vae_path={:?}",
+            config.wtype, config.llm_path, config.embeddings_connectors_path, config.audio_vae_path);
     }
 
     config
 }
 
 fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
-    tracing::info!("Creating SD context with model_path={:?}, diffusion_model_path={:?}, clip_vision_path={:?}, decoder_path={:?}, vae_path={:?}, rmbg_path={:?}",
-        config.model_path, config.diffusion_model_path, config.clip_vision_path, config.decoder_path, config.vae_path, config.rmbg_path);
+    tracing::info!("Creating SD context with model_path={:?}, diffusion_model_path={:?}, clip_vision_path={:?}, vae_path={:?}",
+        config.model_path, config.diffusion_model_path, config.clip_vision_path, config.vae_path);
 
     let mut c_params: CSdCtxParams = unsafe { std::mem::zeroed() };
 
@@ -121,8 +186,6 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.clip_l_path = strings.opt_cstr(&config.clip_l_path);
     c_params.clip_g_path = strings.opt_cstr(&config.clip_g_path);
     c_params.clip_vision_path = strings.opt_cstr(&config.clip_vision_path);
-    c_params.decoder_path = strings.opt_cstr(&config.decoder_path);
-    c_params.rmbg_path = strings.opt_cstr(&config.rmbg_path);
     c_params.t5xxl_path = strings.opt_cstr(&config.t5xxl_path);
     c_params.llm_path = strings.opt_cstr(&config.llm_path);
     c_params.llm_vision_path = strings.opt_cstr(&config.llm_vision_path);
@@ -133,7 +196,8 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.control_net_path = strings.opt_cstr(&config.control_net_path);
     c_params.photo_maker_path = strings.opt_cstr(&config.photo_maker_path);
     c_params.tensor_type_rules = strings.opt_cstr(&config.tensor_type_rules);
-    c_params.text_encoder_path = strings.opt_cstr(&config.text_encoder_path);
+    c_params.embeddings_connectors_path = strings.opt_cstr(&config.embeddings_connectors_path);
+    c_params.audio_vae_path = strings.opt_cstr(&config.audio_vae_path);
 
     c_params.vae_decode_only = config.vae_decode_only;
     c_params.free_params_immediately = config.free_params_immediately;
@@ -148,6 +212,7 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.lora_apply_mode = CLoraApplyMode::Auto;
     c_params.offload_params_to_cpu = config.offload_params_to_cpu;
     c_params.enable_mmap = config.enable_mmap;
+    c_params.multi_gpu = config.multi_gpu;
     c_params.keep_clip_on_cpu = config.keep_clip_on_cpu;
     c_params.keep_control_net_on_cpu = config.keep_control_net_on_cpu;
     c_params.keep_vae_on_cpu = config.keep_vae_on_cpu;
@@ -355,11 +420,13 @@ impl LocalBackend {
 
         c_params.vae_tiling_params = CTilingParams {
             enabled: params.vae_tiling_params.enabled,
+            temporal_tiling: false,
             tile_size_x: params.vae_tiling_params.tile_size_x,
             tile_size_y: params.vae_tiling_params.tile_size_y,
             target_overlap: params.vae_tiling_params.target_overlap,
             rel_size_x: params.vae_tiling_params.rel_size_x,
             rel_size_y: params.vae_tiling_params.rel_size_y,
+            extra_tiling_args: ptr::null(),
         };
 
         c_params
@@ -376,7 +443,7 @@ impl InferenceBackend for LocalBackend {
     }
 
     fn supports_3d_generation(&self) -> bool {
-        true
+        false
     }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
@@ -456,9 +523,13 @@ impl InferenceBackend for LocalBackend {
             .unwrap_or_else(null_c_image);
 
         let mut num_frames_out: c_int = 0;
-        let result = unsafe { generate_video(ctx, &c_params, &mut num_frames_out) };
+        let mut frames_out: *mut CSdImage = ptr::null_mut();
+        let mut audio_out: *mut CSdAudio = ptr::null_mut();
+        let success = unsafe {
+            generate_video(ctx, &c_params, &mut frames_out, &mut num_frames_out, &mut audio_out)
+        };
 
-        if result.is_null() || num_frames_out <= 0 {
+        if !success || frames_out.is_null() || num_frames_out <= 0 {
             return Err(InferenceError::GenerationFailed(
                 "generate_video returned null".to_string(),
             ));
@@ -466,20 +537,58 @@ impl InferenceBackend for LocalBackend {
 
         let mut frames = Vec::new();
         for i in 0..num_frames_out as usize {
-            let c_img = unsafe { &*result.add(i) };
+            let c_img = unsafe { &*frames_out.add(i) };
             if c_img.data.is_null() {
                 tracing::warn!("generate_video: frame {} has null data", i);
                 continue;
             }
             let len = (c_img.width * c_img.height * c_img.channel) as usize;
-            let data = unsafe { std::slice::from_raw_parts(c_img.data, len) }.to_vec();
+            let mut data = unsafe { std::slice::from_raw_parts(c_img.data, len) }.to_vec();
+
+            // Debug: print first frame pixel stats
+            if i == 0 {
+                let pixels = (c_img.width * c_img.height) as usize;
+                let ch = c_img.channel as usize;
+                let mut mins = vec![255u8; ch];
+                let mut maxs = vec![0u8; ch];
+                let mut sums = vec![0u64; ch];
+                for p in 0..pixels {
+                    for c in 0..ch {
+                        let v = data[p * ch + c];
+                        mins[c] = mins[c].min(v);
+                        maxs[c] = maxs[c].max(v);
+                        sums[c] += v as u64;
+                    }
+                }
+                tracing::info!(
+                    "VAE frame0: {}x{} ch={} R=[{},{}] G=[{},{}] B=[{},{}] mean=[{:.1},{:.1},{:.1}] first10={:?}",
+                    c_img.width, c_img.height, c_img.channel,
+                    mins[0], maxs[0], mins[1], maxs[1], mins[2], maxs[2],
+                    sums[0] as f64 / pixels as f64, sums[1] as f64 / pixels as f64, sums[2] as f64 / pixels as f64,
+                    &data[..10.min(data.len())]
+                );
+            }
+
+            // LTX-2.3 VAE outputs BGR channel order; swap to RGB for video encoding
+            if c_img.channel == 3 {
+                let pixels = (c_img.width * c_img.height) as usize;
+                for i in 0..pixels {
+                    let tmp = data[i * 3];
+                    data[i * 3] = data[i * 3 + 2]; // B -> R
+                    data[i * 3 + 2] = tmp;           // R -> B
+                }
+            }
+
             if let Ok(img) = SdImage::from_raw(c_img.width, c_img.height, c_img.channel, data) {
                 frames.push(img);
             }
         }
 
         unsafe {
-            free(result as *mut c_void);
+            free_sd_images(frames_out, num_frames_out);
+            if !audio_out.is_null() {
+                free_sd_audio(audio_out);
+            }
         }
 
         Ok(SdVideo::new(frames, 16))
@@ -496,6 +605,8 @@ impl InferenceBackend for LocalBackend {
                 params.direct,
                 params.n_threads,
                 params.tile_size,
+                ptr::null(),  // backend
+                ptr::null(),  // params_backend
             )
         };
 
@@ -523,96 +634,10 @@ impl InferenceBackend for LocalBackend {
             .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))
     }
 
-    fn generate_3d_gaussian(&self, params: Gaussian3DParams) -> InferenceResult<Gaussian3DOutput> {
-        let mut cache = self.contexts.lock().unwrap();
-        let ctx = cache.get_or_create(&params.model_config, &self.base_config)?;
-
-        if !unsafe { sd_ctx_supports_3d_generation(ctx) } {
-            return Err(InferenceError::BackendNotAvailable(
-                "stable-diffusion.cpp in this checkout does not expose a usable native 3D generation pipeline"
-                    .to_string(),
-            ));
-        }
-
-        let mut strings = CStringHolder::new();
-
-        let c_input_image = params
-            .input_image
-            .as_ref()
-            .map(|img| image_to_c(img))
-            .unwrap_or_else(null_c_image);
-
-        let c_output_path = params
-            .output_path
-            .as_deref()
-            .map(|s| strings.cstr(s))
-            .unwrap_or(ptr::null());
-
-        let c_params = C3dGenParams {
-            input_image: c_input_image,
-            seed: params.seed,
-            steps: params.steps,
-            guidance_scale: params.guidance_scale,
-            num_gaussians: params.num_gaussians,
-            erode_radius: params.erode_radius,
-            output_path: c_output_path,
-            output_format: params.output_format,
-        };
-
-        let result = unsafe { generate_3d_gaussian(ctx, &c_params) };
-
-        if result.is_null() {
-            return Err(InferenceError::GenerationFailed(
-                "generate_3d_gaussian returned null".to_string(),
-            ));
-        }
-
-        let c_gaussian = unsafe { &*result };
-        let n = c_gaussian.num_gaussians as usize;
-
-        let xyz = if !c_gaussian.xyz.is_null() && n > 0 {
-            unsafe { std::slice::from_raw_parts(c_gaussian.xyz, n * 3) }.to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let features_dc = if !c_gaussian.features_dc.is_null() && n > 0 {
-            unsafe { std::slice::from_raw_parts(c_gaussian.features_dc, n * 3) }.to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let opacity = if !c_gaussian.opacity.is_null() && n > 0 {
-            unsafe { std::slice::from_raw_parts(c_gaussian.opacity, n) }.to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let scaling = if !c_gaussian.scaling.is_null() && n > 0 {
-            unsafe { std::slice::from_raw_parts(c_gaussian.scaling, n * 3) }.to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let rotation = if !c_gaussian.rotation.is_null() && n > 0 {
-            unsafe { std::slice::from_raw_parts(c_gaussian.rotation, n * 4) }.to_vec()
-        } else {
-            Vec::new()
-        };
-
-        unsafe {
-            free_sd_gaussian_3d(result as *mut CGaussian3D);
-        }
-
-        Ok(Gaussian3DOutput {
-            xyz,
-            features_dc,
-            opacity,
-            scaling,
-            rotation,
-            num_gaussians: n,
-            output_file: params.output_path,
-        })
+    fn generate_3d_gaussian(&self, _params: Gaussian3DParams) -> InferenceResult<Gaussian3DOutput> {
+        Err(InferenceError::BackendNotAvailable(
+            "3D Gaussian generation is not supported in this version".to_string(),
+        ))
     }
 }
 
@@ -690,6 +715,7 @@ fn build_c_sample_params(params: &SampleParams) -> CSampleParams {
         Scheduler::KlOptimal => CScheduler::KlOptimal,
         Scheduler::Lcm => CScheduler::Lcm,
         Scheduler::BongTangent => CScheduler::BongTangent,
+        Scheduler::Ltx2 => CScheduler::Ltx2,
     };
     c_params.sample_method = match params.sample_method {
         SampleMethod::Euler => CSampleMethod::Euler,

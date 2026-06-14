@@ -115,6 +115,7 @@ pub struct ContextConfig {
     pub lora_apply_mode: LoraApplyMode,
     pub offload_params_to_cpu: bool,
     pub enable_mmap: bool,
+    pub multi_gpu: bool,
     pub keep_clip_on_cpu: bool,
     pub keep_control_net_on_cpu: bool,
     pub keep_vae_on_cpu: bool,
@@ -126,6 +127,8 @@ pub struct ContextConfig {
     pub circular_x: bool,
     pub circular_y: bool,
     pub text_encoder_path: Option<String>,
+    pub embeddings_connectors_path: Option<String>,
+    pub audio_vae_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +167,7 @@ impl Default for ContextConfig {
             lora_apply_mode: LoraApplyMode::Auto,
             offload_params_to_cpu: false,
             enable_mmap: false,
+            multi_gpu: false,
             keep_clip_on_cpu: false,
             keep_control_net_on_cpu: false,
             keep_vae_on_cpu: false,
@@ -175,6 +179,8 @@ impl Default for ContextConfig {
             circular_x: false,
             circular_y: false,
             text_encoder_path: None,
+            embeddings_connectors_path: None,
+            audio_vae_path: None,
         }
     }
 }
@@ -242,6 +248,11 @@ impl ContextConfig {
         self
     }
 
+    pub fn with_multi_gpu(mut self, enable: bool) -> Self {
+        self.multi_gpu = enable;
+        self
+    }
+
     pub fn with_mmap(mut self, enable: bool) -> Self {
         self.enable_mmap = enable;
         self
@@ -254,6 +265,16 @@ impl ContextConfig {
 
     pub fn with_text_encoder(mut self, path: impl Into<String>) -> Self {
         self.text_encoder_path = Some(path.into());
+        self
+    }
+
+    pub fn with_embeddings_connectors(mut self, path: impl Into<String>) -> Self {
+        self.embeddings_connectors_path = Some(path.into());
+        self
+    }
+
+    pub fn with_audio_vae(mut self, path: impl Into<String>) -> Self {
+        self.audio_vae_path = Some(path.into());
         self
     }
 }

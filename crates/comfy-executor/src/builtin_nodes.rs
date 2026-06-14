@@ -1585,6 +1585,7 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
             });
             if let Some(ref te_path) = text_encoder_path {
                 model_json["text_encoder_path"] = json!(te_path);
+                model_json["llm_path"] = json!(te_path);
             }
             let mut clip_json = json!({
                 "type": "clip",
@@ -1593,6 +1594,7 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
             });
             if let Some(ref te_path) = text_encoder_path {
                 clip_json["text_encoder_path"] = json!(te_path);
+                clip_json["llm_path"] = json!(te_path);
             }
             let vae_config = json!({
                 "type": "vae",
@@ -1741,6 +1743,13 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                 if let Some(path) = model.get("t5xxl_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_t5xxl(path);
                 }
+                if let Some(path) = model.get("text_encoder_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_text_encoder(path);
+                }
+                if let Some(path) = model.get("llm_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_llm(path);
+                }
+                tracing::info!("LTXVideoSampler: model_config text_encoder_path={:?}, llm_path={:?}", model_config.text_encoder_path, model_config.llm_path);
 
                 let clip_config = positive.get("clip");
                 if let Some(clip) = clip_config {
@@ -1757,6 +1766,16 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                     if model_config.t5xxl_path.is_none() {
                         if let Some(path) = clip.get("t5xxl_path").and_then(|v| v.as_str()) {
                             model_config = model_config.with_t5xxl(path);
+                        }
+                    }
+                    if model_config.text_encoder_path.is_none() {
+                        if let Some(path) = clip.get("text_encoder_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_text_encoder(path);
+                        }
+                    }
+                    if model_config.llm_path.is_none() {
+                        if let Some(path) = clip.get("llm_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_llm(path);
                         }
                     }
                 }
@@ -1817,6 +1836,14 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                     Ok(video) => {
                         let frame_count = video.frame_count();
                         tracing::info!("LTXVideoSampler: generated {} video frames", frame_count);
+                        // Debug: check first frame pixel values
+                        if let Some(first_frame) = video.frames.first() {
+                            let sample_pixels: Vec<u8> = first_frame.data.iter().take(30).copied().collect();
+                            let all_white = first_frame.data.iter().all(|&v| v == 255);
+                            let all_black = first_frame.data.iter().all(|&v| v == 0);
+                            tracing::info!("LTXVideoSampler: first frame {}x{} ch={}, first 30 pixels: {:?}, all_white={}, all_black={}",
+                                first_frame.width, first_frame.height, first_frame.channel, sample_pixels, all_white, all_black);
+                        }
                         let video_val = serde_json::to_value(&video).unwrap_or(json!({}));
                         Ok(vec![json!({
                             "type": "video",
@@ -4100,6 +4127,7 @@ fn register_ltxv_text_encoder_loader(registry: &mut NodeRegistry) {
             Ok(vec![json!({
                 "type": "clip",
                 "text_encoder_path": te_path,
+                "llm_path": te_path,
                 "source_model": ckpt_path,
                 "model_type": "ltx",
             })])
@@ -5077,6 +5105,9 @@ fn register_sampler_custom_advanced(registry: &mut NodeRegistry) {
                 if let Some(path) = model.get("text_encoder_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_text_encoder(path);
                 }
+                if let Some(path) = model.get("llm_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_llm(path);
+                }
                 let mut lora_entries: Vec<comfy_inference::LoraEntry> = Vec::new();
                 if let Some(path) = model.get("lora_path").and_then(|v| v.as_str()) {
                     let multiplier = model.get("lora_strength").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
@@ -5102,6 +5133,11 @@ fn register_sampler_custom_advanced(registry: &mut NodeRegistry) {
                     if model_config.text_encoder_path.is_none() {
                         if let Some(path) = clip.get("text_encoder_path").and_then(|v| v.as_str()) {
                             model_config = model_config.with_text_encoder(path);
+                        }
+                    }
+                    if model_config.llm_path.is_none() {
+                        if let Some(path) = clip.get("llm_path").and_then(|v| v.as_str()) {
+                            model_config = model_config.with_llm(path);
                         }
                     }
                 }

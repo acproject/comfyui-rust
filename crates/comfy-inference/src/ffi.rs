@@ -6,7 +6,6 @@ use std::os::raw::{c_char, c_float, c_int, c_void};
 
 pub type SdCtxT = c_void;
 pub type UpscalerCtxT = c_void;
-pub type SdGaussian3dT = c_void;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +34,10 @@ pub enum CSampleMethod {
     ResMultistep = 12,
     Res2S = 13,
     ErSde = 14,
-    Count = 15,
+    EulerCfgPP = 15,
+    EulerACfgPP = 16,
+    EulerGe = 17,
+    Count = 18,
 }
 
 #[repr(u32)]
@@ -52,7 +54,8 @@ pub enum CScheduler {
     KlOptimal = 8,
     Lcm = 9,
     BongTangent = 10,
-    Count = 11,
+    Ltx2 = 11,
+    Count = 12,
 }
 
 #[repr(u32)]
@@ -85,7 +88,7 @@ pub enum CSdType {
     Q6_K = 14,
     Q8_K = 15,
     BF16 = 30,
-    Count = 41,
+    Count = 42,
 }
 
 #[repr(u32)]
@@ -135,6 +138,16 @@ pub enum CHiresUpscaler {
     Count = 10,
 }
 
+#[repr(i32)]
+#[derive(Debug, Clone, Copy)]
+pub enum CVaeFormat {
+    Auto = -1,
+    Flux = 0,
+    Sd3 = 1,
+    Flux2 = 2,
+    Count = 3,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct CEmbedding {
@@ -149,14 +162,15 @@ pub struct CSdCtxParams {
     pub clip_l_path: *const c_char,
     pub clip_g_path: *const c_char,
     pub clip_vision_path: *const c_char,
-    pub decoder_path: *const c_char,
-    pub rmbg_path: *const c_char,
     pub t5xxl_path: *const c_char,
     pub llm_path: *const c_char,
     pub llm_vision_path: *const c_char,
     pub diffusion_model_path: *const c_char,
     pub high_noise_diffusion_model_path: *const c_char,
+    pub uncond_diffusion_model_path: *const c_char,
+    pub embeddings_connectors_path: *const c_char,
     pub vae_path: *const c_char,
+    pub audio_vae_path: *const c_char,
     pub taesd_path: *const c_char,
     pub control_net_path: *const c_char,
     pub embeddings: *const CEmbedding,
@@ -188,7 +202,12 @@ pub struct CSdCtxParams {
     pub chroma_use_t5_mask: bool,
     pub chroma_t5_mask_pad: c_int,
     pub qwen_image_zero_cond_t: bool,
-    pub text_encoder_path: *const c_char,
+    pub vae_format: CVaeFormat,
+    pub max_vram: c_float,
+    pub stream_layers: bool,
+    pub multi_gpu: bool,
+    pub backend: *const c_char,
+    pub params_backend: *const c_char,
 }
 
 #[repr(C)]
@@ -198,6 +217,15 @@ pub struct CSdImage {
     pub height: u32,
     pub channel: u32,
     pub data: *mut u8,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CSdAudio {
+    pub sample_rate: u32,
+    pub channels: u32,
+    pub sample_count: u64,
+    pub data: *mut c_float,
 }
 
 #[repr(C)]
@@ -231,6 +259,7 @@ pub struct CSampleParams {
     pub custom_sigmas: *mut c_float,
     pub custom_sigmas_count: c_int,
     pub flow_shift: c_float,
+    pub extra_sample_args: *const c_char,
 }
 
 #[repr(C)]
@@ -246,11 +275,13 @@ pub struct CPmParams {
 #[derive(Debug)]
 pub struct CTilingParams {
     pub enabled: bool,
+    pub temporal_tiling: bool,
     pub tile_size_x: c_int,
     pub tile_size_y: c_int,
     pub target_overlap: c_float,
     pub rel_size_x: c_float,
     pub rel_size_y: c_float,
+    pub extra_tiling_args: *const c_char,
 }
 
 #[repr(C)]
@@ -302,6 +333,8 @@ pub struct CHiresParams {
     pub steps: c_int,
     pub denoising_strength: c_float,
     pub upscale_tile_size: c_int,
+    pub custom_sigmas: *mut c_float,
+    pub custom_sigmas_count: c_int,
 }
 
 #[repr(C)]
@@ -352,33 +385,11 @@ pub struct CVidGenParams {
     pub strength: c_float,
     pub seed: i64,
     pub video_frames: c_int,
+    pub fps: c_int,
     pub vace_strength: c_float,
     pub vae_tiling_params: CTilingParams,
     pub cache: CCacheParams,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct CGaussian3D {
-    pub xyz: *mut c_float,
-    pub features_dc: *mut c_float,
-    pub opacity: *mut c_float,
-    pub scaling: *mut c_float,
-    pub rotation: *mut c_float,
-    pub num_gaussians: c_int,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct C3dGenParams {
-    pub input_image: CSdImage,
-    pub seed: i64,
-    pub steps: c_int,
-    pub guidance_scale: c_float,
-    pub num_gaussians: c_int,
-    pub erode_radius: c_int,
-    pub output_path: *const c_char,
-    pub output_format: c_int, // 0=PLY, 1=SPLAT
+    pub hires: CHiresParams,
 }
 
 pub type SdLogCb = Option<unsafe extern "C" fn(level: u32, text: *const c_char, data: *mut c_void)>;
@@ -395,7 +406,6 @@ extern "C" {
     pub fn sd_get_system_info() -> *const c_char;
     pub fn sd_ctx_supports_image_generation(ctx: *const SdCtxT) -> bool;
     pub fn sd_ctx_supports_video_generation(ctx: *const SdCtxT) -> bool;
-    pub fn sd_ctx_supports_3d_generation(ctx: *const SdCtxT) -> bool;
 
     pub fn sd_type_name(sd_type: CSdType) -> *const c_char;
     pub fn str_to_sd_type(str: *const c_char) -> CSdType;
@@ -407,23 +417,41 @@ extern "C" {
     pub fn str_to_scheduler(str: *const c_char) -> CScheduler;
     pub fn sd_prediction_name(prediction: CPredictionType) -> *const c_char;
     pub fn str_to_prediction(str: *const c_char) -> CPredictionType;
+    pub fn sd_preview_name(preview: CPreviewMode) -> *const c_char;
+    pub fn str_to_preview(str: *const c_char) -> CPreviewMode;
+    pub fn sd_lora_apply_mode_name(mode: CLoraApplyMode) -> *const c_char;
+    pub fn str_to_lora_apply_mode(str: *const c_char) -> CLoraApplyMode;
+    pub fn sd_hires_upscaler_name(upscaler: CHiresUpscaler) -> *const c_char;
+    pub fn str_to_sd_hires_upscaler(str: *const c_char) -> CHiresUpscaler;
+
+    pub fn sd_cache_params_init(params: *mut CCacheParams);
+    pub fn sd_hires_params_init(params: *mut CHiresParams);
 
     pub fn sd_ctx_params_init(params: *mut CSdCtxParams);
+    pub fn sd_ctx_params_to_str(params: *const CSdCtxParams) -> *mut c_char;
+
     pub fn new_sd_ctx(params: *const CSdCtxParams) -> *mut SdCtxT;
     pub fn free_sd_ctx(ctx: *mut SdCtxT);
+    pub fn free_sd_audio(audio: *mut CSdAudio);
 
     pub fn sd_sample_params_init(params: *mut CSampleParams);
+    pub fn sd_sample_params_to_str(params: *mut CSampleParams) -> *mut c_char;
+
     pub fn sd_get_default_sample_method(ctx: *const SdCtxT) -> CSampleMethod;
     pub fn sd_get_default_scheduler(ctx: *const SdCtxT, method: CSampleMethod) -> CScheduler;
 
     pub fn sd_img_gen_params_init(params: *mut CImgGenParams);
+    pub fn sd_img_gen_params_to_str(params: *mut CImgGenParams) -> *mut c_char;
     pub fn generate_image(ctx: *mut SdCtxT, params: *const CImgGenParams) -> *mut CSdImage;
 
     pub fn sd_vid_gen_params_init(params: *mut CVidGenParams);
-    pub fn generate_video(ctx: *mut SdCtxT, params: *const CVidGenParams, num_frames_out: *mut c_int) -> *mut CSdImage;
-
-    pub fn generate_3d_gaussian(ctx: *mut SdCtxT, params: *const C3dGenParams) -> *mut CGaussian3D;
-    pub fn free_sd_gaussian_3d(gaussian: *mut CGaussian3D);
+    pub fn generate_video(
+        ctx: *mut SdCtxT,
+        params: *const CVidGenParams,
+        frames_out: *mut *mut CSdImage,
+        num_frames_out: *mut c_int,
+        audio_out: *mut *mut CSdAudio,
+    ) -> bool;
 
     pub fn new_upscaler_ctx(
         esrgan_path: *const c_char,
@@ -431,6 +459,8 @@ extern "C" {
         direct: bool,
         n_threads: c_int,
         tile_size: c_int,
+        backend: *const c_char,
+        params_backend: *const c_char,
     ) -> *mut UpscalerCtxT;
     pub fn free_upscaler_ctx(ctx: *mut UpscalerCtxT);
     pub fn upscale(ctx: *mut UpscalerCtxT, input: CSdImage, upscale_factor: u32) -> CSdImage;
@@ -447,4 +477,6 @@ extern "C" {
 
     pub fn sd_commit() -> *const c_char;
     pub fn sd_version() -> *const c_char;
+
+    pub fn free_sd_images(result_images: *mut CSdImage, num_images: c_int);
 }

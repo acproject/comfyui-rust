@@ -13,6 +13,7 @@ pub struct CliBackendConfig {
     pub n_threads: i32,
     pub flash_attn: bool,
     pub offload_to_cpu: bool,
+    pub multi_gpu: bool,
     pub clip_on_cpu: bool,
     pub vae_on_cpu: bool,
     pub mmap: bool,
@@ -27,6 +28,7 @@ impl Default for CliBackendConfig {
             n_threads: -1,
             flash_attn: false,
             offload_to_cpu: false,
+            multi_gpu: false,
             clip_on_cpu: false,
             vae_on_cpu: false,
             mmap: false,
@@ -56,6 +58,11 @@ impl CliBackendConfig {
 
     pub fn with_offload_to_cpu(mut self, enable: bool) -> Self {
         self.offload_to_cpu = enable;
+        self
+    }
+
+    pub fn with_multi_gpu(mut self, enable: bool) -> Self {
+        self.multi_gpu = enable;
         self
     }
 
@@ -200,6 +207,9 @@ impl CliBackend {
         }
         if self.config.offload_to_cpu {
             args.push("--offload-to-cpu".to_string());
+        }
+        if self.config.multi_gpu {
+            args.push("--multi-gpu".to_string());
         }
         if self.config.clip_on_cpu {
             args.push("--clip-on-cpu".to_string());

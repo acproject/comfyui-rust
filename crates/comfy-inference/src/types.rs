@@ -196,6 +196,7 @@ pub enum Scheduler {
     KlOptimal = 8,
     Lcm = 9,
     BongTangent = 10,
+    Ltx2 = 11,
 }
 
 impl Scheduler {
@@ -212,6 +213,7 @@ impl Scheduler {
             8 => Some(Scheduler::KlOptimal),
             9 => Some(Scheduler::Lcm),
             10 => Some(Scheduler::BongTangent),
+            11 => Some(Scheduler::Ltx2),
             _ => None,
         }
     }
@@ -235,6 +237,7 @@ impl fmt::Display for Scheduler {
             Scheduler::KlOptimal => "kl_optimal",
             Scheduler::Lcm => "lcm",
             Scheduler::BongTangent => "bong_tangent",
+            Scheduler::Ltx2 => "ltx2",
         };
         write!(f, "{}", s)
     }

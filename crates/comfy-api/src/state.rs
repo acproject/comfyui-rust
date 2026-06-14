@@ -200,6 +200,9 @@ impl AppState {
             enable_mmap: config.inference.enable_mmap,
             flash_attn: config.inference.flash_attn,
             offload_params_to_cpu: config.inference.offload_params_to_cpu,
+            multi_gpu: config.inference.multi_gpu,
+            embeddings_connectors_path: config.inference.embeddings_connectors_path.clone(),
+            audio_vae_path: config.inference.audio_vae_path.clone(),
             ..ContextConfig::default()
         };
 
@@ -280,6 +283,7 @@ impl AppState {
             .with_threads(config.inference.n_threads as i32)
             .with_flash_attn(config.inference.flash_attn)
             .with_offload_to_cpu(config.inference.offload_params_to_cpu)
+            .with_multi_gpu(config.inference.multi_gpu)
             .with_verbose(true)
             .with_output_dir(&config.output.dir);
 
