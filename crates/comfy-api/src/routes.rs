@@ -199,6 +199,7 @@ pub async fn get_object_info(
         m.insert("unet_name", "diffusion_models");
         m.insert("model_name", "checkpoints");
         m.insert("vae_name", "vae");
+        m.insert("audio_vae_name", "vae");
         m.insert("lora_name", "loras");
         m.insert("clip_name", "text_encoders");
         m.insert("clip_name1", "text_encoders");
@@ -217,6 +218,8 @@ pub async fn get_object_info(
         m.insert("patch_name", "model_patches");
         m.insert("image", "input_images");
         m.insert("llm_model_name", "llm");
+        m.insert("llm_name", "text_encoders");
+        m.insert("embeddings_connectors_name", "text_encoders");
         m.insert("audio", "input_audio");
         m.insert("triposplat_model_name", "triposplat");
         m.insert("rmbg_model_name", "background_removal");

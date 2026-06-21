@@ -12,6 +12,7 @@ pub struct CliBackendConfig {
     pub sd_cli_path: String,
     pub n_threads: i32,
     pub flash_attn: bool,
+    pub diffusion_flash_attn: bool,
     pub offload_to_cpu: bool,
     pub multi_gpu: bool,
     pub clip_on_cpu: bool,
@@ -27,6 +28,7 @@ impl Default for CliBackendConfig {
             sd_cli_path: "sd-cli".to_string(),
             n_threads: -1,
             flash_attn: false,
+            diffusion_flash_attn: false,
             offload_to_cpu: false,
             multi_gpu: false,
             clip_on_cpu: false,
@@ -53,6 +55,11 @@ impl CliBackendConfig {
 
     pub fn with_flash_attn(mut self, enable: bool) -> Self {
         self.flash_attn = enable;
+        self
+    }
+
+    pub fn with_diffusion_flash_attn(mut self, enable: bool) -> Self {
+        self.diffusion_flash_attn = enable;
         self
     }
 
@@ -195,6 +202,14 @@ impl CliBackend {
             args.push("--text-encoder".to_string());
             args.push(path.clone());
         }
+        if let Some(ref path) = model_config.audio_vae_path {
+            args.push("--audio-vae".to_string());
+            args.push(path.clone());
+        }
+        if let Some(ref path) = model_config.embeddings_connectors_path {
+            args.push("--embeddings-connectors".to_string());
+            args.push(path.clone());
+        }
     }
 
     fn build_config_args(&self, args: &mut Vec<String>) {
@@ -204,6 +219,9 @@ impl CliBackend {
         }
         if self.config.flash_attn {
             args.push("--fa".to_string());
+        }
+        if self.config.diffusion_flash_attn {
+            args.push("--diffusion-fa".to_string());
         }
         if self.config.offload_to_cpu {
             args.push("--offload-to-cpu".to_string());
@@ -462,6 +480,9 @@ impl InferenceBackend for CliBackend {
 
         args.push("--video-frames".to_string());
         args.push(params.video_frames.to_string());
+
+        args.push("--fps".to_string());
+        args.push(params.fps.to_string());
 
         if let Some(ref img) = params.init_image {
             let tmp_path = self.write_temp_image(img, "init")?;

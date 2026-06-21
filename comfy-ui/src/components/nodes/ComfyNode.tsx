@@ -891,7 +891,7 @@ const NodeInputField: FC<NodeInputFieldProps> = memo(({ nodeId, name, value, typ
           )}
           {choicesArray.map((c) => (
             <option key={c} value={c}>
-              {c.length > 16 ? c.slice(0, 13) + '…' : c}
+              {c.length > 36 ? c.slice(0, 33) + '…' : c}
             </option>
           ))}
         </select>

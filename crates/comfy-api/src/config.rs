@@ -91,6 +91,8 @@ pub struct InferenceConfig {
     #[serde(default)]
     pub flash_attn: bool,
     #[serde(default)]
+    pub diffusion_flash_attn: bool,
+    #[serde(default)]
     pub offload_params_to_cpu: bool,
     #[serde(default)]
     pub multi_gpu: bool,
@@ -179,6 +181,7 @@ impl Default for InferenceConfig {
             free_params_immediately: true,
             enable_mmap: true,
             flash_attn: false,
+            diffusion_flash_attn: false,
             offload_params_to_cpu: false,
             multi_gpu: false,
             remote_url: None,

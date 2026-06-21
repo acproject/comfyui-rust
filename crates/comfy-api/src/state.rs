@@ -199,6 +199,7 @@ impl AppState {
             free_params_immediately: config.inference.free_params_immediately,
             enable_mmap: config.inference.enable_mmap,
             flash_attn: config.inference.flash_attn,
+            diffusion_flash_attn: config.inference.diffusion_flash_attn,
             offload_params_to_cpu: config.inference.offload_params_to_cpu,
             multi_gpu: config.inference.multi_gpu,
             embeddings_connectors_path: config.inference.embeddings_connectors_path.clone(),
@@ -282,6 +283,7 @@ impl AppState {
         let cli_config = CliBackendConfig::new(&sd_cli_path)
             .with_threads(config.inference.n_threads as i32)
             .with_flash_attn(config.inference.flash_attn)
+            .with_diffusion_flash_attn(config.inference.diffusion_flash_attn)
             .with_offload_to_cpu(config.inference.offload_params_to_cpu)
             .with_multi_gpu(config.inference.multi_gpu)
             .with_verbose(true)

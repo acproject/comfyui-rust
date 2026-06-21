@@ -119,18 +119,15 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
         vae_path: model_config.vae_path.clone().or(base_config.vae_path.clone()),
         control_net_path: model_config.control_net_path.clone().or(base_config.control_net_path.clone()),
         text_encoder_path: model_config.text_encoder_path.clone().or(base_config.text_encoder_path.clone()),
-        embeddings_connectors_path: base_config.embeddings_connectors_path.clone(),
-        audio_vae_path: base_config.audio_vae_path.clone(),
+        embeddings_connectors_path: model_config.embeddings_connectors_path.clone().or(base_config.embeddings_connectors_path.clone()),
+        audio_vae_path: model_config.audio_vae_path.clone().or(base_config.audio_vae_path.clone()),
         ..base_config.clone()
     };
 
     if is_ltx_model {
         config.offload_params_to_cpu = true;
-        // Don't auto-set Q8_0 for LTX models - CUDA binbcast doesn't support quantized types.
-        // The fp8 safetensors file is already mapped to bf16 internally.
-        // if matches!(config.wtype, SdType::Auto) {
-        //     config.wtype = SdType::Q8_0;
-        // }
+        // Enable diffusion flash attention for LTX models (matches --diffusion-fa in CLI)
+        config.diffusion_flash_attn = true;
         // For LTX models, text_encoder_path should map to llm_path if llm_path is not set
         if config.llm_path.is_none() {
             if let Some(ref te_path) = config.text_encoder_path {
@@ -140,7 +137,9 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
 
         // Auto-detect embeddings_connectors_path for LTX-2.3 models
         if config.embeddings_connectors_path.is_none() {
-            if let Some(ref model_path) = config.model_path {
+            let search_path = config.model_path.as_ref()
+                .or(config.diffusion_model_path.as_ref());
+            if let Some(model_path) = search_path {
                 if let Some(base_dir) = derive_models_base_dir(model_path) {
                     let te_dir = base_dir.join("text_encoders");
                     if let Some(path) = find_file_in_dir(&te_dir, &["embeddings_connectors", "embedding_connector"]) {
@@ -153,10 +152,12 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
 
         // Auto-detect audio_vae_path for LTX-2.3 models
         if config.audio_vae_path.is_none() {
-            if let Some(ref model_path) = config.model_path {
+            let search_path = config.model_path.as_ref()
+                .or(config.diffusion_model_path.as_ref());
+            if let Some(model_path) = search_path {
                 if let Some(base_dir) = derive_models_base_dir(model_path) {
                     let vae_dir = base_dir.join("vae");
-                    if let Some(path) = find_file_in_dir(&vae_dir, &["audio_vae", "ltx-2.3"]) {
+                    if let Some(path) = find_file_in_dir(&vae_dir, &["audio_vae"]) {
                         config.audio_vae_path = Some(path);
                         tracing::info!("LTX: auto-detected audio_vae_path={:?}", config.audio_vae_path);
                     }
@@ -164,7 +165,7 @@ fn build_ctx_config(model_config: &ModelConfig, base_config: &ContextConfig) -> 
             }
         }
 
-        tracing::info!("LTX model detected: enabling offload_params_to_cpu, wtype={:?}, llm_path={:?}, embeddings_connectors_path={:?}, audio_vae_path={:?}",
+        tracing::info!("LTX model detected: enabling offload_params_to_cpu, diffusion_flash_attn, wtype={:?}, llm_path={:?}, embeddings_connectors_path={:?}, audio_vae_path={:?}",
             config.wtype, config.llm_path, config.embeddings_connectors_path, config.audio_vae_path);
     }
 
@@ -741,6 +742,8 @@ fn build_c_sample_params(params: &SampleParams) -> CSampleParams {
     c_params.shifted_timestep = params.shifted_timestep;
     if let Some(flow_shift) = params.flow_shift {
         c_params.flow_shift = flow_shift;
+    } else {
+        c_params.flow_shift = f32::INFINITY;
     }
 
     c_params

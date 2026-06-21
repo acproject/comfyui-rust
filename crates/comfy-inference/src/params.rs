@@ -319,6 +319,8 @@ pub struct ModelConfig {
     pub vae_path: Option<String>,
     pub control_net_path: Option<String>,
     pub text_encoder_path: Option<String>,
+    pub audio_vae_path: Option<String>,
+    pub embeddings_connectors_path: Option<String>,
 }
 
 impl Default for ModelConfig {
@@ -337,6 +339,8 @@ impl Default for ModelConfig {
             vae_path: None,
             control_net_path: None,
             text_encoder_path: None,
+            audio_vae_path: None,
+            embeddings_connectors_path: None,
         }
     }
 }
@@ -411,6 +415,16 @@ impl ModelConfig {
         self
     }
 
+    pub fn with_audio_vae(mut self, path: impl Into<String>) -> Self {
+        self.audio_vae_path = Some(path.into());
+        self
+    }
+
+    pub fn with_embeddings_connectors(mut self, path: impl Into<String>) -> Self {
+        self.embeddings_connectors_path = Some(path.into());
+        self
+    }
+
     pub fn cache_key(&self) -> String {
         let mut parts = Vec::new();
         if let Some(ref p) = self.model_path { parts.push(format!("m:{}", p)); }
@@ -426,6 +440,8 @@ impl ModelConfig {
         if let Some(ref p) = self.vae_path { parts.push(format!("vae:{}", p)); }
         if let Some(ref p) = self.control_net_path { parts.push(format!("cn:{}", p)); }
         if let Some(ref p) = self.text_encoder_path { parts.push(format!("te:{}", p)); }
+        if let Some(ref p) = self.audio_vae_path { parts.push(format!("avae:{}", p)); }
+        if let Some(ref p) = self.embeddings_connectors_path { parts.push(format!("ec:{}", p)); }
         if parts.is_empty() { "empty".to_string() } else { parts.join("|") }
     }
 }
@@ -562,6 +578,7 @@ pub struct VideoGenParams {
     pub vace_strength: f32,
     pub vae_tiling_params: TilingParams,
     pub cache_params: CacheParams,
+    pub fps: i32,
 }
 
 impl Default for VideoGenParams {
@@ -586,6 +603,7 @@ impl Default for VideoGenParams {
             vace_strength: 1.0,
             vae_tiling_params: TilingParams::default(),
             cache_params: CacheParams::default(),
+            fps: 24,
         }
     }
 }
@@ -641,6 +659,11 @@ impl VideoGenParams {
 
     pub fn with_model_config(mut self, config: ModelConfig) -> Self {
         self.model_config = config;
+        self
+    }
+
+    pub fn with_fps(mut self, fps: i32) -> Self {
+        self.fps = fps;
         self
     }
 }

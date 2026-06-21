@@ -71,6 +71,30 @@ fn find_file_in_dir(dir: &std::path::Path, prefixes: &[&str]) -> Option<String> 
     None
 }
 
+/// Like find_file_in_dir but matches substrings anywhere in the filename (case-insensitive).
+fn find_file_in_dir_contains(dir: &std::path::Path, substrings: &[&str]) -> Option<String> {
+    if !dir.exists() {
+        return None;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut candidates: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let lower = name.to_lowercase();
+                if lower.ends_with(".safetensors") || lower.ends_with(".gguf") {
+                    substrings.iter().any(|s| lower.contains(s)).then(|| name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        candidates.sort();
+        return candidates.first().map(|name| dir.join(name).to_string_lossy().to_string());
+    }
+    None
+}
+
 fn auto_detect_text_encoders(model_type: ModelType) -> (Option<String>, Option<String>, Option<String>) {
     let base = get_models_base_dir();
     let te_dir = base.join("text_encoders");
@@ -108,15 +132,13 @@ fn auto_detect_vae(model_type: ModelType) -> Option<String> {
     let base = get_models_base_dir();
     let vae_dir = base.join("vae");
 
-    let prefixes: &[&str] = match model_type {
-        ModelType::SD3 | ModelType::Flux => &["sd3_vae", "flux_vae", "ae"],
-        ModelType::SDXL | ModelType::SD15 => &["sdxl_vae", "vae"],
-        ModelType::Wan => &["wan_vae"],
-        ModelType::LTX => &["ltx_vae", "ae"],
-        ModelType::Unknown => &["sd3_vae", "flux_vae", "sdxl_vae", "vae", "ae"],
-    };
-
-    find_file_in_dir(&vae_dir, prefixes)
+    match model_type {
+        ModelType::LTX => find_file_in_dir_contains(&vae_dir, &["video_vae", "video-vae"]),
+        ModelType::SD3 | ModelType::Flux => find_file_in_dir(&vae_dir, &["sd3_vae", "flux_vae", "ae"]),
+        ModelType::SDXL | ModelType::SD15 => find_file_in_dir(&vae_dir, &["sdxl_vae", "vae"]),
+        ModelType::Wan => find_file_in_dir(&vae_dir, &["wan_vae"]),
+        ModelType::Unknown => find_file_in_dir(&vae_dir, &["sd3_vae", "flux_vae", "sdxl_vae", "vae", "ae"]),
+    }
 }
 
 pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
@@ -1508,7 +1530,26 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
                 });
                 m
             },
-            optional: HashMap::new(),
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("vae_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("audio_vae_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("llm_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("embeddings_connectors_name".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
             hidden: HashMap::new(),
         },
         output_types: vec![IoType::Model, IoType::Clip, IoType::Vae],
@@ -1528,65 +1569,134 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
             .unwrap_or("");
 
         let model_path = resolve_model_path("checkpoints", model_name);
-        tracing::info!("LTXLoader: loading model from {}", model_path);
+        let is_gguf = model_path.to_lowercase().ends_with(".gguf");
+        tracing::info!("LTXLoader: loading model from {} (gguf={})", model_path, is_gguf);
+
+        // Explicit model paths from optional inputs (override auto-detection)
+        let explicit_vae = node.inputs.get("vae_name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|name| resolve_model_path("vae", name));
+        let explicit_audio_vae = node.inputs.get("audio_vae_name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|name| resolve_model_path("vae", name));
+        let explicit_llm = node.inputs.get("llm_name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|name| resolve_model_path("text_encoders", name));
+        let explicit_embeddings = node.inputs.get("embeddings_connectors_name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|name| resolve_model_path("text_encoders", name));
 
         let base = get_models_base_dir();
         let te_dir = base.join("text_encoders");
+        let vae_dir = base.join("vae");
         let llm_dir = base.join("llm");
-        let mut text_encoder_path: Option<String> = None;
 
-        if let Some(p) = find_file_in_dir(&te_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]) {
-            text_encoder_path = Some(p);
-        }
-        if text_encoder_path.is_none() && llm_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&llm_dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let lower = name.to_lowercase();
-                    if lower.contains("gemma-3-12b") || lower.contains("gemma_3_12b") {
-                        let sub_dir = entry.path();
-                        if let Some(p) = find_file_in_dir(&sub_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]) {
-                            text_encoder_path = Some(p);
-                            break;
-                        }
-                        if sub_dir.is_dir() {
-                            if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
-                                let has_gguf = sub_entries.flatten().any(|e| {
-                                    e.file_name().to_string_lossy().to_string().ends_with(".gguf")
-                                });
-                                if has_gguf {
-                                    text_encoder_path = Some(sub_dir.to_string_lossy().to_string());
-                                    break;
-                                }
+        // Auto-detect text encoder (gemma-3-12b-it) if not explicitly specified
+        let text_encoder_path = explicit_llm.or_else(|| {
+            let mut found: Option<String> = None;
+            if let Some(p) = find_file_in_dir(&te_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]) {
+                found = Some(p);
+            }
+            if found.is_none() && llm_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&llm_dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let lower = name.to_lowercase();
+                        if lower.contains("gemma-3-12b") || lower.contains("gemma_3_12b") {
+                            let sub_dir = entry.path();
+                            if let Some(p) = find_file_in_dir(&sub_dir, &["gemma-3-12b-it", "gemma_3_12B_it"]) {
+                                found = Some(p);
+                                break;
                             }
-                            if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
-                                let has_safetensors = sub_entries.flatten().any(|e| {
-                                    e.file_name().to_string_lossy().to_string().starts_with("model-") &&
-                                    e.file_name().to_string_lossy().to_string().ends_with(".safetensors")
-                                });
-                                if has_safetensors {
-                                    text_encoder_path = Some(sub_dir.to_string_lossy().to_string());
-                                    break;
+                            if sub_dir.is_dir() {
+                                if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
+                                    let has_gguf = sub_entries.flatten().any(|e| {
+                                        e.file_name().to_string_lossy().to_string().ends_with(".gguf")
+                                    });
+                                    if has_gguf {
+                                        found = Some(sub_dir.to_string_lossy().to_string());
+                                        break;
+                                    }
+                                }
+                                if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
+                                    let has_safetensors = sub_entries.flatten().any(|e| {
+                                        e.file_name().to_string_lossy().to_string().starts_with("model-") &&
+                                        e.file_name().to_string_lossy().to_string().ends_with(".safetensors")
+                                    });
+                                    if has_safetensors {
+                                        found = Some(sub_dir.to_string_lossy().to_string());
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-        if text_encoder_path.is_some() {
-            tracing::info!("LTXLoader: found text encoder at {:?}", text_encoder_path);
-        }
+            if found.is_some() {
+                tracing::info!("LTXLoader: auto-detected text encoder at {:?}", found);
+            }
+            found
+        });
+
+        // Auto-detect video VAE if not explicitly specified
+        let video_vae_path = explicit_vae.or_else(|| {
+            let p = find_file_in_dir_contains(&vae_dir, &["video_vae", "video-vae"]);
+            if p.is_some() {
+                tracing::info!("LTXLoader: auto-detected video VAE at {:?}", p);
+            }
+            p
+        });
+
+        // Auto-detect audio VAE if not explicitly specified
+        let audio_vae_path = explicit_audio_vae.or_else(|| {
+            let p = find_file_in_dir_contains(&vae_dir, &["audio_vae", "audio-vae"]);
+            if p.is_some() {
+                tracing::info!("LTXLoader: auto-detected audio VAE at {:?}", p);
+            }
+            p
+        });
+
+        // Auto-detect embeddings connectors if not explicitly specified
+        let embeddings_connectors_path = explicit_embeddings.or_else(|| {
+            let p = find_file_in_dir_contains(&te_dir, &["embeddings_connector", "embedding_connector"]);
+            if p.is_some() {
+                tracing::info!("LTXLoader: auto-detected embeddings connectors at {:?}", p);
+            }
+            p
+        });
 
         Box::pin(async move {
-            let mut model_json = json!({
-                "model_path": model_path,
-                "model_type": "ltx",
-            });
+            // For GGUF files, use diffusion_model_path instead of model_path
+            let mut model_json = if is_gguf {
+                json!({
+                    "diffusion_model_path": model_path,
+                    "model_type": "ltx",
+                })
+            } else {
+                json!({
+                    "model_path": model_path,
+                    "model_type": "ltx",
+                })
+            };
             if let Some(ref te_path) = text_encoder_path {
                 model_json["text_encoder_path"] = json!(te_path);
                 model_json["llm_path"] = json!(te_path);
             }
+            if let Some(ref p) = video_vae_path {
+                model_json["vae_path"] = json!(p);
+            }
+            if let Some(ref p) = audio_vae_path {
+                model_json["audio_vae_path"] = json!(p);
+            }
+            if let Some(ref p) = embeddings_connectors_path {
+                model_json["embeddings_connectors_path"] = json!(p);
+            }
+
             let mut clip_json = json!({
                 "type": "clip",
                 "source_model": model_path,
@@ -1596,11 +1706,20 @@ fn register_ltx_loader(registry: &mut NodeRegistry) {
                 clip_json["text_encoder_path"] = json!(te_path);
                 clip_json["llm_path"] = json!(te_path);
             }
-            let vae_config = json!({
+
+            let mut vae_config = json!({
                 "type": "vae",
                 "source_model": model_path,
                 "model_type": "ltx",
             });
+            if let Some(ref p) = video_vae_path {
+                vae_config["vae_path"] = json!(p);
+            }
+            if let Some(ref p) = audio_vae_path {
+                vae_config["audio_vae_path"] = json!(p);
+            }
+
+            tracing::info!("LTXLoader: model_json = {}", serde_json::to_string_pretty(&model_json).unwrap_or_default());
             Ok(vec![model_json, clip_json, vae_config])
         })
     }));
@@ -1749,7 +1868,14 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                 if let Some(path) = model.get("llm_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_llm(path);
                 }
-                tracing::info!("LTXVideoSampler: model_config text_encoder_path={:?}, llm_path={:?}", model_config.text_encoder_path, model_config.llm_path);
+                if let Some(path) = model.get("audio_vae_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_audio_vae(path);
+                }
+                if let Some(path) = model.get("embeddings_connectors_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_embeddings_connectors(path);
+                }
+                tracing::info!("LTXVideoSampler: model_config text_encoder_path={:?}, llm_path={:?}, vae_path={:?}, audio_vae_path={:?}, embeddings_connectors_path={:?}",
+                    model_config.text_encoder_path, model_config.llm_path, model_config.vae_path, model_config.audio_vae_path, model_config.embeddings_connectors_path);
 
                 let clip_config = positive.get("clip");
                 if let Some(clip) = clip_config {
@@ -1785,7 +1911,7 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                 let needs_vae_auto_detect = model_config.vae_path.is_none();
                 if needs_clip_auto_detect || needs_vae_auto_detect {
                     if needs_clip_auto_detect {
-                        let (clip_l, _, t5xxl) = auto_detect_text_encoders(ModelType::Flux);
+                        let (clip_l, _, t5xxl) = auto_detect_text_encoders(ModelType::LTX);
                         if model_config.clip_l_path.is_none() {
                             if let Some(path) = clip_l {
                                 model_config = model_config.with_clip_l(path);
@@ -1799,11 +1925,7 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                     }
 
                     if needs_vae_auto_detect {
-                        let base = get_models_base_dir();
-                        let vae_dir = base.join("vae");
-                        if let Some(path) = find_file_in_dir(&vae_dir, &["ltx_vae", "ae"]) {
-                            model_config = model_config.with_vae(path);
-                        } else if let Some(path) = auto_detect_vae(ModelType::Flux) {
+                        if let Some(path) = auto_detect_vae(ModelType::LTX) {
                             model_config = model_config.with_vae(path);
                         }
                     }
@@ -1815,6 +1937,12 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                 let scheduler_type = parse_scheduler(
                     scheduler.as_str().unwrap_or("normal")
                 );
+
+                // Capture model paths before moving model_config into video_params
+                let mc_model_path = model_config.model_path.clone();
+                let mc_diffusion_model_path = model_config.diffusion_model_path.clone();
+                let mc_audio_vae_path = model_config.audio_vae_path.clone();
+                let mc_embeddings_connectors_path = model_config.embeddings_connectors_path.clone();
 
                 let mut video_params = comfy_inference::VideoGenParams::new(prompt_text)
                     .with_negative_prompt(negative_text)
@@ -1845,7 +1973,7 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                                 first_frame.width, first_frame.height, first_frame.channel, sample_pixels, all_white, all_black);
                         }
                         let video_val = serde_json::to_value(&video).unwrap_or(json!({}));
-                        Ok(vec![json!({
+                        let mut result = json!({
                             "type": "video",
                             "frame_count": frame_count,
                             "fps": video.fps,
@@ -1853,7 +1981,21 @@ fn register_ltx_video_sampler(registry: &mut NodeRegistry) {
                             "frames": video_val.get("frames").cloned().unwrap_or(json!([])),
                             "width": width,
                             "height": height,
-                        })])
+                        });
+                        // Pass through model paths for downstream nodes (VideoVAEDecode)
+                        if let Some(p) = mc_model_path {
+                            result["model_path"] = json!(p);
+                        }
+                        if let Some(p) = mc_diffusion_model_path {
+                            result["diffusion_model_path"] = json!(p);
+                        }
+                        if let Some(p) = mc_audio_vae_path {
+                            result["audio_vae_path"] = json!(p);
+                        }
+                        if let Some(p) = mc_embeddings_connectors_path {
+                            result["embeddings_connectors_path"] = json!(p);
+                        }
+                        Ok(vec![result])
                     }
                     Err(e) => {
                         tracing::error!("LTX video generation failed: {}", e);
@@ -2980,6 +3122,15 @@ fn register_video_vae_decode(registry: &mut NodeRegistry) {
                 }
                 if let Some(path) = samples.get("diffusion_model_path").and_then(|v| v.as_str()) {
                     model_config = model_config.with_diffusion_model(path);
+                }
+                if let Some(path) = vae.get("audio_vae_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_audio_vae(path);
+                }
+                if let Some(path) = samples.get("audio_vae_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_audio_vae(path);
+                }
+                if let Some(path) = samples.get("embeddings_connectors_path").and_then(|v| v.as_str()) {
+                    model_config = model_config.with_embeddings_connectors(path);
                 }
 
                 let video_params = comfy_inference::VideoGenParams::new("")
