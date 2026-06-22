@@ -6,6 +6,7 @@ import { api } from '@/api/client';
 import { getTypeColor, getCategoryColor, isCustomNode } from '@/components/nodes/nodeColors';
 import { AudioVideoTimeline } from '@/components/timeline/AudioVideoTimeline';
 import { PromptRelayTimelineEditor } from '@/components/timeline/PromptRelayTimelineEditor';
+import { LtxDirectorTimeline } from '@/components/timeline/LtxDirectorTimeline';
 
 // Node types that support custom resizing
 const RESIZABLE_NODE_TYPES = new Set([
@@ -84,7 +85,8 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const isSaveAudioNode = classType === 'SaveAudio';
   const isLoadAudioNode = classType === 'LoadAudio';
   const isSaveVideoWithAudioNode = classType === 'SaveVideoWithAudio';
-  const isPromptRelayTimeline = classType === 'PromptRelayEncodeTimeline' || classType === 'LTXDirector';
+  const isPromptRelayTimeline = classType === 'PromptRelayEncodeTimeline';
+  const isLtxDirector = classType === 'LTXDirector';
 
   const isResizable = RESIZABLE_NODE_TYPES.has(classType);
   const customWidth = (data.customWidth as number) || DEFAULT_NODE_WIDTH;
@@ -145,6 +147,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
     if (isLoadAudioNode) y += 60;
     if (isSaveVideoWithAudioNode) y += 260;
     if (isPromptRelayTimeline) y += customHeight;
+    if (isLtxDirector) y += customHeight + 60;
   }
 
   const inputHandleY: Record<string, number> = {};
@@ -308,6 +311,18 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
               segmentLengths={String(data.inputs['segment_lengths'] || '')}
               timelineData={String(data.inputs['timeline_data'] || '')}
               height={customHeight}
+            />
+          )}
+          {(isLtxDirector) && (
+            <LtxDirectorTimeline
+              nodeId={id}
+              maxFrames={Number(data.inputs['duration_frames'] || 120)}
+              fps={Number(data.inputs['frame_rate'] || 24.0)}
+              timeUnits={String(data.inputs['display_mode'] || 'seconds')}
+              localPrompts={String(data.inputs['local_prompts'] || '')}
+              segmentLengths={String(data.inputs['segment_lengths'] || '')}
+              timelineData={String(data.inputs['timeline_data'] || '')}
+              height={customHeight + 60}
             />
           )}
 
