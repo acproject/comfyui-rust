@@ -570,15 +570,8 @@ impl InferenceBackend for LocalBackend {
                 );
             }
 
-            // LTX-2.3 VAE outputs BGR channel order; swap to RGB for video encoding
-            if c_img.channel == 3 {
-                let pixels = (c_img.width * c_img.height) as usize;
-                for i in 0..pixels {
-                    let tmp = data[i * 3];
-                    data[i * 3] = data[i * 3 + 2]; // B -> R
-                    data[i * 3 + 2] = tmp;           // R -> B
-                }
-            }
+            // C++ stable-diffusion.cpp outputs RGB directly (same as image path);
+            // no channel swap needed. Swapping here would turn RGB into BGR (blue tint).
 
             if let Ok(img) = SdImage::from_raw(c_img.width, c_img.height, c_img.channel, data) {
                 frames.push(img);
