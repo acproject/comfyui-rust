@@ -30,6 +30,14 @@ import type {
   ModelKnowledgeEntry,
   ModelRecommendRequest,
   ModelRecommendResponse,
+  AssetRecord,
+  AssetListResponse,
+  UploadAssetResponse,
+  CustomFolder,
+  CustomFolderListResponse,
+  CreateFolderRequest,
+  UpdateAssetRequest,
+  ScanAssetsResponse,
 } from '@/types/api';
 
 const API_BASE = '';
@@ -361,5 +369,82 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(request),
     });
+  },
+
+  // ===== Asset Management =====
+
+  async listAssets(params?: {
+    source?: string;
+    asset_type?: string;
+    folder_id?: number;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<AssetListResponse> {
+    const qs = new URLSearchParams();
+    if (params?.source) qs.set('source', params.source);
+    if (params?.asset_type) qs.set('asset_type', params.asset_type);
+    if (params?.folder_id !== undefined) qs.set('folder_id', String(params.folder_id));
+    if (params?.search) qs.set('search', params.search);
+    if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+    const s = qs.toString();
+    return fetchJson<AssetListResponse>(`/assets${s ? `?${s}` : ''}`);
+  },
+
+  async uploadAsset(file: File, subfolder?: string): Promise<UploadAssetResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (subfolder) formData.append('subfolder', subfolder);
+
+    const response = await fetch(`${API_BASE}/assets/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
+      throw new Error(error.error?.message || `Upload failed: ${response.status}`);
+    }
+
+    return response.json();
+  },
+
+  async getAsset(id: number): Promise<AssetRecord> {
+    return fetchJson<AssetRecord>(`/assets/${id}`);
+  },
+
+  async deleteAsset(id: number): Promise<{ success: boolean; id: number }> {
+    return fetchJson(`/assets/${id}`, { method: 'DELETE' });
+  },
+
+  async updateAsset(id: number, request: UpdateAssetRequest): Promise<{ success: boolean; id: number }> {
+    return fetchJson(`/assets/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(request),
+    });
+  },
+
+  async scanAssets(): Promise<ScanAssetsResponse> {
+    return fetchJson<ScanAssetsResponse>('/assets/scan', { method: 'POST' });
+  },
+
+  async listAssetFolders(): Promise<CustomFolderListResponse> {
+    return fetchJson<CustomFolderListResponse>('/assets/folders');
+  },
+
+  async createAssetFolder(request: CreateFolderRequest): Promise<CustomFolder> {
+    return fetchJson<CustomFolder>('/assets/folders', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  },
+
+  async deleteAssetFolder(id: number): Promise<{ success: boolean; id: number }> {
+    return fetchJson(`/assets/folders/${id}`, { method: 'DELETE' });
+  },
+
+  getAssetUrl(relativePath: string): string {
+    return `${API_BASE}/view_asset?path=${encodeURIComponent(relativePath)}`;
   },
 };

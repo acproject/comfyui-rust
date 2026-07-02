@@ -1,4 +1,5 @@
 use crate::agent::{AgentConfig, AgentService};
+use crate::assets::AssetManager;
 use crate::config::ComfyConfig;
 use crate::database::{Database, SharedDatabase};
 use crate::download_tracker::{DownloadTracker, SharedDownloadTracker};
@@ -22,6 +23,7 @@ pub struct AppState {
     pub broadcaster: WsBroadcaster,
     pub registry: Arc<Mutex<NodeRegistry>>,
     pub images: Arc<ImageStore>,
+    pub assets: Arc<AssetManager>,
     pub input_dir: PathBuf,
     pub custom_nodes_dir: PathBuf,
     pub models_dir: PathBuf,
@@ -120,7 +122,9 @@ impl AppState {
         let registry = Arc::new(Mutex::new(registry));
         let queue = Arc::new(PromptQueue::new());
         let broadcaster = WsBroadcaster::new();
+        let output_dir_path = PathBuf::from("output");
         let images = Arc::new(ImageStore::new("output"));
+        let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), output_dir_path));
 
         Self {
             executor: Arc::new(executor),
@@ -128,6 +132,7 @@ impl AppState {
             broadcaster,
             registry,
             images,
+            assets,
             input_dir,
             custom_nodes_dir,
             models_dir,
@@ -169,6 +174,7 @@ impl AppState {
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
         let llm_config = load_llm_config_from_db(&db);
+        let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
 
         Self {
             executor,
@@ -176,6 +182,7 @@ impl AppState {
             broadcaster,
             registry,
             images,
+            assets,
             input_dir,
             custom_nodes_dir,
             models_dir,
@@ -237,6 +244,7 @@ impl AppState {
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
         let llm_config = load_llm_config_from_db(&db);
+        let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
 
         Self {
             executor,
@@ -244,6 +252,7 @@ impl AppState {
             broadcaster,
             registry,
             images,
+            assets,
             input_dir,
             custom_nodes_dir,
             models_dir,
@@ -319,6 +328,7 @@ impl AppState {
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
         let llm_config = load_llm_config_from_db(&db);
+        let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
 
         Self {
             executor,
@@ -326,6 +336,7 @@ impl AppState {
             broadcaster,
             registry,
             images,
+            assets,
             input_dir,
             custom_nodes_dir,
             models_dir,
@@ -372,6 +383,7 @@ impl AppState {
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
         let llm_config = load_llm_config_from_db(&db);
+        let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
 
         Self {
             executor,
@@ -379,6 +391,7 @@ impl AppState {
             broadcaster,
             registry,
             images,
+            assets,
             input_dir,
             custom_nodes_dir,
             models_dir,
@@ -406,6 +419,7 @@ impl Clone for AppState {
             broadcaster: self.broadcaster.clone(),
             registry: self.registry.clone(),
             images: self.images.clone(),
+            assets: self.assets.clone(),
             input_dir: self.input_dir.clone(),
             custom_nodes_dir: self.custom_nodes_dir.clone(),
             models_dir: self.models_dir.clone(),

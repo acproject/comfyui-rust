@@ -16,9 +16,9 @@ if lsof -i :8188 >/dev/null 2>&1; then
     sleep 1
 fi
 
-if lsof -i :3000 >/dev/null 2>&1; then
-    echo "⚠️  端口 3000 已被占用，正在停止旧服务..."
-    pkill -f "vite.*--port 3000" 2>/dev/null || true
+if lsof -i :3022 >/dev/null 2>&1; then
+    echo "⚠️  端口 3022 已被占用，正在停止旧服务..."
+    pkill -f "vite.*--port 3022" 2>/dev/null || true
     sleep 1
 fi
 
@@ -80,9 +80,9 @@ echo "等待后端启动..."
 sleep 3
 
 echo ""
-echo "2/2 启动前端开发服务器 (端口 3000)..."
+echo "2/2 启动前端开发服务器 (端口 3022)..."
 cd "$PROJECT_DIR/comfy-ui"
-npx vite --port 3000 &
+npx vite --port 3022 &
 VITE_PID=$!
 echo "  ✓ 前端 PID: $VITE_PID"
 
@@ -90,7 +90,7 @@ echo ""
 echo "========================================="
 echo "  服务已启动"
 echo "========================================="
-echo "  前端: http://localhost:3000"
+echo "  前端: http://localhost:3022"
 echo "  后端: http://127.0.0.1:8188"
 echo ""
 echo "  按 Ctrl+C 停止所有服务"

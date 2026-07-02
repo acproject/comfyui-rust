@@ -1,4 +1,5 @@
 use crate::agent::{AgentConfig, ChatRequest};
+use crate::assets::AssetFilters;
 use crate::config::ComfyConfig;
 use crate::error::ApiError;
 use crate::llm::LlmConfig;
@@ -1742,4 +1743,261 @@ pub async fn recommend_models(
 #[derive(Deserialize)]
 pub struct RecommendModelsRequest {
     pub style: String,
+}
+
+// ===== Asset Management Routes =====
+
+#[derive(Deserialize)]
+pub struct AssetQueryParams {
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub asset_type: Option<String>,
+    #[serde(default)]
+    pub folder_id: Option<i64>,
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+pub async fn list_assets(
+    State(state): State<AppState>,
+    Query(params): Query<AssetQueryParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    let filters = AssetFilters {
+        source: params.source,
+        asset_type: params.asset_type,
+        folder_id: params.folder_id,
+        search: params.search,
+        limit: params.limit.or(Some(500)),
+        offset: params.offset,
+    };
+    let assets = state.assets.list_assets(&filters)
+        .map_err(|e| ApiError::Internal(e))?;
+    let total = state.db.count_assets()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let asset_json: Vec<Value> = assets.iter().map(|a| {
+        let tags: Vec<String> = serde_json::from_str(&a.tags).unwrap_or_default();
+        json!({
+            "id": a.id,
+            "name": a.name,
+            "relative_path": a.relative_path,
+            "source": a.source,
+            "asset_type": a.asset_type,
+            "subfolder": a.subfolder,
+            "file_size": a.file_size,
+            "content_type": a.content_type,
+            "prompt_id": a.prompt_id,
+            "workflow_id": a.workflow_id,
+            "tags": tags,
+            "custom_folder_id": a.custom_folder_id,
+            "meta": a.meta,
+            "created_at": a.created_at,
+            "updated_at": a.updated_at,
+        })
+    }).collect();
+
+    Ok(Json(json!({ "assets": asset_json, "total": total })))
+}
+
+pub async fn upload_asset(
+    State(state): State<AppState>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut filename = String::new();
+    let mut subfolder = String::new();
+    let mut data: Vec<u8> = Vec::new();
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        ApiError::BadRequest(format!("Multipart error: {}", e))
+    })? {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "file" => {
+                filename = field.file_name().unwrap_or("upload.bin").to_string();
+                data = field.bytes().await.map_err(|e| ApiError::BadRequest(format!("Read error: {}", e)))?.to_vec();
+            }
+            "subfolder" => {
+                subfolder = String::from_utf8(
+                    field.bytes().await.map_err(|e| ApiError::BadRequest(format!("Read error: {}", e)))?.to_vec(),
+                ).unwrap_or_default();
+            }
+            _ => {}
+        }
+    }
+
+    if data.is_empty() {
+        return Err(ApiError::BadRequest("No file data provided".to_string()));
+    }
+
+    let asset_id = state.assets.save_uploaded_asset(&data, &filename, &subfolder)
+        .map_err(|e| ApiError::Internal(e))?;
+
+    Ok(Json(json!({
+        "id": asset_id,
+        "name": filename,
+        "subfolder": subfolder,
+        "source": "uploaded",
+    })))
+}
+
+pub async fn get_asset_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, ApiError> {
+    let asset = state.assets.get_asset(id)
+        .map_err(|e| ApiError::Internal(e))?
+        .ok_or_else(|| ApiError::NotFound(format!("Asset {} not found", id)))?;
+
+    let tags: Vec<String> = serde_json::from_str(&asset.tags).unwrap_or_default();
+    Ok(Json(json!({
+        "id": asset.id,
+        "name": asset.name,
+        "relative_path": asset.relative_path,
+        "source": asset.source,
+        "asset_type": asset.asset_type,
+        "subfolder": asset.subfolder,
+        "file_size": asset.file_size,
+        "content_type": asset.content_type,
+        "prompt_id": asset.prompt_id,
+        "workflow_id": asset.workflow_id,
+        "tags": tags,
+        "custom_folder_id": asset.custom_folder_id,
+        "meta": asset.meta,
+        "created_at": asset.created_at,
+        "updated_at": asset.updated_at,
+    })))
+}
+
+pub async fn delete_asset_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.assets.delete_asset(id)
+        .map_err(|e| ApiError::Internal(e))?;
+    Ok(Json(json!({ "success": true, "id": id })))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateAssetRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub custom_folder_id: Option<Option<i64>>,
+}
+
+pub async fn update_asset_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateAssetRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(new_name) = body.name {
+        state.assets.rename_asset(id, &new_name)
+            .map_err(|e| ApiError::Internal(e))?;
+    }
+    if let Some(tags) = body.tags {
+        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        state.assets.update_tags(id, &tags_json)
+            .map_err(|e| ApiError::Internal(e))?;
+    }
+    if let Some(folder_id) = body.custom_folder_id {
+        state.assets.move_to_folder(id, folder_id)
+            .map_err(|e| ApiError::Internal(e))?;
+    }
+    Ok(Json(json!({ "success": true, "id": id })))
+}
+
+pub async fn scan_assets(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let count = state.assets.scan_and_sync()
+        .map_err(|e| ApiError::Internal(e))?;
+    Ok(Json(json!({ "success": true, "new_assets": count })))
+}
+
+pub async fn list_asset_folders(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let folders = state.assets.list_folders()
+        .map_err(|e| ApiError::Internal(e))?;
+    let folder_json: Vec<Value> = folders.iter().map(|f| {
+        json!({
+            "id": f.id,
+            "name": f.name,
+            "parent_id": f.parent_id,
+            "color": f.color,
+            "created_at": f.created_at,
+        })
+    }).collect();
+    Ok(Json(json!({ "folders": folder_json })))
+}
+
+#[derive(Deserialize)]
+pub struct CreateFolderRequest {
+    pub name: String,
+    #[serde(default)]
+    pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+pub async fn create_asset_folder(
+    State(state): State<AppState>,
+    Json(body): Json<CreateFolderRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let color = body.color.unwrap_or_default();
+    let id = state.assets.create_folder(&body.name, body.parent_id, &color)
+        .map_err(|e| ApiError::Internal(e))?;
+    Ok(Json(json!({ "id": id, "name": body.name, "parent_id": body.parent_id, "color": color })))
+}
+
+pub async fn delete_asset_folder(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.assets.delete_folder(id)
+        .map_err(|e| ApiError::Internal(e))?;
+    Ok(Json(json!({ "success": true, "id": id })))
+}
+
+/// Serve an asset file by its relative path (used for viewing assets).
+pub async fn view_asset(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let relative_path = params.get("path").ok_or_else(||
+        ApiError::BadRequest("Missing 'path' parameter".to_string())
+    )?;
+
+    let abs_path = state.assets.resolve_abs_path(relative_path)
+        .ok_or_else(|| ApiError::BadRequest("Invalid asset path".to_string()))?;
+
+    if !abs_path.exists() {
+        return Err(ApiError::NotFound(format!("Asset not found: {}", relative_path)));
+    }
+
+    // Security: ensure the resolved path is within input or output dir
+    let abs_canonical = abs_path.canonicalize().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let input_canonical = state.assets.input_dir().canonicalize().unwrap_or_default();
+    let output_canonical = state.assets.output_dir().canonicalize().unwrap_or_default();
+    if !abs_canonical.starts_with(&input_canonical) && !abs_canonical.starts_with(&output_canonical) {
+        return Err(ApiError::BadRequest("Path escapes allowed directories".to_string()));
+    }
+
+    let data = std::fs::read(&abs_canonical).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let filename_str = abs_canonical.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let content_type = crate::assets::AssetManager::guess_content_type(filename_str);
+    
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, &content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000")
+        .body(Body::from(data))
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }

@@ -6,6 +6,7 @@ import { ProgressBar } from '@/components/editor/ProgressBar';
 import { NodePanel } from '@/components/sidebar/NodePanel';
 import { PropertyPanel } from '@/components/sidebar/PropertyPanel';
 import ImageGallery from '@/components/sidebar/ImageGallery';
+import AssetManager from '@/components/sidebar/AssetManager';
 import Gaussian3DPanel from '@/components/sidebar/Gaussian3DPanel';
 import WorkflowManager from '@/components/sidebar/WorkflowManager';
 import { ModelManager } from '@/components/sidebar/ModelManager';
@@ -18,7 +19,7 @@ import { useWorkflowStore } from '@/store/workflow';
 import { getPluginManager } from '@/plugins/manager';
 import promptRelayPlugin from '@/plugins/promptRelayPlugin';
 
-type SidebarTab = 'nodes' | 'properties' | 'images' | '3d' | 'workflows' | 'models' | 'custom' | 'llm';
+type SidebarTab = 'nodes' | 'properties' | 'assets' | '3d' | 'workflows' | 'models' | 'custom' | 'llm';
 
 export interface PanelVisibility {
   showSidebar: boolean;
@@ -75,7 +76,7 @@ const AppInner: FC = () => {
           <div style={{ width: '260px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #2d3748', background: '#1a202c' }}>
             <div style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #2d3748' }}>
               {([
-                ['nodes', 'properties', 'images', '3d'],
+                ['nodes', 'properties', 'assets', '3d'],
                 ['workflows', 'models', 'custom', 'llm'],
               ] as SidebarTab[][]).map((row, rowIdx) => (
                 <div key={rowIdx} style={{ display: 'flex' }}>
@@ -95,7 +96,7 @@ const AppInner: FC = () => {
                         textTransform: 'capitalize',
                       }}
                     >
-                      {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab === 'llm' ? '🤖' : tab === '3d' ? '🎮' : tab}
+                      {tab === 'custom' ? '⚙' : tab === 'models' ? '📦' : tab === 'llm' ? '🤖' : tab === '3d' ? '🎮' : tab === 'assets' ? '📁' : tab}
                     </button>
                   ))}
                 </div>
@@ -104,7 +105,7 @@ const AppInner: FC = () => {
             <div style={{ flex: 1, overflow: 'auto' }}>
               {activeTab === 'nodes' && <NodePanel />}
               {activeTab === 'properties' && <PropertyPanel />}
-              {activeTab === 'images' && <ImageGallery />}
+              {activeTab === 'assets' && <AssetManager />}
               {activeTab === '3d' && gaussian3DFile && (
                 <Gaussian3DPanel
                   filePath={gaussian3DFile}

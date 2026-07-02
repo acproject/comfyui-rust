@@ -447,3 +447,67 @@ export interface ModelRecommendRequest {
 export interface ModelRecommendResponse {
   recommendations: ModelKnowledgeEntry[];
 }
+
+// ===== Asset Management Types =====
+
+export type AssetSource = 'uploaded' | 'generated';
+export type AssetType = 'image' | 'video' | 'audio' | '3d';
+
+export interface AssetRecord {
+  id: number;
+  name: string;
+  relative_path: string;
+  source: AssetSource;
+  asset_type: AssetType;
+  subfolder: string;
+  file_size: number;
+  content_type: string;
+  prompt_id: string | null;
+  workflow_id: string | null;
+  tags: string[];
+  custom_folder_id: number | null;
+  meta: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetListResponse {
+  assets: AssetRecord[];
+  total: number;
+}
+
+export interface UploadAssetResponse {
+  id: number;
+  name: string;
+  subfolder: string;
+  source: string;
+}
+
+export interface CustomFolder {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  color: string;
+  created_at: string;
+}
+
+export interface CustomFolderListResponse {
+  folders: CustomFolder[];
+}
+
+export interface CreateFolderRequest {
+  name: string;
+  parent_id?: number | null;
+  color?: string;
+}
+
+export interface UpdateAssetRequest {
+  name?: string;
+  tags?: string[];
+  custom_folder_id?: number | null;
+}
+
+export interface ScanAssetsResponse {
+  success: boolean;
+  new_assets: number;
+}

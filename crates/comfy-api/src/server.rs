@@ -85,12 +85,23 @@ impl ComfyServer {
             .route("/model_knowledge", axum::routing::get(routes::get_model_knowledge))
             .route("/model_knowledge/{model_name}", axum::routing::get(routes::get_model_knowledge_by_name))
             .route("/model_knowledge/recommend", axum::routing::post(routes::recommend_models))
+            // Asset management routes
+            .route("/assets", axum::routing::get(routes::list_assets))
+            .route("/assets/scan", axum::routing::post(routes::scan_assets))
+            .route("/assets/folders", axum::routing::get(routes::list_asset_folders))
+            .route("/assets/folders", axum::routing::post(routes::create_asset_folder))
+            .route("/assets/folders/{id}", axum::routing::delete(routes::delete_asset_folder))
+            .route("/assets/{id}", axum::routing::get(routes::get_asset_by_id))
+            .route("/assets/{id}", axum::routing::delete(routes::delete_asset_by_id))
+            .route("/assets/{id}", axum::routing::put(routes::update_asset_by_id))
+            .route("/view_asset", axum::routing::get(routes::view_asset))
             .with_state(self.state.clone());
 
         let upload_routes = Router::new()
             .route("/model_manager/upload", axum::routing::post(routes::upload_model_file))
             .route("/upload/image", axum::routing::post(routes::post_upload_image))
             .route("/upload/input_image", axum::routing::post(routes::post_upload_input_image))
+            .route("/assets/upload", axum::routing::post(routes::upload_asset))
             .layer(DefaultBodyLimit::disable())
             .with_state(self.state.clone());
 
@@ -107,6 +118,14 @@ impl ComfyServer {
         let state = self.state.clone();
         let addr = self.addr;
         let app = self.router();
+
+        // Scan and sync assets on startup
+        let scan_state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = scan_state.assets.scan_and_sync() {
+                tracing::warn!("Asset scan failed: {}", e);
+            }
+        });
 
         let executor_state = state.clone();
         let executor_handle = tokio::spawn(async move {

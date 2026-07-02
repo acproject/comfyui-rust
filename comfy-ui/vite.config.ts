@@ -10,7 +10,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: 3022,
     proxy: {
       '/prompt': 'http://127.0.0.1:8188',
       '/queue': 'http://127.0.0.1:8188',
@@ -25,10 +25,12 @@ export default defineConfig({
       '/view_input': 'http://127.0.0.1:8188',
       '/view_video': 'http://127.0.0.1:8188',
       '/view_audio': 'http://127.0.0.1:8188',
+      '/view_asset': 'http://127.0.0.1:8188',
       '/list_images': 'http://127.0.0.1:8188',
       '/upload/image': 'http://127.0.0.1:8188',
       '/upload/input_image': 'http://127.0.0.1:8188',
       '/input_images': 'http://127.0.0.1:8188',
+      '/assets': 'http://127.0.0.1:8188',
       '/workflow': 'http://127.0.0.1:8188',
       '/workflows': 'http://127.0.0.1:8188',
       '/config': 'http://127.0.0.1:8188',

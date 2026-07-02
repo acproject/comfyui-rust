@@ -114,6 +114,25 @@ pub async fn run_executor(state: AppState) {
                     .broadcaster
                     .send(WsMessage::executing(&pid, None));
 
+                // Record generated assets in the asset manager
+                let pid_for_assets = prompt_id.clone();
+                for (_node_id, node_output) in &result.outputs {
+                    for value in &node_output.values {
+                        if let Some(obj) = value.as_object() {
+                            if let Some(filename) = obj.get("filename").and_then(|v| v.as_str()) {
+                                let subfolder = obj.get("subfolder").and_then(|v| v.as_str()).unwrap_or("");
+                                if let Err(e) = state.assets.record_generated_asset(
+                                    filename,
+                                    subfolder,
+                                    Some(&pid_for_assets),
+                                ) {
+                                    tracing::warn!("Failed to record generated asset '{}': {}", filename, e);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 state
                     .broadcaster
                     .send(WsMessage::execution_success(&prompt_id, &serde_json::Value::Object(output_json)));

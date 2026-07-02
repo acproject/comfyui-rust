@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod assets;
 pub mod config;
 pub mod database;
 pub mod download_tracker;
@@ -16,10 +17,11 @@ pub mod ws;
 
 pub use agent::{AgentConfig, AgentService, AgentError, ChatRequest, ChatResponse, ChatMessage, AgentAction};
 pub use config::ComfyConfig;
-pub use database::{Database, DatabaseError, SharedDatabase};
+pub use database::{Database, DatabaseError, SharedDatabase, AssetRecord, NewAssetRecord, CustomFolder, now_iso};
 pub use download_tracker::{DownloadProgress, DownloadStatus, DownloadTracker, SharedDownloadTracker};
 pub use error::ApiError;
 pub use images::ImageStore;
+pub use assets::{AssetManager, AssetSource, AssetType, AssetFilters};
 pub use llm::{LlmConfig, LlmService};
 pub use queue::{HistoryEntry, JobStatus, PromptQueue, QueueItem};
 pub use server::ComfyServer;
