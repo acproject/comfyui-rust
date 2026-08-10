@@ -61,6 +61,7 @@ const ModelManager: FC = () => {
     offload_params_to_cpu: boolean;
     enable_mmap: boolean;
     hf_token: string;
+    flash_attn_bridge_url: string;
   }>({
     backend: 'local',
     sd_cli_path: '',
@@ -69,6 +70,7 @@ const ModelManager: FC = () => {
     offload_params_to_cpu: false,
     enable_mmap: true,
     hf_token: '',
+    flash_attn_bridge_url: 'http://127.0.0.1:8998',
   });
   const [configLoaded, setConfigLoaded] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -143,6 +145,7 @@ const ModelManager: FC = () => {
           offload_params_to_cpu: config.inference.offload_params_to_cpu,
           enable_mmap: config.inference.enable_mmap,
           hf_token: config.inference.hf_token || '',
+          flash_attn_bridge_url: config.inference.flash_attn_bridge_url || 'http://127.0.0.1:8998',
         });
         setConfigLoaded(true);
       }).catch(() => {});
@@ -187,6 +190,7 @@ const ModelManager: FC = () => {
           offload_params_to_cpu: inferenceConfig.offload_params_to_cpu,
           enable_mmap: inferenceConfig.enable_mmap,
           hf_token: inferenceConfig.hf_token || null,
+          flash_attn_bridge_url: inferenceConfig.flash_attn_bridge_url,
         },
       };
       await api.updateConfig(updatedConfig);
@@ -549,6 +553,32 @@ const ModelManager: FC = () => {
                 />
                 Memory Map (mmap)
               </label>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>
+                FlashAttn Bridge 地址
+              </label>
+              <input
+                type="text"
+                value={inferenceConfig.flash_attn_bridge_url}
+                onChange={(e) => setInferenceConfig({ ...inferenceConfig, flash_attn_bridge_url: e.target.value })}
+                placeholder="http://127.0.0.1:8998"
+                style={{
+                  width: '100%',
+                  background: '#2a2a3e',
+                  border: '1px solid #444',
+                  borderRadius: 4,
+                  color: '#e2e8f0',
+                  fontSize: 11,
+                  padding: '4px 6px',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ fontSize: 9, color: '#555', marginTop: 2 }}>
+                H3/音视频生成节点连接的 Python Bridge 服务地址
+              </div>
             </div>
 
             <button

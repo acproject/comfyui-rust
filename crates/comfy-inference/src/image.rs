@@ -101,18 +101,93 @@ impl SdImage {
 }
 
 #[derive(Debug, Clone)]
+pub struct SdAudio {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+impl SdAudio {
+    pub fn new(samples: Vec<f32>, sample_rate: u32, channels: u32) -> Self {
+        Self { samples, sample_rate, channels }
+    }
+
+    pub fn from_wav_bytes(bytes: &[u8]) -> Result<Self, ImageError> {
+        // Simple WAV parser (PCM 16-bit mono/stereo)
+        if bytes.len() < 44 {
+            return Err(ImageError::Base64Error("WAV too short".to_string()));
+        }
+        // Check RIFF header
+        if &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+            return Err(ImageError::Base64Error("Invalid WAV header".to_string()));
+        }
+        // Parse fmt chunk
+        let channels = u16::from_le_bytes([bytes[22], bytes[23]]) as u32;
+        let sample_rate = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
+        let bits_per_sample = u16::from_le_bytes([bytes[34], bytes[35]]);
+        // Find data chunk
+        let mut offset = 36;
+        while offset + 8 <= bytes.len() {
+            let chunk_id = &bytes[offset..offset+4];
+            let chunk_size = u32::from_le_bytes([
+                bytes[offset+4], bytes[offset+5], bytes[offset+6], bytes[offset+7]
+            ]) as usize;
+            if chunk_id == b"data" {
+                let data_start = offset + 8;
+                let data_end = data_start + chunk_size;
+                if data_end > bytes.len() {
+                    return Err(ImageError::Base64Error("WAV data truncated".to_string()));
+                }
+                let mut samples = Vec::with_capacity(chunk_size / 2);
+                match bits_per_sample {
+                    16 => {
+                        for i in (0..chunk_size).step_by(2) {
+                            let idx = data_start + i;
+                            if idx + 1 < data_end {
+                                let s = i16::from_le_bytes([bytes[idx], bytes[idx+1]]);
+                                samples.push(s as f32 / 32768.0);
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ImageError::Base64Error(
+                            format!("Unsupported bits per sample: {}", bits_per_sample)
+                        ));
+                    }
+                }
+                return Ok(Self { samples, sample_rate, channels });
+            }
+            offset += 8 + chunk_size;
+        }
+        Err(ImageError::Base64Error("No data chunk in WAV".to_string()))
+    }
+
+    pub fn duration_sec(&self) -> f32 {
+        if self.channels == 0 || self.sample_rate == 0 {
+            return 0.0;
+        }
+        self.samples.len() as f32 / (self.channels as f32 * self.sample_rate as f32)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SdVideo {
     pub frames: Vec<SdImage>,
     pub fps: i32,
+    pub audio: Option<SdAudio>,
 }
 
 impl Serialize for SdVideo {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("SdVideo", 3)?;
+        let field_count = if self.audio.is_some() { 4 } else { 3 };
+        let mut state = serializer.serialize_struct("SdVideo", field_count)?;
         state.serialize_field("frames", &self.frames)?;
         state.serialize_field("fps", &self.fps)?;
         state.serialize_field("frame_count", &self.frame_count())?;
+        if let Some(ref audio) = self.audio {
+            state.serialize_field("audio", audio)?;
+        }
         state.end()
     }
 }
@@ -123,15 +198,38 @@ impl<'de> Deserialize<'de> for SdVideo {
         struct SdVideoHelper {
             frames: Vec<SdImage>,
             fps: i32,
+            audio: Option<SdAudio>,
         }
         let helper = SdVideoHelper::deserialize(deserializer)?;
-        Ok(SdVideo::new(helper.frames, helper.fps))
+        Ok(SdVideo::new(helper.frames, helper.fps, helper.audio))
+    }
+}
+
+impl Serialize for SdAudio {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("SdAudio", 3)?;
+        state.serialize_field("sample_rate", &self.sample_rate)?;
+        state.serialize_field("channels", &self.channels)?;
+        state.serialize_field("num_samples", &self.samples.len())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SdAudio {
+    fn deserialize<D: Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+        // Audio is not deserialized from frames; use from_wav_bytes instead
+        Err(serde::de::Error::custom("SdAudio deserialization not supported directly, use from_wav_bytes"))
     }
 }
 
 impl SdVideo {
-    pub fn new(frames: Vec<SdImage>, fps: i32) -> Self {
-        Self { frames, fps }
+    pub fn new(frames: Vec<SdImage>, fps: i32, audio: Option<SdAudio>) -> Self {
+        Self { frames, fps, audio }
+    }
+
+    pub fn new_without_audio(frames: Vec<SdImage>, fps: i32) -> Self {
+        Self { frames, fps, audio: None }
     }
 
     pub fn frame_count(&self) -> usize {
@@ -474,7 +572,7 @@ impl SdVideo {
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
-        Ok(SdVideo::new(frames, fps))
+        Ok(SdVideo::new_without_audio(frames, fps))
     }
 
     pub fn is_ffmpeg_available() -> bool {

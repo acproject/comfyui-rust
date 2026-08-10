@@ -106,6 +106,8 @@ pub struct InferenceConfig {
     pub embeddings_connectors_path: Option<String>,
     #[serde(default)]
     pub audio_vae_path: Option<String>,
+    #[serde(default = "default_flash_attn_bridge_url")]
+    pub flash_attn_bridge_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +191,7 @@ impl Default for InferenceConfig {
             hf_token: None,
             embeddings_connectors_path: None,
             audio_vae_path: None,
+            flash_attn_bridge_url: default_flash_attn_bridge_url(),
         }
     }
 }
@@ -311,6 +314,10 @@ fn default_backend() -> String {
     "local".to_string()
 }
 
+fn default_flash_attn_bridge_url() -> String {
+    "http://127.0.0.1:8998".to_string()
+}
+
 fn default_n_threads() -> u32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as u32)
@@ -381,6 +388,9 @@ impl ComfyConfig {
             if let Ok(t) = n.parse() {
                 config.inference.n_threads = t;
             }
+        }
+        if let Ok(url) = std::env::var("FLASH_ATTN_BRIDGE_URL") {
+            config.inference.flash_attn_bridge_url = url;
         }
 
         config

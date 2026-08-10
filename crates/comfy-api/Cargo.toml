@@ -30,6 +30,7 @@ local-build = ["local-ffi", "comfy-inference/local-build", "comfy-executor/local
 remote = ["comfy-inference/remote", "comfy-executor/remote"]
 controlnet = ["comfy-executor/controlnet"]
 controlnet-opencv = ["comfy-executor/controlnet-opencv"]
+flash-attn = ["comfy-executor/flash-attn", "comfy-inference/flash-attn"]
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

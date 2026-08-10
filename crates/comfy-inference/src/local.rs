@@ -585,7 +585,7 @@ impl InferenceBackend for LocalBackend {
             }
         }
 
-        Ok(SdVideo::new(frames, 16))
+        Ok(SdVideo::new_without_audio(frames, 16))
     }
 
     fn upscale(&self, image: SdImage, params: UpscaleParams) -> InferenceResult<SdImage> {

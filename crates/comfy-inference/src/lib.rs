@@ -15,10 +15,13 @@ pub mod local;
 #[cfg(feature = "remote")]
 pub mod remote;
 
+#[cfg(feature = "flash-attn")]
+pub mod flash_attn_backend;
+
 pub use backend::{AsyncInferenceBackend, BackendCapabilities, InferenceBackend, NullBackend};
 pub use cli::{CliBackend, CliBackendConfig, convert_model_cli};
 pub use error::{GenerationMode, InferenceError, InferenceResult};
-pub use image::{ImageError, SdImage, SdVideo};
+pub use image::{ImageError, SdImage, SdVideo, SdAudio};
 pub use params::*;
 pub use types::*;
 
@@ -27,3 +30,6 @@ pub use local::{LocalBackend, convert_model, get_system_info, get_version, get_c
 
 #[cfg(feature = "remote")]
 pub use remote::{RemoteBackend, RemoteConfig};
+
+#[cfg(feature = "flash-attn")]
+pub use flash_attn_backend::{FlashAttnBackend, FlashAttnConfig};

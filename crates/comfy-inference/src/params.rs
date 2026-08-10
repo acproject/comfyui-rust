@@ -733,3 +733,360 @@ impl ConvertParams {
         self
     }
 }
+
+// ========== H3 (MiniMax-HunyuanVideoAudio) 相关参数 ==========
+
+/// H3 生成模式
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum H3Mode {
+    /// 文生视频+音频
+    T2VA,
+    /// 参考视频生视频+音频 (Ref2VA / Video-Ref)
+    Ref2VA,
+    /// 图生视频+音频 (I2VA / Image-Ref)
+    I2VA,
+    /// 多参考混合生视频+音频 (MR2VA)
+    MR2VA,
+    /// 音效生成
+    SFX,
+    /// 仅音频生成
+    Audio,
+}
+
+impl Default for H3Mode {
+    fn default() -> Self {
+        H3Mode::T2VA
+    }
+}
+
+/// H3 上下文信息（从 Context-IR 解析得到）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct H3Context {
+    /// 主体描述
+    pub subject: String,
+    /// 环境/背景描述
+    pub environment: String,
+    /// 风格描述
+    pub style: String,
+    /// 镜头运动
+    pub camera_motion: String,
+    /// 音效描述列表
+    pub sound_effects: Vec<String>,
+    /// 背景音乐描述（可选）
+    pub bgm: Option<String>,
+    /// 原始解析出的负面提示词
+    pub negative_prompt: Option<String>,
+}
+
+impl Default for H3Context {
+    fn default() -> Self {
+        Self {
+            subject: String::new(),
+            environment: String::new(),
+            style: "cinematic, high quality".to_string(),
+            camera_motion: String::new(),
+            sound_effects: Vec::new(),
+            bgm: None,
+            negative_prompt: None,
+        }
+    }
+}
+
+impl H3Context {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = subject.into();
+        self
+    }
+
+    pub fn with_environment(mut self, env: impl Into<String>) -> Self {
+        self.environment = env.into();
+        self
+    }
+
+    pub fn with_style(mut self, style: impl Into<String>) -> Self {
+        self.style = style.into();
+        self
+    }
+
+    pub fn with_camera_motion(mut self, motion: impl Into<String>) -> Self {
+        self.camera_motion = motion.into();
+        self
+    }
+
+    pub fn add_sound_effect(mut self, sfx: impl Into<String>) -> Self {
+        self.sound_effects.push(sfx.into());
+        self
+    }
+
+    pub fn with_bgm(mut self, bgm: impl Into<String>) -> Self {
+        self.bgm = Some(bgm.into());
+        self
+    }
+
+    /// 组合成正向提示词
+    pub fn build_positive_prompt(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.subject.is_empty() {
+            parts.push(self.subject.clone());
+        }
+        if !self.environment.is_empty() {
+            parts.push(self.environment.clone());
+        }
+        if !self.camera_motion.is_empty() {
+            parts.push(self.camera_motion.clone());
+        }
+        if !self.sound_effects.is_empty() {
+            parts.push(format!("sound effects: {}", self.sound_effects.join(", ")));
+        }
+        if let Some(ref bgm) = self.bgm {
+            parts.push(format!("background music: {}", bgm));
+        }
+        if !self.style.is_empty() {
+            parts.push(self.style.clone());
+        }
+        parts.join(", ")
+    }
+}
+
+/// H3 (T2VA/Ref2VA/I2VA) 生成参数
+#[derive(Debug, Clone)]
+pub struct H3Params {
+    /// 生成模式
+    pub mode: H3Mode,
+    /// 正向提示词
+    pub prompt: String,
+    /// 负向提示词
+    pub negative_prompt: String,
+    /// 推理步数
+    pub num_inference_steps: i32,
+    /// 引导系数 (CFG scale)
+    pub guidance_scale: f64,
+    /// 视频分辨率（宽）
+    pub width: i32,
+    /// 视频分辨率（高）
+    pub height: i32,
+    /// 视频总帧数 (H3约束: 17*n+5, 120-360)
+    pub num_frames: i32,
+    /// 视频帧率
+    pub fps: i32,
+    /// 音频持续时间（秒），默认匹配视频时长
+    pub audio_duration: Option<f64>,
+    /// 种子
+    pub seed: i64,
+    /// 上下文信息（从 Context-IR 解析）
+    pub context: Option<H3Context>,
+    /// 参考图像（I2VA/MR2VA）
+    pub reference_images: Vec<crate::image::SdImage>,
+    /// 参考视频（Ref2VA/MR2VA）
+    pub reference_video: Option<crate::image::SdVideo>,
+    /// 音频引导（可选）
+    pub audio_guide: Option<crate::image::SdAudio>,
+    /// 流匹配 shift 参数
+    pub shift: Option<f64>,
+    /// 是否自动生成音效
+    pub generate_sfx: bool,
+    /// 是否生成背景音乐
+    pub generate_bgm: bool,
+}
+
+impl Default for H3Params {
+    fn default() -> Self {
+        Self {
+            mode: H3Mode::T2VA,
+            prompt: String::new(),
+            negative_prompt: "low quality, blurry, distorted, static, noise".to_string(),
+            num_inference_steps: 50,
+            guidance_scale: 7.0,
+            width: 848,
+            height: 480,
+            num_frames: 123, // 17*7+4=123, default ~4s
+            fps: 24,
+            audio_duration: None,
+            seed: 42,
+            context: None,
+            reference_images: Vec::new(),
+            reference_video: None,
+            audio_guide: None,
+            shift: None,
+            generate_sfx: true,
+            generate_bgm: false,
+        }
+    }
+}
+
+impl H3Params {
+    pub fn new(prompt: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn t2va(prompt: impl Into<String>) -> Self {
+        Self::new(prompt)
+    }
+
+    pub fn i2va(prompt: impl Into<String>, reference_image: crate::image::SdImage) -> Self {
+        Self {
+            mode: H3Mode::I2VA,
+            prompt: prompt.into(),
+            reference_images: vec![reference_image],
+            ..Default::default()
+        }
+    }
+
+    pub fn ref2va(prompt: impl Into<String>, reference_video: crate::image::SdVideo) -> Self {
+        Self {
+            mode: H3Mode::Ref2VA,
+            prompt: prompt.into(),
+            reference_video: Some(reference_video),
+            ..Default::default()
+        }
+    }
+
+    pub fn mr2va(prompt: impl Into<String>, images: Vec<crate::image::SdImage>) -> Self {
+        Self {
+            mode: H3Mode::MR2VA,
+            prompt: prompt.into(),
+            reference_images: images,
+            ..Default::default()
+        }
+    }
+
+    pub fn with_negative_prompt(mut self, neg: impl Into<String>) -> Self {
+        self.negative_prompt = neg.into();
+        self
+    }
+
+    pub fn with_steps(mut self, steps: i32) -> Self {
+        self.num_inference_steps = steps;
+        self
+    }
+
+    pub fn with_cfg(mut self, cfg: f64) -> Self {
+        self.guidance_scale = cfg;
+        self
+    }
+
+    pub fn with_resolution(mut self, width: i32, height: i32) -> Self {
+        self.width = width;
+        self.height = height;
+        self
+    }
+
+    /// 设置帧数（自动对齐到 H3 约束: 17*n+5, 范围 120-360）
+    pub fn with_num_frames(mut self, frames: i32) -> Self {
+        // 对齐到 17*n+5
+        let aligned = if frames < 120 { 123 }
+        else if frames > 360 { 362 }
+        else {
+            let n = (frames as f64 / 17.0).round() as i32;
+            let candidate = 17 * n + 5;
+            candidate.max(123).min(362)
+        };
+        self.num_frames = aligned;
+        self
+    }
+
+    pub fn with_fps(mut self, fps: i32) -> Self {
+        self.fps = fps;
+        self
+    }
+
+    pub fn with_seed(mut self, seed: i64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    pub fn with_context(mut self, ctx: H3Context) -> Self {
+        self.context = Some(ctx);
+        self
+    }
+
+    pub fn with_shift(mut self, shift: f64) -> Self {
+        self.shift = Some(shift);
+        self
+    }
+
+    pub fn with_sfx(mut self, enable: bool) -> Self {
+        self.generate_sfx = enable;
+        self
+    }
+
+    pub fn with_bgm(mut self, enable: bool) -> Self {
+        self.generate_bgm = enable;
+        self
+    }
+
+    pub fn with_audio_duration(mut self, duration: f64) -> Self {
+        self.audio_duration = Some(duration);
+        self
+    }
+
+    /// 获取视频时长（秒）
+    pub fn video_duration_sec(&self) -> f64 {
+        self.num_frames as f64 / self.fps as f64
+    }
+
+    /// 获取音频时长（秒），默认匹配视频
+    pub fn get_audio_duration(&self) -> f64 {
+        self.audio_duration.unwrap_or_else(|| self.video_duration_sec())
+    }
+}
+
+/// Context-IR 参数
+#[derive(Debug, Clone)]
+pub struct ContextIrParams {
+    /// 输入图像（可选，和video二选一）
+    pub image: Option<crate::image::SdImage>,
+    /// 输入视频（可选，和image二选一）
+    pub video: Option<crate::image::SdVideo>,
+    /// 用户附加文本提示（可选，补充说明）
+    pub user_prompt: Option<String>,
+    /// 是否解析音效
+    pub parse_sfx: bool,
+    /// 是否解析背景音乐
+    pub parse_bgm: bool,
+}
+
+impl ContextIrParams {
+    pub fn from_image(image: crate::image::SdImage) -> Self {
+        Self {
+            image: Some(image),
+            video: None,
+            user_prompt: None,
+            parse_sfx: true,
+            parse_bgm: false,
+        }
+    }
+
+    pub fn from_video(video: crate::image::SdVideo) -> Self {
+        Self {
+            image: None,
+            video: Some(video),
+            user_prompt: None,
+            parse_sfx: true,
+            parse_bgm: false,
+        }
+    }
+
+    pub fn with_user_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.user_prompt = Some(prompt.into());
+        self
+    }
+
+    pub fn with_sfx(mut self, enable: bool) -> Self {
+        self.parse_sfx = enable;
+        self
+    }
+
+    pub fn with_bgm(mut self, enable: bool) -> Self {
+        self.parse_bgm = enable;
+        self
+    }
+}

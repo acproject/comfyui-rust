@@ -12,8 +12,9 @@ thiserror = "2"
 png = "0.17"
 gif = "0.13"
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
 base64 = { version = "0.22", optional = true }
+tempfile = { version = "3", optional = true }
 tracing = "0.1"
 
 [build-dependencies]
@@ -26,6 +27,7 @@ local = []
 local-ffi = ["local"]
 local-build = ["local-ffi"]
 remote = ["reqwest", "base64"]
+flash-attn = ["reqwest", "base64", "tempfile", "remote"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }

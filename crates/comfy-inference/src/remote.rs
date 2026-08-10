@@ -267,7 +267,7 @@ impl RemoteBackend {
                 Some("completed") => {
                     let frames = parse_image_response(&status_body)?;
                     let fps = status_body["result_fps"].as_i64().unwrap_or(16) as i32;
-                    return Ok(SdVideo::new(frames, fps));
+                    return Ok(SdVideo::new_without_audio(frames, fps));
                 }
                 Some("failed") => {
                     return Err(InferenceError::GenerationFailed(

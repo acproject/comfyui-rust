@@ -267,6 +267,13 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_ltxv_load_conditioning(registry);
     register_ltxv_save_conditioning(registry);
 
+    // H3 (MiniMax-HunyuanVideoAudio) ecosystem nodes - gated behind flash-attn feature
+    #[cfg(feature = "flash-attn")]
+    {
+        register_h3_context_ir(registry);
+        register_h3_director(registry);
+    }
+
     #[cfg(feature = "controlnet")]
     crate::controlnet::register_controlnet_nodes(registry);
 
@@ -2634,7 +2641,7 @@ fn register_save_video(registry: &mut NodeRegistry) {
                 });
             }
 
-            let sd_video = comfy_inference::SdVideo::new(
+            let sd_video = comfy_inference::SdVideo::new_without_audio(
                 frames.iter()
                     .filter_map(|f| serde_json::from_value::<comfy_inference::SdImage>(f.clone()).ok())
                     .collect(),
@@ -2803,7 +2810,7 @@ fn register_load_video(registry: &mut NodeRegistry) {
                     }
                 }
 
-                let video = comfy_inference::SdVideo::new(frames, fps as i32);
+                let video = comfy_inference::SdVideo::new_without_audio(frames, fps as i32);
                 let val = serde_json::to_value(&video).map_err(|e| ExecutorError::NodeExecutionFailed {
                     node_id: _node_id.to_string(),
                     message: format!("Failed to serialize video: {}", e),
@@ -9010,4 +9017,473 @@ fn register_ltxv_add_guide_advanced_attention(registry: &mut NodeRegistry) {
             Ok(vec![json!(model_out)])
         })
     }));
+}
+
+// ========== H3 (MiniMax-HunyuanVideoAudio) 生态节点 ==========
+
+#[cfg(feature = "flash-attn")]
+fn register_h3_context_ir(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "H3ContextIR".to_string(),
+        display_name: "H3 Context-IR (Multimodal Parser)".to_string(),
+        category: "H3/multimodal".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("text_prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("multiline".to_string(), json!(true));
+                        e
+                    },
+                });
+                m.insert("parse_sfx".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(true));
+                        e
+                    },
+                });
+                m.insert("parse_bgm".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(false));
+                        e
+                    },
+                });
+                m.insert("bridge_url".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!("http://127.0.0.1:8998"));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![
+            IoType::Custom("H3_CONTEXT".to_string()),
+            IoType::String,
+        ],
+        output_names: vec!["H3_CONTEXT".to_string(), "formatted_prompt".to_string()],
+        output_is_list: vec![false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "parse_context".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let image_val = ctx.resolve_input(node_id, "image").unwrap_or_else(|_| json!(null));
+        let video_val = ctx.resolve_input(node_id, "video").ok();
+        let text_prompt = ctx.resolve_input(node_id, "text_prompt")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let parse_sfx = ctx.resolve_input(node_id, "parse_sfx")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let parse_bgm = ctx.resolve_input(node_id, "parse_bgm")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let bridge_url = ctx.resolve_input(node_id, "bridge_url")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "http://127.0.0.1:8998".to_string());
+
+        Box::pin(async move {
+            use comfy_inference::{FlashAttnBackend, FlashAttnConfig, ContextIrParams, H3Context, InferenceBackend};
+
+            let config = FlashAttnConfig::new(bridge_url).with_timeout(60);
+            let backend = FlashAttnBackend::new(config);
+
+            let sd_image = parse_sd_image_from_value(&image_val);
+            let sd_video = video_val.and_then(|v| parse_sd_video_from_value(&v));
+
+            if sd_image.is_none() && sd_video.is_none() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "H3ContextIR requires either image or video input".to_string(),
+                });
+            }
+
+            let cir_params = if let Some(img) = sd_image {
+                let mut p = ContextIrParams::from_image(img);
+                p.parse_sfx = parse_sfx;
+                p.parse_bgm = parse_bgm;
+                p.user_prompt = text_prompt;
+                p
+            } else if let Some(vid) = sd_video {
+                let mut p = ContextIrParams::from_video(vid);
+                p.parse_sfx = parse_sfx;
+                p.parse_bgm = parse_bgm;
+                p.user_prompt = text_prompt;
+                p
+            } else {
+                unreachable!()
+            };
+
+            let context: H3Context = backend.context_ir(cir_params)
+                .map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("Context-IR failed: {}", e),
+                })?;
+
+            let formatted = context.build_positive_prompt();
+            let context_val = serde_json::to_value(&context).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("Failed to serialize context: {}", e),
+            })?;
+
+            Ok(vec![context_val, json!(formatted)])
+        })
+    }));
+}
+
+#[cfg(feature = "flash-attn")]
+fn register_h3_director(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "H3Director".to_string(),
+        display_name: "H3 Director (Audio-Video Generation)".to_string(),
+        category: "H3/generation".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("multiline".to_string(), json!(true));
+                        e
+                    },
+                });
+                m.insert("mode".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["t2va", "i2va", "ref2va", "mr2va"]));
+                        e.insert("default".to_string(), json!("t2va"));
+                        e
+                    },
+                });
+                m.insert("width".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(848));
+                        e.insert("min".to_string(), json!(256));
+                        e.insert("max".to_string(), json!(1920));
+                        e.insert("step".to_string(), json!(16));
+                        e
+                    },
+                });
+                m.insert("height".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(480));
+                        e.insert("min".to_string(), json!(256));
+                        e.insert("max".to_string(), json!(1088));
+                        e.insert("step".to_string(), json!(16));
+                        e
+                    },
+                });
+                m.insert("num_frames".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(123));
+                        e.insert("min".to_string(), json!(123));
+                        e.insert("max".to_string(), json!(362));
+                        e.insert("step".to_string(), json!(17));
+                        e
+                    },
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(50));
+                        e.insert("min".to_string(), json!(10));
+                        e.insert("max".to_string(), json!(100));
+                        e
+                    },
+                });
+                m.insert("cfg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(7.0));
+                        e.insert("min".to_string(), json!(1.0));
+                        e.insert("max".to_string(), json!(20.0));
+                        e
+                    },
+                });
+                m.insert("seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(42));
+                        e
+                    },
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("h3_context".to_string(), InputTypeSpec {
+                    type_name: "H3_CONTEXT".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("negative_prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("multiline".to_string(), json!(true));
+                        e.insert("default".to_string(), json!("low quality, blurry, distorted"));
+                        e
+                    },
+                });
+                m.insert("reference_image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("reference_video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("fps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(24));
+                        e
+                    },
+                });
+                m.insert("generate_sfx".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(true));
+                        e
+                    },
+                });
+                m.insert("generate_bgm".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(false));
+                        e
+                    },
+                });
+                m.insert("bridge_url".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!("http://127.0.0.1:8998"));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video],
+        output_names: vec!["VIDEO".to_string()],
+        output_is_list: vec![false],
+        is_output_node: true,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "generate".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let prompt = ctx.resolve_input(node_id, "prompt")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        let mode_str = ctx.resolve_input(node_id, "mode")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "t2va".to_string());
+        let width = ctx.resolve_input(node_id, "width")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(848) as i32;
+        let height = ctx.resolve_input(node_id, "height")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(480) as i32;
+        let num_frames = ctx.resolve_input(node_id, "num_frames")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(123) as i32;
+        let steps = ctx.resolve_input(node_id, "steps")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(50) as i32;
+        let cfg = ctx.resolve_input(node_id, "cfg")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(7.0);
+        let seed = ctx.resolve_input(node_id, "seed")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(42);
+        let fps = ctx.resolve_input(node_id, "fps")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(24) as i32;
+        let negative_prompt = ctx.resolve_input(node_id, "negative_prompt")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "low quality, blurry, distorted".to_string());
+        let generate_sfx = ctx.resolve_input(node_id, "generate_sfx")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let generate_bgm = ctx.resolve_input(node_id, "generate_bgm")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let bridge_url = ctx.resolve_input(node_id, "bridge_url")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "http://127.0.0.1:8998".to_string());
+
+        let context_val = ctx.resolve_input(node_id, "h3_context").ok();
+        let ref_image_val = ctx.resolve_input(node_id, "reference_image").ok();
+        let ref_video_val = ctx.resolve_input(node_id, "reference_video").ok();
+
+        Box::pin(async move {
+            use comfy_inference::{FlashAttnBackend, FlashAttnConfig, H3Params, H3Mode, H3Context, InferenceBackend};
+
+            let config = FlashAttnConfig::new(bridge_url).with_timeout(900);
+            let backend = FlashAttnBackend::new(config);
+
+            let mode = match mode_str.as_str() {
+                "i2va" => H3Mode::I2VA,
+                "ref2va" => H3Mode::Ref2VA,
+                "mr2va" => H3Mode::MR2VA,
+                _ => H3Mode::T2VA,
+            };
+
+            let mut params = H3Params::new(prompt.clone())
+                .with_negative_prompt(negative_prompt)
+                .with_steps(steps)
+                .with_cfg(cfg)
+                .with_resolution(width, height)
+                .with_num_frames(num_frames)
+                .with_fps(fps)
+                .with_seed(seed)
+                .with_sfx(generate_sfx)
+                .with_bgm(generate_bgm);
+            params.mode = mode;
+
+            if let Some(ctx_val) = context_val {
+                if let Ok(h3ctx) = serde_json::from_value::<H3Context>(ctx_val) {
+                    let built_prompt = h3ctx.build_positive_prompt();
+                    if !prompt.trim().is_empty() {
+                        params.prompt = format!("{}. {}", built_prompt, prompt);
+                    } else {
+                        params.prompt = built_prompt;
+                    }
+                    if let Some(ref neg) = h3ctx.negative_prompt {
+                        if !neg.is_empty() {
+                            params.negative_prompt = format!("{}. {}", params.negative_prompt, neg);
+                        }
+                    }
+                    params = params.with_context(h3ctx);
+                }
+            }
+
+            if let Some(img_val) = ref_image_val {
+                if let Some(img) = parse_sd_image_from_value(&img_val) {
+                    params.reference_images.push(img);
+                    if params.mode == H3Mode::T2VA {
+                        params.mode = H3Mode::I2VA;
+                    }
+                }
+            }
+            if let Some(vid_val) = ref_video_val {
+                if let Some(vid) = parse_sd_video_from_value(&vid_val) {
+                    params.reference_video = Some(vid);
+                    if params.mode == H3Mode::T2VA {
+                        params.mode = H3Mode::Ref2VA;
+                    }
+                }
+            }
+
+            let video = backend.generate_av(params)
+                .map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("H3 generation failed: {}", e),
+                })?;
+
+            let val = serde_json::to_value(&video).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("Failed to serialize video: {}", e),
+            })?;
+
+            Ok(vec![val])
+        })
+    }));
+}
+
+// Helper functions for parsing SdImage/SdVideo from JSON values
+#[cfg(feature = "flash-attn")]
+fn parse_sd_image_from_value(val: &serde_json::Value) -> Option<comfy_inference::SdImage> {
+    use comfy_inference::SdImage;
+    if let Ok(img) = serde_json::from_value::<SdImage>(val.clone()) {
+        return Some(img);
+    }
+    if let Some(frames) = val.get("frames").and_then(|v| v.as_array()) {
+        for f in frames {
+            if let Ok(img) = serde_json::from_value::<SdImage>(f.clone()) {
+                return Some(img);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(feature = "flash-attn")]
+fn parse_sd_video_from_value(val: &serde_json::Value) -> Option<comfy_inference::SdVideo> {
+    use comfy_inference::SdVideo;
+    if let Ok(vid) = serde_json::from_value::<SdVideo>(val.clone()) {
+        return Some(vid);
+    }
+    if let Some(frames) = val.get("frames").and_then(|v| v.as_array()) {
+        let fps = val.get("fps").and_then(|v| v.as_i64()).unwrap_or(24) as i32;
+        let mut sd_frames = Vec::new();
+        for f in frames {
+            if let Some(img) = parse_sd_image_from_value(f) {
+                sd_frames.push(img);
+            }
+        }
+        if !sd_frames.is_empty() {
+            return Some(SdVideo::new_without_audio(sd_frames, fps));
+        }
+    }
+    None
 }

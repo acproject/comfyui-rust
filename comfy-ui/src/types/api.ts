@@ -231,6 +231,7 @@ export interface ServerConfig {
     remote_url: string | null;
     sd_cli_path: string | null;
     hf_token: string | null;
+    flash_attn_bridge_url: string;
   };
   output: {
     dir: string;

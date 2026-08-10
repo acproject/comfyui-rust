@@ -31,6 +31,7 @@ const TYPE_COLORS: Record<string, string> = {
   RELAY_OPTIONS: '#cddc39',
   GUIDE_DATA: '#26c6da',
   GAUSSIAN_3D: '#00e676',
+  H3_CONTEXT: '#ff7043',
   COMBO: '#90a4ae',
   '*': '#9e9e9e',
 };
@@ -49,6 +50,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   '3d': '#00897b',
   custom: '#8b6bbf',
   whatdreamscost: '#1e88e5',
+  h3: '#ff7043',
   _default: '#4a5568',
 };
 

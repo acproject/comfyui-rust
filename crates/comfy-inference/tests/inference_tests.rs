@@ -218,7 +218,7 @@ fn test_sd_image_serialization() {
 #[test]
 fn test_sd_video() {
     let frames = vec![SdImage::new(64, 64, 3); 5];
-    let video = SdVideo::new(frames, 24);
+    let video = SdVideo::new_without_audio(frames, 24);
     assert_eq!(video.frame_count(), 5);
     assert_eq!(video.fps, 24);
     assert!(!video.is_empty());
@@ -226,7 +226,7 @@ fn test_sd_video() {
 
 #[test]
 fn test_sd_video_empty() {
-    let video = SdVideo::new(vec![], 16);
+    let video = SdVideo::new_without_audio(vec![], 16);
     assert!(video.is_empty());
     assert_eq!(video.frame_count(), 0);
 }

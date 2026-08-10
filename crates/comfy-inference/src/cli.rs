@@ -506,7 +506,7 @@ impl InferenceBackend for CliBackend {
         self.run_sd_cli(&args)?;
 
         let frames = Vec::new();
-        let video = SdVideo::new(frames, 16);
+        let video = SdVideo::new_without_audio(frames, 16);
 
         Ok(video)
     }

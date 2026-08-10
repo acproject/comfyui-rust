@@ -26,6 +26,7 @@ echo "1/2 启动 Rust 后端服务器 (端口 8188)..."
 cd "$PROJECT_DIR"
 
 # 检查 OpenCV + CUDA 编译依赖
+USE_OPENCV=true
 if [ ! -f /usr/lib/llvm-18/lib/libclang.so ] && [ ! -f /usr/lib/llvm-15/lib/libclang.so ]; then
     echo "  检测到缺少 libclang-dev (OpenCV Rust 绑定编译所需)"
     echo "  正在尝试安装 libclang-dev..."
@@ -33,6 +34,24 @@ if [ ! -f /usr/lib/llvm-18/lib/libclang.so ] && [ ! -f /usr/lib/llvm-15/lib/libc
         echo "  ⚠️  安装 libclang-dev 失败，将回退到普通 ControlNet (无 OpenCV 加速)"
         USE_OPENCV=false
     }
+fi
+
+# 检测 OpenCV 与 CUDA 版本兼容性（opencv-rust 绑定要求精确 CUDA 版本匹配）
+if [ "$USE_OPENCV" = "true" ]; then
+    CUDA_VER=""
+    if [ -f /usr/local/cuda/version.json ]; then
+        CUDA_VER=$(python3 -c "import json; d=json.load(open('/usr/local/cuda/version.json')); print(d.get('cuda',{}).get('version','').split('.')[0]+'.'+d.get('cuda',{}).get('version','').split('.')[1] if '.' in d.get('cuda',{}).get('version','') else d.get('cuda',{}).get('version',''))" 2>/dev/null || echo "")
+    elif [ -f /usr/local/cuda/version.txt ]; then
+        CUDA_VER=$(grep -oP 'CUDA Version \K[0-9]+\.[0-9]+' /usr/local/cuda/version.txt 2>/dev/null || echo "")
+    fi
+    if [ -n "$CUDA_VER" ] && [ -d /usr/local/lib/cmake/opencv4 ]; then
+        OPENCV_CUDA_VER=$(grep -roP 'CUDA_VERSION[^0-9]*\K[0-9]+\.[0-9]+' /usr/local/lib/cmake/opencv4/ 2>/dev/null | head -1 || echo "")
+        if [ -n "$OPENCV_CUDA_VER" ] && [ "$OPENCV_CUDA_VER" != "$CUDA_VER" ]; then
+            echo "  ⚠️  OpenCV 编译时使用 CUDA $OPENCV_CUDA_VER，但当前 CUDA 版本为 $CUDA_VER"
+            echo "  ⚠️  opencv-rust 绑定要求精确版本匹配，将回退到无 OpenCV 模式"
+            USE_OPENCV=false
+        fi
+    fi
 fi
 
 SD_CPP_DIR=""
@@ -56,20 +75,24 @@ if [ -n "$SD_CPP_DIR" ]; then
         CONTROLNET_FEATURE="controlnet"
     fi
     if [ -f "$SD_LIB" ]; then
-        CARGO_FEATURES="local-ffi,$CONTROLNET_FEATURE"
-        echo "  使用 FFI + CLI 后端 (预编译库已就绪) + ControlNet ($CONTROLNET_FEATURE)"
+        CARGO_FEATURES="local-ffi,$CONTROLNET_FEATURE,flash-attn"
+        echo "  使用 FFI + CLI 后端 (预编译库已就绪) + ControlNet ($CONTROLNET_FEATURE) + FlashAttn Bridge"
     else
-        CARGO_FEATURES="local-build,$CONTROLNET_FEATURE"
-        echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢) + ControlNet ($CONTROLNET_FEATURE)..."
+        CARGO_FEATURES="local-build,$CONTROLNET_FEATURE,flash-attn"
+        echo "  预编译库未找到，将自动编译 stable-diffusion-cpp (首次编译较慢) + ControlNet ($CONTROLNET_FEATURE) + FlashAttn Bridge..."
     fi
 else
     CONTROLNET_FEATURE="controlnet-opencv"
     if [ "${USE_OPENCV:-true}" = "false" ]; then
         CONTROLNET_FEATURE="controlnet"
     fi
-    CARGO_FEATURES="local,$CONTROLNET_FEATURE"
-    echo "  stable-diffusion-cpp 未找到，使用 CLI 后端 (需要 sd-cli 可执行文件) + ControlNet ($CONTROLNET_FEATURE)"
+    CARGO_FEATURES="local,$CONTROLNET_FEATURE,flash-attn"
+    echo "  stable-diffusion-cpp 未找到，使用 CLI 后端 (需要 sd-cli 可执行文件) + ControlNet ($CONTROLNET_FEATURE) + FlashAttn Bridge"
 fi
+
+# FlashAttn Bridge URL 配置
+export FLASH_ATTN_BRIDGE_URL="${FLASH_ATTN_BRIDGE_URL:-http://127.0.0.1:8998}"
+echo "  FlashAttn Bridge URL: $FLASH_ATTN_BRIDGE_URL"
 
 cargo run -p comfy-api --features "$CARGO_FEATURES" &
 SERVER_PID=$!
