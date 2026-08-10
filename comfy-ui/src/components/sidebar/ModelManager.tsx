@@ -72,6 +72,9 @@ const ModelManager: FC = () => {
     hf_token: '',
     flash_attn_bridge_url: 'http://127.0.0.1:8998',
   });
+  const [bridgeStatus, setBridgeStatus] = useState<'unknown' | 'checking' | 'online' | 'offline' | 'error'>('unknown');
+  const [bridgeInfo, setBridgeInfo] = useState<{model_loaded: boolean; model_path: string | null; device: string | null} | null>(null);
+  const [checkingBridge, setCheckingBridge] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [saveResult, setSaveResult] = useState<'success' | 'error' | null>(null);
@@ -196,12 +199,51 @@ const ModelManager: FC = () => {
       await api.updateConfig(updatedConfig);
       setSaveResult('success');
       setTimeout(() => setSaveResult(null), 3000);
+      // 保存后自动检测Bridge状态
+      checkBridgeConnection();
     } catch {
       setSaveResult('error');
     } finally {
       setSavingConfig(false);
     }
   };
+
+  const checkBridgeConnection = useCallback(async () => {
+    const url = inferenceConfig.flash_attn_bridge_url.trim();
+    if (!url) {
+      setBridgeStatus('offline');
+      setBridgeInfo(null);
+      return;
+    }
+    setCheckingBridge(true);
+    setBridgeStatus('checking');
+    try {
+      const resp = await fetch(`${url.replace(/\/$/, '')}/health`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      setBridgeInfo({
+        model_loaded: data.model_loaded || false,
+        model_path: data.model_path || null,
+        device: data.device || null,
+      });
+      setBridgeStatus('online');
+    } catch {
+      setBridgeStatus('offline');
+      setBridgeInfo(null);
+    } finally {
+      setCheckingBridge(false);
+    }
+  }, [inferenceConfig.flash_attn_bridge_url]);
+
+  // 配置加载后自动检测Bridge状态
+  useEffect(() => {
+    if (configLoaded && showSettings) {
+      checkBridgeConnection();
+    }
+  }, [configLoaded, showSettings, checkBridgeConnection]);
 
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => ({ ...prev, [cat]: !prev[cat] }));
@@ -555,31 +597,110 @@ const ModelManager: FC = () => {
               </label>
             </div>
 
-            <div>
-              <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>
-                FlashAttn Bridge 地址
-              </label>
-              <input
-                type="text"
-                value={inferenceConfig.flash_attn_bridge_url}
-                onChange={(e) => setInferenceConfig({ ...inferenceConfig, flash_attn_bridge_url: e.target.value })}
-                placeholder="http://127.0.0.1:8998"
-                style={{
-                  width: '100%',
-                  background: '#2a2a3e',
-                  border: '1px solid #444',
-                  borderRadius: 4,
-                  color: '#e2e8f0',
-                  fontSize: 11,
-                  padding: '4px 6px',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
-              <div style={{ fontSize: 9, color: '#555', marginTop: 2 }}>
-                H3/音视频生成节点连接的 Python Bridge 服务地址
+            {/* ========== FlashAttn Bridge (Python) 服务设置 ========== */}
+            <div style={{
+              border: '1px solid #444',
+              borderRadius: 6,
+              padding: '8px',
+              background: '#1e1e2e',
+              marginTop: 4,
+            }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                marginBottom: 6,
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#ff7043',
+              }}>
+                <span style={{ fontSize: 12 }}>🐍</span>
+                <span>FlashAttn Bridge (Python)</span>
+                <span style={{
+                  marginLeft: 'auto',
+                  fontSize: 9,
+                  padding: '1px 6px',
+                  borderRadius: 3,
+                  background: bridgeStatus === 'online' ? '#2d5a2d' : bridgeStatus === 'offline' ? '#5a2d2d' : bridgeStatus === 'checking' ? '#5a5a2d' : '#333',
+                  color: bridgeStatus === 'online' ? '#68d391' : bridgeStatus === 'offline' ? '#fc8181' : bridgeStatus === 'checking' ? '#f6e05e' : '#888',
+                }}>
+                  {checkingBridge ? '检测中...' : bridgeStatus === 'online' ? (bridgeInfo?.model_loaded ? '● 在线·模型已加载' : '● 在线·无模型') : bridgeStatus === 'offline' ? '● 离线' : '未检测'}
+                </span>
               </div>
+
+              <div style={{ fontSize: 9, color: '#888', marginBottom: 6 }}>
+                H3/音视频生成节点依赖此 Python 服务（HTTP Bridge）
+              </div>
+
+              <div>
+                <label style={{ fontSize: 10, color: '#718096', display: 'block', marginBottom: 3 }}>
+                  服务地址
+                </label>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <input
+                    type="text"
+                    value={inferenceConfig.flash_attn_bridge_url}
+                    onChange={(e) => {
+                      setInferenceConfig({ ...inferenceConfig, flash_attn_bridge_url: e.target.value });
+                      setBridgeStatus('unknown');
+                    }}
+                    placeholder="http://127.0.0.1:8998"
+                    style={{
+                      flex: 1,
+                      background: '#2a2a3e',
+                      border: '1px solid #444',
+                      borderRadius: 4,
+                      color: '#e2e8f0',
+                      fontSize: 11,
+                      padding: '4px 6px',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                      minWidth: 0,
+                    }}
+                  />
+                  <button
+                    onClick={checkBridgeConnection}
+                    disabled={checkingBridge}
+                    title="测试连接"
+                    style={{
+                      background: checkingBridge ? '#2a2a3e' : '#2d4a7a',
+                      border: 'none',
+                      borderRadius: 4,
+                      color: '#e2e8f0',
+                      cursor: checkingBridge ? 'wait' : 'pointer',
+                      padding: '4px 8px',
+                      fontSize: 11,
+                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 3,
+                    }}
+                  >
+                    <RefreshCw size={11} className={checkingBridge ? 'animate-spin' : ''} />
+                    测试
+                  </button>
+                </div>
+              </div>
+
+              {bridgeStatus === 'online' && bridgeInfo && (
+                <div style={{ fontSize: 9, color: '#68d391', marginTop: 4, lineHeight: 1.5 }}>
+                  {bridgeInfo.model_loaded ? (
+                    <>✓ 模型已加载: {bridgeInfo.model_path ? bridgeInfo.model_path.split('/').pop() : 'N/A'}{bridgeInfo.device && ` (${bridgeInfo.device})`}</>
+                  ) : (
+                    <>⚠ Bridge 已连接，但未加载模型。请通过 API 或启动参数加载 MiniMax-H3 模型</>
+                  )}
+                </div>
+              )}
+              {bridgeStatus === 'offline' && (
+                <div style={{ fontSize: 9, color: '#fc8181', marginTop: 4, lineHeight: 1.5 }}>
+                  ✗ 无法连接 Bridge 服务，请确认已启动：<br/>
+                  <code style={{ color: '#f6ad55', fontSize: 8 }}>
+                    cd flash_attn_bridge && ./start.sh
+                  </code>
+                </div>
+              )}
             </div>
+            {/* ========== End FlashAttn Bridge ========== */}
 
             <button
               onClick={handleSaveConfig}
