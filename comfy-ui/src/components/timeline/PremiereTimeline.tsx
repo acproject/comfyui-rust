@@ -1,0 +1,559 @@
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { WaveformVisualizer } from './WaveformVisualizer';
+
+export interface PremiereClip {
+  id: string;
+  trackId: string;
+  startTime: number;
+  inPoint: number;
+  outPoint: number;
+  duration: number;
+  opacity?: number;
+  volume?: number;
+  name: string;
+  hasVideo?: boolean;
+  hasAudio?: boolean;
+}
+
+export interface PremiereTrack {
+  id: string;
+  type: 'video' | 'audio';
+  name: string;
+  clips: PremiereClip[];
+  locked: boolean;
+  muted: boolean;
+  solo: boolean;
+  visible: boolean;
+  height: number;
+}
+
+export interface PremiereTimelineProps {
+  tracks?: PremiereTrack[];
+  currentTime?: number;
+  totalDuration?: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+  onClipDrag?: (clipId: string, newStartTime: number) => void;
+  onTrackToggle?: (trackId: string, property: 'locked' | 'muted' | 'solo' | 'visible') => void;
+  onTimeChange?: (time: number) => void;
+}
+
+const TRACK_CONTROL_WIDTH = 140;
+const RULER_HEIGHT = 32;
+const DEFAULT_VIDEO_TRACK_HEIGHT = 50;
+const DEFAULT_AUDIO_TRACK_HEIGHT = 60;
+const DEFAULT_FPS = 24;
+
+export function PremiereTimeline({
+  tracks: customTracks,
+  currentTime = 0,
+  totalDuration = 10,
+  fps = DEFAULT_FPS,
+  width = 800,
+  height = 400,
+  onClipDrag,
+  onTrackToggle,
+  onTimeChange,
+}: PremiereTimelineProps) {
+  const [zoom, setZoom] = useState(1);
+  const [scrollX, setScrollX] = useState(0);
+  const [playhead, setPlayhead] = useState(currentTime);
+  const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
+  const [draggingClip, setDraggingClip] = useState<{ id: string; startX: number; startTime: number } | null>(null);
+
+  const timelineRef = useRef<HTMLDivElement>(null);
+
+  // Default tracks matching VideoTimeline node (V1-V4, A1-A4)
+  const defaultTracks: PremiereTrack[] = [
+    { id: 'v4', type: 'video', name: 'V4', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_VIDEO_TRACK_HEIGHT },
+    { id: 'v3', type: 'video', name: 'V3', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_VIDEO_TRACK_HEIGHT },
+    { id: 'v2', type: 'video', name: 'V2', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_VIDEO_TRACK_HEIGHT },
+    { id: 'v1', type: 'video', name: 'V1', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_VIDEO_TRACK_HEIGHT },
+    { id: 'a1', type: 'audio', name: 'A1', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_AUDIO_TRACK_HEIGHT },
+    { id: 'a2', type: 'audio', name: 'A2', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_AUDIO_TRACK_HEIGHT },
+    { id: 'a3', type: 'audio', name: 'A3', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_AUDIO_TRACK_HEIGHT },
+    { id: 'a4', type: 'audio', name: 'A4', clips: [], locked: false, muted: false, solo: false, visible: true, height: DEFAULT_AUDIO_TRACK_HEIGHT },
+  ];
+
+  const tracks = customTracks || defaultTracks;
+
+  const pixelsPerSecond = 60 * zoom;
+  const timelineContentWidth = Math.max(totalDuration * pixelsPerSecond, width - TRACK_CONTROL_WIDTH);
+
+  const totalTracksHeight = tracks.reduce((sum, t) => sum + t.height, 0);
+  const timelineHeight = Math.max(totalTracksHeight + RULER_HEIGHT, height);
+
+  // Generate time ruler markers
+  const renderTimeRuler = useCallback(() => {
+    const markers: React.ReactNode[] = [];
+    let interval: number;
+    let labelInterval: number;
+
+    if (zoom < 0.3) {
+      interval = 10;
+      labelInterval = 10;
+    } else if (zoom < 0.7) {
+      interval = 5;
+      labelInterval = 5;
+    } else if (zoom < 1.5) {
+      interval = 1;
+      labelInterval = 1;
+    } else if (zoom < 3) {
+      interval = 0.5;
+      labelInterval = 1;
+    } else {
+      interval = 0.1;
+      labelInterval = 0.5;
+    }
+
+    for (let t = 0; t <= totalDuration + interval; t += interval) {
+      const x = t * pixelsPerSecond - scrollX;
+      if (x < -50 || x > width) continue;
+
+      const isMajor = Math.abs(t % labelInterval) < 0.001;
+      const height = isMajor ? RULER_HEIGHT : RULER_HEIGHT / 2;
+
+      markers.push(
+        <div
+          key={`tick-${t}`}
+          className="absolute"
+          style={{
+            left: x + TRACK_CONTROL_WIDTH,
+            top: 0,
+            width: 1,
+            height,
+            backgroundColor: isMajor ? '#4a4a5a' : '#3a3a4a',
+          }}
+        />
+      );
+
+      if (isMajor) {
+        const minutes = Math.floor(t / 60);
+        const seconds = Math.floor(t % 60);
+        const frames = Math.floor((t % 1) * fps);
+        let timeLabel: string;
+        if (minutes > 0) {
+          timeLabel = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        } else if (zoom >= 3) {
+          timeLabel = `${seconds.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
+        } else {
+          timeLabel = `${seconds}`;
+        }
+        markers.push(
+          <div
+            key={`label-${t}`}
+            className="absolute text-xs text-gray-400 font-mono"
+            style={{
+              left: x + TRACK_CONTROL_WIDTH + 4,
+              top: 2,
+              fontSize: 10,
+            }}
+          >
+            {timeLabel}
+          </div>
+        );
+      }
+    }
+    return markers;
+  }, [zoom, totalDuration, pixelsPerSecond, scrollX, width, fps]);
+
+  // Handle playhead drag
+  const handleTimelineClick = useCallback((e: React.MouseEvent) => {
+    if (!timelineRef.current) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left - TRACK_CONTROL_WIDTH + scrollX;
+    const time = Math.max(0, Math.min(totalDuration, x / pixelsPerSecond));
+    setPlayhead(time);
+    onTimeChange?.(time);
+  }, [pixelsPerSecond, scrollX, totalDuration, onTimeChange]);
+
+  const handlePlayheadMouseDown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsDraggingPlayhead(true);
+  }, []);
+
+  // Handle clip drag
+  const handleClipMouseDown = useCallback((e: React.MouseEvent, clip: PremiereClip) => {
+    e.stopPropagation();
+    setDraggingClip({
+      id: clip.id,
+      startX: e.clientX,
+      startTime: clip.startTime,
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingPlayhead && timelineRef.current) {
+        const rect = timelineRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left - TRACK_CONTROL_WIDTH + scrollX;
+        const time = Math.max(0, Math.min(totalDuration, x / pixelsPerSecond));
+        setPlayhead(time);
+        onTimeChange?.(time);
+      }
+
+      if (draggingClip) {
+        const deltaX = e.clientX - draggingClip.startX;
+        const deltaTime = deltaX / pixelsPerSecond;
+        const newStartTime = Math.max(0, draggingClip.startTime + deltaTime);
+        onClipDrag?.(draggingClip.id, newStartTime);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingPlayhead(false);
+      setDraggingClip(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingPlayhead, draggingClip, pixelsPerSecond, scrollX, totalDuration, onTimeChange, onClipDrag]);
+
+  // Handle horizontal scroll
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      // Zoom with Ctrl+Wheel
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      setZoom((z) => Math.max(0.1, Math.min(10, z * delta)));
+    } else {
+      // Scroll horizontally
+      setScrollX((s) => Math.max(0, s + e.deltaY));
+    }
+  }, []);
+
+  const handleTrackToggle = useCallback((trackId: string, property: 'locked' | 'muted' | 'solo' | 'visible') => {
+    onTrackToggle?.(trackId, property);
+  }, [onTrackToggle]);
+
+  // Render track controls (left panel)
+  const renderTrackControls = () => {
+    let currentY = RULER_HEIGHT;
+    return tracks.map((track) => {
+      const trackY = currentY;
+      currentY += track.height;
+
+      const isVideo = track.type === 'video';
+      const trackColor = isVideo ? '#3b82f6' : '#06b6d4';
+      const bgColor = isVideo ? '#1e3a5f' : '#164e63';
+      const mutedBg = track.muted ? '#3f3f46' : bgColor;
+
+      return (
+        <div
+          key={`control-${track.id}`}
+          className="absolute left-0 flex items-center border-r border-b border-gray-700 px-2"
+          style={{
+            top: trackY,
+            width: TRACK_CONTROL_WIDTH,
+            height: track.height,
+            backgroundColor: track.locked ? '#27272a' : mutedBg,
+          }}
+        >
+          <div className="flex flex-col gap-1 w-full">
+            <div className="flex items-center justify-between">
+              <span
+                className="text-xs font-bold px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: trackColor, color: 'white' }}
+              >
+                {track.name}
+              </span>
+              <div className="flex gap-0.5">
+                {isVideo ? (
+                  <>
+                    <button
+                      className={`w-5 h-5 flex items-center justify-center text-xs rounded ${
+                        track.visible ? 'bg-gray-600 text-white' : 'bg-gray-800 text-gray-500'
+                      }`}
+                      onClick={() => handleTrackToggle(track.id, 'visible')}
+                      title="Toggle Visibility"
+                    >
+                      👁
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className={`w-5 h-5 flex items-center justify-center text-xs rounded font-bold ${
+                        track.muted ? 'bg-red-600 text-white' : 'bg-gray-600 text-white'
+                      }`}
+                      onClick={() => handleTrackToggle(track.id, 'muted')}
+                      title="Mute"
+                    >
+                      M
+                    </button>
+                    <button
+                      className={`w-5 h-5 flex items-center justify-center text-xs rounded font-bold ${
+                        track.solo ? 'bg-yellow-600 text-white' : 'bg-gray-600 text-white'
+                      }`}
+                      onClick={() => handleTrackToggle(track.id, 'solo')}
+                      title="Solo"
+                    >
+                      S
+                    </button>
+                  </>
+                )}
+                <button
+                  className={`w-5 h-5 flex items-center justify-center text-xs rounded ${
+                    track.locked ? 'bg-gray-500 text-white' : 'bg-gray-700 text-gray-400'
+                  }`}
+                  onClick={() => handleTrackToggle(track.id, 'locked')}
+                  title="Lock Track"
+                >
+                  🔒
+                </button>
+              </div>
+            </div>
+            <div className="flex gap-0.5">
+              <button
+                className="w-5 h-5 flex items-center justify-center text-xs bg-gray-700 text-gray-400 rounded hover:bg-gray-600"
+                title="Collapse/Expand"
+              >
+                ▶
+              </button>
+              <button
+                className="w-5 h-5 flex items-center justify-center text-xs bg-gray-700 text-gray-400 rounded hover:bg-gray-600"
+                title="Keyframes"
+              >
+                ◆
+              </button>
+              <button
+                className="w-5 h-5 flex items-center justify-center text-xs bg-gray-700 text-gray-400 rounded hover:bg-gray-600"
+                title="Track Output"
+              >
+                ⊙
+              </button>
+              <div className="flex-1" />
+              <span className="text-[10px] text-gray-500">
+                {isVideo ? 'Video' : 'Audio'}
+              </span>
+            </div>
+          </div>
+        </div>
+      );
+    });
+  };
+
+  // Render tracks and clips
+  const renderTracks = () => {
+    let currentY = RULER_HEIGHT;
+    return tracks.map((track) => {
+      const trackY = currentY;
+      currentY += track.height;
+
+      const isVideo = track.type === 'video';
+      const clipColor = isVideo ? '#2563eb' : '#0891b2';
+      const clipBg = isVideo ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)' : 'linear-gradient(180deg, #06b6d4 0%, #0891b2 100%)';
+      const trackBg = isVideo ? '#0f172a' : '#0c1929';
+      const mutedStyle = track.muted ? { opacity: 0.4, filter: 'grayscale(50%)' } : {};
+
+      return (
+        <div
+          key={`track-${track.id}`}
+          className="absolute"
+          style={{
+            top: trackY,
+            left: 0,
+            right: 0,
+            height: track.height,
+            backgroundColor: track.locked ? '#18181b' : trackBg,
+            borderBottom: '1px solid #27272a',
+            ...mutedStyle,
+          }}
+        >
+          {/* Track background stripes */}
+          <div
+            className="absolute inset-0 opacity-10"
+            style={{
+              backgroundImage:
+                'repeating-linear-gradient(90deg, transparent, transparent 99px, #333 99px, #333 100px)',
+              backgroundPosition: `${TRACK_CONTROL_WIDTH - scrollX}px 0`,
+            }}
+          />
+
+          {/* Clips */}
+          {track.clips.map((clip) => {
+            const clipLeft = TRACK_CONTROL_WIDTH + clip.startTime * pixelsPerSecond - scrollX;
+            const clipWidth = (clip.outPoint - clip.inPoint) * pixelsPerSecond;
+
+            if (clipLeft + clipWidth < TRACK_CONTROL_WIDTH || clipLeft > width) return null;
+
+            return (
+              <div
+                key={clip.id}
+                className={`absolute rounded cursor-move overflow-hidden select-none ${
+                  track.locked ? 'cursor-not-allowed opacity-60' : ''
+                }`}
+                style={{
+                  left: clipLeft,
+                  top: 4,
+                  width: Math.max(clipWidth, 20),
+                  height: track.height - 8,
+                  background: clipBg,
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }}
+                onMouseDown={(e) => !track.locked && handleClipMouseDown(e, clip)}
+              >
+                {/* Clip header */}
+                <div
+                  className="px-2 py-0.5 text-[10px] text-white font-medium truncate"
+                  style={{ backgroundColor: clipColor, borderBottom: '1px solid rgba(255,255,255,0.1)' }}
+                >
+                  {clip.name}
+                </div>
+
+                {/* Clip content area */}
+                <div className="flex-1 px-1" style={{ height: track.height - 8 - 18 }}>
+                  {isVideo ? (
+                    <div className="w-full h-full flex items-center justify-center">
+                      {/* Video clip visualization - diagonal stripes */}
+                      <div
+                        className="w-full h-full opacity-30"
+                        style={{
+                          background:
+                            'repeating-linear-gradient(45deg, rgba(255,255,255,0.1) 0px, rgba(255,255,255,0.1) 4px, transparent 4px, transparent 8px)',
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center overflow-hidden">
+                      <div className="text-white/50 text-[9px]">
+                        ♪ Audio Waveform ♪
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Clip handles (in/out points) */}
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.2)' }}
+                />
+                <div
+                  className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.2)' }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      );
+    });
+  };
+
+  return (
+    <div
+      className="w-full bg-[#1a1a1f] rounded-lg border border-gray-700 overflow-hidden select-none"
+      style={{ fontSize: 11 }}
+    >
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-3 py-2 bg-[#252528] border-b border-gray-700">
+        <div className="flex items-center gap-2">
+          <span className="text-white font-medium text-xs">🎬 Multi-Track Timeline</span>
+          <span className="text-gray-500 text-[10px]">
+            {tracks.filter((t) => t.type === 'video').length} video | {tracks.filter((t) => t.type === 'audio').length} audio tracks
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-gray-400 text-[10px] font-mono">
+            {Math.floor(playhead / 60)}:{Math.floor(playhead % 60).toString().padStart(2, '0')}:{Math.floor((playhead % 1) * fps).toString().padStart(2, '0')}
+          </span>
+          <div className="w-px h-4 bg-gray-600" />
+          <button
+            onClick={() => setZoom((z) => Math.max(0.1, z / 1.2))}
+            className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded"
+          >
+            −
+          </button>
+          <span className="text-gray-400 text-[10px] w-10 text-center">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            onClick={() => setZoom((z) => Math.min(10, z * 1.2))}
+            className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded"
+          >
+            +
+          </button>
+          <button
+            onClick={() => { setZoom(1); setScrollX(0); }}
+            className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-white text-[10px] rounded"
+          >
+            Fit
+          </button>
+        </div>
+      </div>
+
+      {/* Timeline area */}
+      <div
+        ref={timelineRef}
+        className="relative overflow-hidden cursor-crosshair"
+        style={{ height: timelineHeight }}
+        onClick={handleTimelineClick}
+        onWheel={handleWheel}
+      >
+        {/* Time ruler background */}
+        <div
+          className="absolute left-0 right-0 top-0 border-b border-gray-700"
+          style={{
+            height: RULER_HEIGHT,
+            backgroundColor: '#202025',
+            marginLeft: TRACK_CONTROL_WIDTH,
+          }}
+        >
+          {renderTimeRuler()}
+        </div>
+
+        {/* Track controls background */}
+        <div
+          className="absolute left-0 top-0 bottom-0 border-r border-gray-700"
+          style={{ width: TRACK_CONTROL_WIDTH, backgroundColor: '#1f1f23' }}
+        />
+
+        {/* Tracks */}
+        {renderTracks()}
+        {renderTrackControls()}
+
+        {/* Playhead */}
+        <div
+          className="absolute top-0 bottom-0 z-20 pointer-events-none"
+          style={{
+            left: TRACK_CONTROL_WIDTH + playhead * pixelsPerSecond - scrollX,
+          }}
+        >
+          {/* Playhead line */}
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-red-500"
+            style={{ boxShadow: '0 0 4px rgba(239, 68, 68, 0.5)' }}
+          />
+          {/* Playhead head */}
+          <div
+            className="absolute -top-0 -left-2 w-4 h-4 bg-red-500 cursor-ew-resize pointer-events-auto"
+            style={{
+              clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
+            }}
+            onMouseDown={handlePlayheadMouseDown}
+          />
+        </div>
+
+        {/* Left border for track controls area */}
+        <div
+          className="absolute top-0 bottom-0 w-px bg-gray-600"
+          style={{ left: TRACK_CONTROL_WIDTH }}
+        />
+      </div>
+
+      {/* Status bar */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#252528] border-t border-gray-700 text-[10px] text-gray-500">
+        <span>Ctrl+Scroll to zoom • Scroll to pan • Click timeline to seek</span>
+        <span>
+          Duration: {totalDuration.toFixed(1)}s | {fps} fps
+        </span>
+      </div>
+    </div>
+  );
+}

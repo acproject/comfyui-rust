@@ -51,6 +51,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   custom: '#8b6bbf',
   whatdreamscost: '#1e88e5',
   h3: '#ff7043',
+  'video/edit': '#e91e63',
   _default: '#4a5568',
 };
 

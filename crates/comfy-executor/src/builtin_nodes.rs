@@ -280,6 +280,13 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     crate::mask::register_mask_nodes(registry);
     crate::prompt_relay::register_prompt_relay_nodes(registry);
     crate::triposplat::register_triposplat_nodes(registry);
+
+    // Video editing nodes (Premiere-like timeline editing)
+    register_video_edit(registry);
+    register_video_concat(registry);
+    register_video_mix_audio(registry);
+    register_video_replace_audio(registry);
+    register_video_timeline(registry);
 }
 
 fn resolve_model_path(model_type: &str, filename: &str) -> String {
@@ -9030,18 +9037,6 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
         input_types: NodeInputTypes {
             required: {
                 let mut m = HashMap::new();
-                m.insert("image".to_string(), InputTypeSpec {
-                    type_name: "IMAGE".to_string(),
-                    extra: HashMap::new(),
-                });
-                m
-            },
-            optional: {
-                let mut m = HashMap::new();
-                m.insert("video".to_string(), InputTypeSpec {
-                    type_name: "VIDEO".to_string(),
-                    extra: HashMap::new(),
-                });
                 m.insert("text_prompt".to_string(), InputTypeSpec {
                     type_name: "STRING".to_string(),
                     extra: {
@@ -9049,6 +9044,18 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
                         e.insert("multiline".to_string(), json!(true));
                         e
                     },
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
                 });
                 m.insert("parse_sfx".to_string(), InputTypeSpec {
                     type_name: "BOOLEAN".to_string(),
@@ -9092,11 +9099,12 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
     };
 
     registry.register(class_def, Arc::new(|ctx, _node, node_id| {
-        let image_val = ctx.resolve_input(node_id, "image").unwrap_or_else(|_| json!(null));
+        let image_val = ctx.resolve_input(node_id, "image").ok();
         let video_val = ctx.resolve_input(node_id, "video").ok();
         let text_prompt = ctx.resolve_input(node_id, "text_prompt")
             .ok()
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
         let parse_sfx = ctx.resolve_input(node_id, "parse_sfx")
             .ok()
             .and_then(|v| v.as_bool())
@@ -9110,36 +9118,45 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| "http://127.0.0.1:8998".to_string());
 
+        let progress_cb = ctx.progress_callback();
+        let nid = node_id.to_string();
+        let pid = ctx.prompt_id().to_string();
+
         Box::pin(async move {
-            use comfy_inference::{FlashAttnBackend, FlashAttnConfig, ContextIrParams, H3Context, InferenceBackend};
+            use comfy_inference::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, ContextIrParams, H3Context, InferenceBackend};
 
             let config = FlashAttnConfig::new(bridge_url).with_timeout(60);
-            let backend = FlashAttnBackend::new(config);
+            let mut backend = FlashAttnBackend::new(config);
 
-            let sd_image = parse_sd_image_from_value(&image_val);
-            let sd_video = video_val.and_then(|v| parse_sd_video_from_value(&v));
-
-            if sd_image.is_none() && sd_video.is_none() {
-                return Err(ExecutorError::NodeExecutionFailed {
-                    node_id: node_id.to_string(),
-                    message: "H3ContextIR requires either image or video input".to_string(),
+            if let Some(cb) = progress_cb {
+                let nid2 = nid.clone();
+                let pid2 = pid.clone();
+                let flash_cb: FlashProgressCallback = Arc::new(move |step, total, _phase, _msg| {
+                    cb(&pid2, &nid2, step as f64, total as f64);
                 });
+                backend = backend.with_progress_callback(flash_cb);
             }
+
+            let sd_image = image_val.and_then(|v| parse_sd_image_from_value(&v));
+            let sd_video = video_val.and_then(|v| parse_sd_video_from_value(&v));
 
             let cir_params = if let Some(img) = sd_image {
                 let mut p = ContextIrParams::from_image(img);
                 p.parse_sfx = parse_sfx;
                 p.parse_bgm = parse_bgm;
-                p.user_prompt = text_prompt;
+                p.user_prompt = Some(text_prompt);
                 p
             } else if let Some(vid) = sd_video {
                 let mut p = ContextIrParams::from_video(vid);
                 p.parse_sfx = parse_sfx;
                 p.parse_bgm = parse_bgm;
-                p.user_prompt = text_prompt;
+                p.user_prompt = Some(text_prompt);
                 p
             } else {
-                unreachable!()
+                let mut p = ContextIrParams::from_text(text_prompt);
+                p.parse_sfx = parse_sfx;
+                p.parse_bgm = parse_bgm;
+                p
             };
 
             let context: H3Context = backend.context_ir(cir_params)
@@ -9307,9 +9324,9 @@ fn register_h3_director(registry: &mut NodeRegistry) {
             },
             hidden: HashMap::new(),
         },
-        output_types: vec![IoType::Video],
-        output_names: vec!["VIDEO".to_string()],
-        output_is_list: vec![false],
+        output_types: vec![IoType::Video, IoType::Audio, IoType::Float],
+        output_names: vec!["VIDEO".to_string(), "AUDIO".to_string(), "DURATION".to_string()],
+        output_is_list: vec![false, false, false],
         is_output_node: true,
         has_intermediate_output: false,
         is_changed: None,
@@ -9375,11 +9392,26 @@ fn register_h3_director(registry: &mut NodeRegistry) {
         let ref_image_val = ctx.resolve_input(node_id, "reference_image").ok();
         let ref_video_val = ctx.resolve_input(node_id, "reference_video").ok();
 
+        // Get progress callback from context
+        let progress_cb = ctx.progress_callback();
+        let nid = node_id.to_string();
+        let pid = ctx.prompt_id().to_string();
+
         Box::pin(async move {
-            use comfy_inference::{FlashAttnBackend, FlashAttnConfig, H3Params, H3Mode, H3Context, InferenceBackend};
+            use comfy_inference::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, H3Params, H3Mode, H3Context, InferenceBackend};
 
             let config = FlashAttnConfig::new(bridge_url).with_timeout(900);
-            let backend = FlashAttnBackend::new(config);
+            let mut backend = FlashAttnBackend::new(config);
+
+            // Wire progress callback: convert executor's ProgressCallback to FlashProgressCallback
+            if let Some(cb) = progress_cb {
+                let nid2 = nid.clone();
+                let pid2 = pid.clone();
+                let flash_cb: FlashProgressCallback = Arc::new(move |step, total, _phase, _msg| {
+                    cb(&pid2, &nid2, step as f64, total as f64);
+                });
+                backend = backend.with_progress_callback(flash_cb);
+            }
 
             let mode = match mode_str.as_str() {
                 "i2va" => H3Mode::I2VA,
@@ -9440,18 +9472,34 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                     message: format!("H3 generation failed: {}", e),
                 })?;
 
-            let val = serde_json::to_value(&video).map_err(|e| ExecutorError::NodeExecutionFailed {
+            let duration_sec = video.frames.len() as f64 / video.fps as f64;
+
+            // Serialize video (frames only, without audio for VIDEO output)
+            let video_val = serde_json::to_value(&comfy_inference::SdVideo::new_without_audio(
+                video.frames.clone(), video.fps
+            )).map_err(|e| ExecutorError::NodeExecutionFailed {
                 node_id: node_id.to_string(),
                 message: format!("Failed to serialize video: {}", e),
             })?;
 
-            Ok(vec![val])
+            // Serialize audio separately for AUDIO output
+            let audio_val = match &video.audio {
+                Some(audio) => serde_json::to_value(audio).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("Failed to serialize audio: {}", e),
+                })?,
+                None => serde_json::Value::Null,
+            };
+
+            // Duration as FLOAT
+            let duration_val = json!(duration_sec);
+
+            Ok(vec![video_val, audio_val, duration_val])
         })
     }));
 }
 
 // Helper functions for parsing SdImage/SdVideo from JSON values
-#[cfg(feature = "flash-attn")]
 fn parse_sd_image_from_value(val: &serde_json::Value) -> Option<comfy_inference::SdImage> {
     use comfy_inference::SdImage;
     if let Ok(img) = serde_json::from_value::<SdImage>(val.clone()) {
@@ -9467,7 +9515,6 @@ fn parse_sd_image_from_value(val: &serde_json::Value) -> Option<comfy_inference:
     None
 }
 
-#[cfg(feature = "flash-attn")]
 fn parse_sd_video_from_value(val: &serde_json::Value) -> Option<comfy_inference::SdVideo> {
     use comfy_inference::SdVideo;
     if let Ok(vid) = serde_json::from_value::<SdVideo>(val.clone()) {
@@ -9486,4 +9533,897 @@ fn parse_sd_video_from_value(val: &serde_json::Value) -> Option<comfy_inference:
         }
     }
     None
+}
+
+fn parse_sd_audio_from_value(val: &serde_json::Value) -> Option<comfy_inference::SdAudio> {
+    use comfy_inference::SdAudio;
+    if let Ok(audio) = serde_json::from_value::<SdAudio>(val.clone()) {
+        return Some(audio);
+    }
+    None
+}
+
+// ========== 视频编辑节点 (Video Editing Nodes) ==========
+
+fn register_video_edit(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VideoEdit".to_string(),
+        display_name: "Video Edit (Trim/Volume/Fade)".to_string(),
+        category: "video/edit".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("start_time".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m.insert("end_time".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m.insert("volume".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(1.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("max".to_string(), json!(5.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m.insert("fade_in".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m.insert("fade_out".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video, IoType::Audio, IoType::Float],
+        output_names: vec!["VIDEO".to_string(), "AUDIO".to_string(), "DURATION".to_string()],
+        output_is_list: vec![false, false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "edit_video".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let video_val = ctx.resolve_input(node_id, "video").unwrap_or_else(|_| json!(null));
+        let start_time = ctx.resolve_input(node_id, "start_time")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        let end_time = ctx.resolve_input(node_id, "end_time")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        let volume = ctx.resolve_input(node_id, "volume")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+        let fade_in = ctx.resolve_input(node_id, "fade_in")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        let fade_out = ctx.resolve_input(node_id, "fade_out")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+
+        Box::pin(async move {
+            let mut video = parse_sd_video_from_value(&video_val)
+                .ok_or_else(|| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "Failed to parse input video".to_string(),
+                })?;
+
+            // Trim if end_time > 0
+            let total_dur = video.duration_sec();
+            let end = if end_time > 0.0 { end_time.min(total_dur) } else { total_dur };
+            if start_time > 0.0 || end < total_dur {
+                video = video.trim(start_time, end);
+            }
+
+            // Volume adjustment
+            if (volume - 1.0).abs() > 0.001 {
+                video = video.adjust_volume(volume);
+            }
+
+            // Fade effects
+            if fade_in > 0.0 {
+                video = video.audio_fade_in(fade_in);
+            }
+            if fade_out > 0.0 {
+                video = video.audio_fade_out(fade_out);
+            }
+
+            let duration = video.duration_sec();
+
+            // Serialize video (with audio)
+            let video_out = serde_json::to_value(&video).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("Failed to serialize video: {}", e),
+            })?;
+
+            // Serialize audio separately
+            let audio_out = match &video.audio {
+                Some(a) => serde_json::to_value(a).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("Failed to serialize audio: {}", e),
+                })?,
+                None => serde_json::Value::Null,
+            };
+
+            Ok(vec![video_out, audio_out, json!(duration)])
+        })
+    }));
+}
+
+fn register_video_concat(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VideoConcat".to_string(),
+        display_name: "Video Concat (Merge Clips)".to_string(),
+        category: "video/edit".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("video1".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("video2".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("video3".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("video4".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("crossfade".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video, IoType::Audio, IoType::Float],
+        output_names: vec!["VIDEO".to_string(), "AUDIO".to_string(), "DURATION".to_string()],
+        output_is_list: vec![false, false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "concat_videos".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let v1_val = ctx.resolve_input(node_id, "video1").unwrap_or_else(|_| json!(null));
+        let v2_val = ctx.resolve_input(node_id, "video2").ok();
+        let v3_val = ctx.resolve_input(node_id, "video3").ok();
+        let v4_val = ctx.resolve_input(node_id, "video4").ok();
+        let _crossfade = ctx.resolve_input(node_id, "crossfade")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+
+        Box::pin(async move {
+            let v1 = parse_sd_video_from_value(&v1_val)
+                .ok_or_else(|| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "Failed to parse video1".to_string(),
+                })?;
+
+            let mut result = v1;
+
+            for v_val in [v2_val, v3_val, v4_val].iter() {
+                if let Some(val) = v_val {
+                    if let Some(v) = parse_sd_video_from_value(val) {
+                        result = result.concat(&v);
+                    }
+                }
+            }
+
+            let duration = result.duration_sec();
+
+            let video_out = serde_json::to_value(&result).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("Failed to serialize video: {}", e),
+            })?;
+
+            let audio_out = match &result.audio {
+                Some(a) => serde_json::to_value(a).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("Failed to serialize audio: {}", e),
+                })?,
+                None => serde_json::Value::Null,
+            };
+
+            Ok(vec![video_out, audio_out, json!(duration)])
+        })
+    }));
+}
+
+fn register_video_mix_audio(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VideoMixAudio".to_string(),
+        display_name: "Video Mix Audio (Add BGM)".to_string(),
+        category: "video/edit".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("audio".to_string(), InputTypeSpec {
+                    type_name: "AUDIO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("audio_volume".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(1.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("max".to_string(), json!(5.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m.insert("video_volume".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(1.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("max".to_string(), json!(5.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m.insert("loop_audio".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(false));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video, IoType::Audio],
+        output_names: vec!["VIDEO".to_string(), "AUDIO".to_string()],
+        output_is_list: vec![false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "mix_audio".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let video_val = ctx.resolve_input(node_id, "video").unwrap_or_else(|_| json!(null));
+        let audio_val = ctx.resolve_input(node_id, "audio").unwrap_or_else(|_| json!(null));
+        let audio_volume = ctx.resolve_input(node_id, "audio_volume")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+        let video_volume = ctx.resolve_input(node_id, "video_volume")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+        let loop_audio = ctx.resolve_input(node_id, "loop_audio")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        Box::pin(async move {
+            let mut video = parse_sd_video_from_value(&video_val)
+                .ok_or_else(|| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "Failed to parse input video".to_string(),
+                })?;
+
+            let mut bgm = parse_sd_audio_from_value(&audio_val)
+                .ok_or_else(|| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "Failed to parse input audio".to_string(),
+                })?;
+
+            // Adjust original video volume
+            if (video_volume - 1.0).abs() > 0.001 {
+                video = video.adjust_volume(video_volume);
+            }
+
+            // Prepare BGM: loop or trim to match video duration
+            let video_dur = video.duration_sec();
+            let bgm_dur = bgm.duration_sec();
+
+            if loop_audio && bgm_dur < video_dur {
+                // Loop audio to match video length
+                let mut looped = bgm.clone();
+                while looped.duration_sec() < video_dur {
+                    looped = looped.concat(&bgm);
+                }
+                bgm = looped.trim(0.0, video_dur);
+            } else if bgm_dur > video_dur {
+                bgm = bgm.trim(0.0, video_dur);
+            }
+
+            // Mix BGM into video
+            video = video.mix_audio(&bgm, audio_volume);
+
+            let video_out = serde_json::to_value(&video).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("Failed to serialize video: {}", e),
+            })?;
+
+            let audio_out = match &video.audio {
+                Some(a) => serde_json::to_value(a).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("Failed to serialize audio: {}", e),
+                })?,
+                None => serde_json::Value::Null,
+            };
+
+            Ok(vec![video_out, audio_out])
+        })
+    }));
+}
+
+fn register_video_replace_audio(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VideoReplaceAudio".to_string(),
+        display_name: "Video Replace Audio".to_string(),
+        category: "video/edit".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("video".to_string(), InputTypeSpec {
+                    type_name: "VIDEO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("audio".to_string(), InputTypeSpec {
+                    type_name: "AUDIO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("volume".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(1.0));
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("max".to_string(), json!(5.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video, IoType::Audio],
+        output_names: vec!["VIDEO".to_string(), "AUDIO".to_string()],
+        output_is_list: vec![false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "replace_audio".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let video_val = ctx.resolve_input(node_id, "video").unwrap_or_else(|_| json!(null));
+        let audio_val = ctx.resolve_input(node_id, "audio").ok();
+        let volume = ctx.resolve_input(node_id, "volume")
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+
+        Box::pin(async move {
+            let video = parse_sd_video_from_value(&video_val)
+                .ok_or_else(|| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: "Failed to parse input video".to_string(),
+                })?;
+
+            let new_audio = audio_val.and_then(|v| parse_sd_audio_from_value(&v))
+                .map(|a| a.adjust_volume(volume));
+
+            let result = video.replace_audio(new_audio);
+
+            let video_out = serde_json::to_value(&result).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("Failed to serialize video: {}", e),
+            })?;
+
+            let audio_out = match &result.audio {
+                Some(a) => serde_json::to_value(a).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("Failed to serialize audio: {}", e),
+                })?,
+                None => serde_json::Value::Null,
+            };
+
+            Ok(vec![video_out, audio_out])
+        })
+    }));
+}
+
+// ========== Premiere-style Multi-Track Video Timeline ==========
+
+fn register_video_timeline(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "VideoTimeline".to_string(),
+        display_name: "Video Timeline (Multi-Track Editor)".to_string(),
+        category: "video/edit".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("fps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(24));
+                        e.insert("min".to_string(), json!(1));
+                        e.insert("max".to_string(), json!(60));
+                        e
+                    },
+                });
+                m.insert("width".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(848));
+                        e.insert("min".to_string(), json!(64));
+                        e.insert("max".to_string(), json!(4096));
+                        e.insert("step".to_string(), json!(8));
+                        e
+                    },
+                });
+                m.insert("height".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(480));
+                        e.insert("min".to_string(), json!(64));
+                        e.insert("max".to_string(), json!(4096));
+                        e.insert("step".to_string(), json!(8));
+                        e
+                    },
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+
+                // Helper for video track params
+                macro_rules! vtrack {
+                    ($m:expr, $n:expr) => {
+                        $m.insert(format!("v{}_video", $n), InputTypeSpec {
+                            type_name: "VIDEO".to_string(),
+                            extra: HashMap::new(),
+                        });
+                        $m.insert(format!("v{}_start", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0.0)); e.insert("min".to_string(), json!(0.0)); e.insert("step".to_string(), json!(0.1)); e },
+                        });
+                        $m.insert(format!("v{}_in", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0.0)); e.insert("min".to_string(), json!(0.0)); e.insert("step".to_string(), json!(0.1)); e },
+                        });
+                        $m.insert(format!("v{}_out", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0.0)); e.insert("min".to_string(), json!(0.0)); e.insert("step".to_string(), json!(0.1)); e },
+                        });
+                        $m.insert(format!("v{}_opacity", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(1.0)); e.insert("min".to_string(), json!(0.0)); e.insert("max".to_string(), json!(1.0)); e.insert("step".to_string(), json!(0.05)); e },
+                        });
+                    }
+                }
+
+                // Helper for audio track params
+                macro_rules! atrack {
+                    ($m:expr, $n:expr) => {
+                        $m.insert(format!("a{}_audio", $n), InputTypeSpec {
+                            type_name: "AUDIO".to_string(),
+                            extra: HashMap::new(),
+                        });
+                        $m.insert(format!("a{}_start", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0.0)); e.insert("min".to_string(), json!(0.0)); e.insert("step".to_string(), json!(0.1)); e },
+                        });
+                        $m.insert(format!("a{}_in", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0.0)); e.insert("min".to_string(), json!(0.0)); e.insert("step".to_string(), json!(0.1)); e },
+                        });
+                        $m.insert(format!("a{}_out", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0.0)); e.insert("min".to_string(), json!(0.0)); e.insert("step".to_string(), json!(0.1)); e },
+                        });
+                        $m.insert(format!("a{}_volume", $n), InputTypeSpec {
+                            type_name: "FLOAT".to_string(),
+                            extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(1.0)); e.insert("min".to_string(), json!(0.0)); e.insert("max".to_string(), json!(5.0)); e.insert("step".to_string(), json!(0.1)); e },
+                        });
+                    }
+                }
+
+                vtrack!(m, "1");
+                vtrack!(m, "2");
+                vtrack!(m, "3");
+                vtrack!(m, "4");
+
+                atrack!(m, "1");
+                atrack!(m, "2");
+                atrack!(m, "3");
+                atrack!(m, "4");
+
+                m.insert("bg_r".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0)); e.insert("min".to_string(), json!(0)); e.insert("max".to_string(), json!(255)); e },
+                });
+                m.insert("bg_g".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0)); e.insert("min".to_string(), json!(0)); e.insert("max".to_string(), json!(255)); e },
+                });
+                m.insert("bg_b".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0)); e.insert("min".to_string(), json!(0)); e.insert("max".to_string(), json!(255)); e },
+                });
+
+                m.insert("total_duration".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: { let mut e = HashMap::new(); e.insert("default".to_string(), json!(0.0)); e.insert("min".to_string(), json!(0.0)); e.insert("step".to_string(), json!(0.1)); e },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Video, IoType::Audio, IoType::Float],
+        output_names: vec!["VIDEO".to_string(), "AUDIO".to_string(), "DURATION".to_string()],
+        output_is_list: vec![false, false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "render_timeline".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        use comfy_inference::{SdImage, SdVideo, SdAudio};
+
+        #[derive(Clone)]
+        struct VClipData {
+            frames: Vec<SdImage>,
+            src_fps: i32,
+            start_frame: i64,
+            src_in_frame: i64,
+            src_out_frame: i64,
+            opacity: f32,
+            total_src_frames: usize,
+        }
+
+        #[derive(Clone)]
+        struct AClipData {
+            samples: Vec<f32>,
+            sample_rate: u32,
+            channels: u32,
+            start_sample: i64,
+            src_in_sample: i64,
+            src_out_sample: i64,
+            volume: f32,
+        }
+
+        let node_id_str = node_id.to_string();
+
+        let fps = ctx.resolve_input(node_id, "fps")
+            .ok().and_then(|v| v.as_i64()).unwrap_or(24) as i32;
+        let width = ctx.resolve_input(node_id, "width")
+            .ok().and_then(|v| v.as_i64()).unwrap_or(848) as u32;
+        let height = ctx.resolve_input(node_id, "height")
+            .ok().and_then(|v| v.as_i64()).unwrap_or(480) as u32;
+        let bg_r = ctx.resolve_input(node_id, "bg_r")
+            .ok().and_then(|v| v.as_i64()).unwrap_or(0) as u8;
+        let bg_g = ctx.resolve_input(node_id, "bg_g")
+            .ok().and_then(|v| v.as_i64()).unwrap_or(0) as u8;
+        let bg_b = ctx.resolve_input(node_id, "bg_b")
+            .ok().and_then(|v| v.as_i64()).unwrap_or(0) as u8;
+        let total_duration_override = ctx.resolve_input(node_id, "total_duration")
+            .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+
+        // Parse all video clips outside async block
+        let mut vclips: Vec<VClipData> = Vec::new();
+        for n in &["1", "2", "3", "4"] {
+            let video_key = format!("v{}_video", n);
+            let start_key = format!("v{}_start", n);
+            let in_key = format!("v{}_in", n);
+            let out_key = format!("v{}_out", n);
+            let op_key = format!("v{}_opacity", n);
+
+            let video_val = match ctx.resolve_input(node_id, &video_key) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let video = match parse_sd_video_from_value(&video_val) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            let start = ctx.resolve_input(node_id, &start_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let in_p = ctx.resolve_input(node_id, &in_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let out_p = ctx.resolve_input(node_id, &out_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let opacity = ctx.resolve_input(node_id, &op_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+
+            let total_frames_count = video.frames.len();
+            let src_in = ((in_p * video.fps as f32) as i64).max(0).min(total_frames_count as i64);
+            let src_out = if out_p > 0.0 {
+                ((out_p * video.fps as f32) as i64).max(0).min(total_frames_count as i64)
+            } else {
+                total_frames_count as i64
+            };
+            if src_out <= src_in { continue; }
+
+            let start_frame = (start * fps as f32) as i64;
+            let frames: Vec<SdImage> = video.frames.iter()
+                .map(|f| if f.width == width && f.height == height { f.clone() } else { f.resize(width, height) })
+                .collect();
+
+            vclips.push(VClipData {
+                frames,
+                src_fps: video.fps,
+                start_frame,
+                src_in_frame: src_in,
+                src_out_frame: src_out,
+                opacity: opacity.clamp(0.0, 1.0),
+                total_src_frames: total_frames_count,
+            });
+        }
+
+        // Parse all audio clips outside async block
+        let mut aclips: Vec<AClipData> = Vec::new();
+        for n in &["1", "2", "3", "4"] {
+            let audio_key = format!("a{}_audio", n);
+            let video_key = format!("v{}_video", n);
+            let start_key = format!("a{}_start", n);
+            let in_key = format!("a{}_in", n);
+            let out_key = format!("a{}_out", n);
+            let vol_key = format!("a{}_volume", n);
+
+            let audio_val = ctx.resolve_input(node_id, &audio_key).ok();
+            let parsed_audio = audio_val.and_then(|v| parse_sd_audio_from_value(&v));
+
+            let (samples, sr, ch) = if let Some(a) = parsed_audio {
+                (a.samples, a.sample_rate, a.channels)
+            } else {
+                // Fallback: use audio from same-numbered video track
+                let video_val = match ctx.resolve_input(node_id, &video_key) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let video = match parse_sd_video_from_value(&video_val) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                match video.audio {
+                    Some(a) => (a.samples, a.sample_rate, a.channels),
+                    None => continue,
+                }
+            };
+
+            let start = ctx.resolve_input(node_id, &start_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let in_p = ctx.resolve_input(node_id, &in_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let out_p = ctx.resolve_input(node_id, &out_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let volume = ctx.resolve_input(node_id, &vol_key)
+                .ok().and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+
+            let total_samples_count = samples.len() as i64;
+            let src_in = ((in_p * sr as f32 * ch as f32) as i64).max(0).min(total_samples_count);
+            let src_out = if out_p > 0.0 {
+                ((out_p * sr as f32 * ch as f32) as i64).max(0).min(total_samples_count)
+            } else {
+                total_samples_count
+            };
+            if src_out <= src_in { continue; }
+
+            let out_sr = 44100u32;
+            let out_ch = 2u32;
+            let start_sample = (start * out_sr as f32 * out_ch as f32) as i64;
+
+            aclips.push(AClipData {
+                samples,
+                sample_rate: sr,
+                channels: ch,
+                start_sample,
+                src_in_sample: src_in,
+                src_out_sample: src_out,
+                volume: volume.max(0.0),
+            });
+        }
+
+        Box::pin(async move {
+            let auto_frames = {
+                let mut max_end = 0i64;
+                for c in &vclips {
+                    let src_dur_frames = c.src_out_frame - c.src_in_frame;
+                    let effective_dur = (src_dur_frames as f64 * fps as f64 / c.src_fps as f64) as i64;
+                    let end = c.start_frame + effective_dur;
+                    if end > max_end { max_end = end; }
+                }
+                for c in &aclips {
+                    let src_dur_samples = c.src_out_sample - c.src_in_sample;
+                    let src_dur_sec = src_dur_samples as f32 / (c.sample_rate as f32 * c.channels as f32);
+                    let end_sample = c.start_sample + (src_dur_sec * 44100.0 * 2.0) as i64;
+                    let end_frame = (end_sample as f64 / (44100.0 * 2.0 / fps as f64)) as i64;
+                    if end_frame > max_end { max_end = end_frame; }
+                }
+                max_end
+            };
+
+            let total_frames = if total_duration_override > 0.0 {
+                (total_duration_override * fps as f32) as i64
+            } else {
+                auto_frames
+            };
+
+            if total_frames <= 0 {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id_str.clone(),
+                    message: "Timeline has no clips or duration is zero".to_string(),
+                });
+            }
+
+            let total_duration = total_frames as f32 / fps as f32;
+
+            let bg = SdImage::solid(width, height, bg_r, bg_g, bg_b);
+            let mut output_frames: Vec<SdImage> = Vec::with_capacity(total_frames as usize);
+
+            for frame_idx in 0..total_frames {
+                let mut canvas = bg.clone();
+                for clip in &vclips {
+                    let timeline_t = frame_idx - clip.start_frame;
+                    if timeline_t < 0 { continue; }
+                    let src_frame_pos = timeline_t as f64 * clip.src_fps as f64 / fps as f64;
+                    let src_idx = clip.src_in_frame + src_frame_pos as i64;
+                    if src_idx >= clip.src_out_frame || src_idx < 0 { continue; }
+                    let src_frame_idx = src_idx.min(clip.total_src_frames as i64 - 1).max(0) as usize;
+                    let src_frame = &clip.frames[src_frame_idx];
+                    canvas = src_frame.blend_over(&canvas, clip.opacity);
+                }
+                output_frames.push(canvas);
+            }
+
+            let out_sr = 44100u32;
+            let out_ch = 2u32;
+            let total_samples = (total_duration * out_sr as f32 * out_ch as f32) as usize;
+            let mut mixed = vec![0.0f32; total_samples];
+
+            for clip in &aclips {
+                let start_idx = clip.src_in_sample as usize;
+                let end_idx = clip.src_out_sample as usize;
+                if start_idx >= clip.samples.len() { continue; }
+                let end_idx = end_idx.min(clip.samples.len());
+                let trimmed = &clip.samples[start_idx..end_idx];
+                if trimmed.is_empty() { continue; }
+
+                let src_duration = trimmed.len() as f32 / (clip.sample_rate as f32 * clip.channels as f32);
+                let tgt_samples_count = (src_duration * out_sr as f32 * out_ch as f32) as usize;
+                let mut resampled = vec![0.0f32; tgt_samples_count];
+
+                for i in 0..tgt_samples_count {
+                    let src_pos = i as f64 * trimmed.len() as f64 / tgt_samples_count as f64;
+                    let src_idx_p = src_pos.floor() as usize;
+                    let src_idx_next = (src_idx_p + 1).min(trimmed.len() - 1);
+                    let frac = src_pos - src_idx_p as f64;
+                    let s0 = trimmed[src_idx_p];
+                    let s1 = trimmed[src_idx_next];
+                    resampled[i] = (s0 + (s1 - s0) * frac as f32) * clip.volume;
+                }
+
+                let start_s = clip.start_sample as usize;
+                for (i, &s) in resampled.iter().enumerate() {
+                    let pos = start_s + i;
+                    if pos < mixed.len() {
+                        mixed[pos] = (mixed[pos] + s).clamp(-1.0, 1.0);
+                    }
+                }
+            }
+
+            let has_audio = mixed.iter().any(|&s| s.abs() > 0.0001);
+            let output_audio = if has_audio {
+                Some(SdAudio::new(mixed, out_sr, out_ch))
+            } else {
+                None
+            };
+
+            let output_video = SdVideo::new(output_frames, fps, output_audio.clone());
+            let duration = output_video.duration_sec();
+
+            let video_out = serde_json::to_value(&output_video).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id_str.clone(),
+                message: format!("Failed to serialize video: {}", e),
+            })?;
+
+            let audio_out = match &output_audio {
+                Some(a) => serde_json::to_value(a).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: node_id_str,
+                    message: format!("Failed to serialize audio: {}", e),
+                })?,
+                None => serde_json::Value::Null,
+            };
+
+            Ok(vec![video_out, audio_out, json!(duration)])
+        })
+    }));
 }

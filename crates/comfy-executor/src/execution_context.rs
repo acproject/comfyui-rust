@@ -5,12 +5,15 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub type ProgressCallback = Arc<dyn Fn(&str, &str, f64, f64) + Send + Sync>;
+
 pub struct ExecutionContext {
     outputs: HashMap<String, NodeOutput>,
     dynprompt: Arc<DynamicPrompt>,
     backend: Arc<dyn InferenceBackend>,
     extra_data: HashMap<String, Value>,
     prompt_id: String,
+    progress_callback: Option<ProgressCallback>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -54,12 +57,30 @@ impl ExecutionContext {
             backend,
             extra_data: HashMap::new(),
             prompt_id: prompt_id.into(),
+            progress_callback: None,
         }
     }
 
     pub fn with_extra_data(mut self, extra: HashMap<String, Value>) -> Self {
         self.extra_data = extra;
         self
+    }
+
+    pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
+        self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Report generation progress (value, max) for the current node
+    pub fn report_progress(&self, node_id: &str, value: f64, max: f64) {
+        if let Some(ref cb) = self.progress_callback {
+            cb(&self.prompt_id, node_id, value, max);
+        }
+    }
+
+    /// Get a clone of the progress callback (for passing to backends)
+    pub fn progress_callback(&self) -> Option<ProgressCallback> {
+        self.progress_callback.clone()
     }
 
     pub fn set_output(&mut self, node_id: impl Into<String>, output: NodeOutput) {

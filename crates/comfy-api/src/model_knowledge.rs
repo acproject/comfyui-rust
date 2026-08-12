@@ -1434,6 +1434,334 @@ pub fn get_workflow_templates() -> Vec<WorkflowTemplate> {
                 TemplateConnection { source: "23".into(), source_handle: "Audio".into(), target: "26".into(), target_handle: "audio".into() },
             ],
         },
+        WorkflowTemplate {
+            id: "minimax_h3_t2va".into(),
+            name: "MiniMax-H3 文生音视频".into(),
+            description: "MiniMax-H3 文本到音视频生成，包含 Context-IR 多模态解析、音视频生成和音频/视频输出".into(),
+            category: "video".into(),
+            nodes: vec![
+                TemplateNode {
+                    id: "1".into(),
+                    class_type: "H3ContextIR".into(),
+                    title: "H3 Context-IR".into(),
+                    x: 50,
+                    y: 100,
+                    inputs: serde_json::json!({
+                        "text_prompt": "A cinematic scene of a serene mountain landscape at golden hour, with gentle wind rustling through pine trees and a distant stream flowing",
+                        "parse_sfx": true,
+                        "parse_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                TemplateNode {
+                    id: "2".into(),
+                    class_type: "H3Director".into(),
+                    title: "H3 Director".into(),
+                    x: 400,
+                    y: 100,
+                    inputs: serde_json::json!({
+                        "prompt": "",
+                        "mode": "t2va",
+                        "width": 848,
+                        "height": 480,
+                        "num_frames": 123,
+                        "steps": 50,
+                        "cfg": 7.0,
+                        "seed": 42,
+                        "negative_prompt": "low quality, blurry, distorted, ugly, deformed",
+                        "fps": 24,
+                        "generate_sfx": true,
+                        "generate_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                TemplateNode {
+                    id: "3".into(),
+                    class_type: "SaveVideoWithAudio".into(),
+                    title: "Save Video with Audio".into(),
+                    x: 750,
+                    y: 50,
+                    inputs: serde_json::json!({
+                        "filename_prefix": "H3_T2VA",
+                        "format": "mp4"
+                    }),
+                },
+                TemplateNode {
+                    id: "4".into(),
+                    class_type: "SaveAudio".into(),
+                    title: "Save Audio".into(),
+                    x: 750,
+                    y: 250,
+                    inputs: serde_json::json!({
+                        "filename_prefix": "H3_T2VA_audio",
+                        "format": "wav"
+                    }),
+                },
+            ],
+            connections: vec![
+                TemplateConnection { source: "1".into(), source_handle: "H3_CONTEXT".into(), target: "2".into(), target_handle: "h3_context".into() },
+                TemplateConnection { source: "1".into(), source_handle: "formatted_prompt".into(), target: "2".into(), target_handle: "prompt".into() },
+                TemplateConnection { source: "2".into(), source_handle: "VIDEO".into(), target: "3".into(), target_handle: "video".into() },
+                TemplateConnection { source: "2".into(), source_handle: "AUDIO".into(), target: "3".into(), target_handle: "audio".into() },
+                TemplateConnection { source: "2".into(), source_handle: "AUDIO".into(), target: "4".into(), target_handle: "audio".into() },
+            ],
+        },
+        WorkflowTemplate {
+            id: "minimax_h3_i2va".into(),
+            name: "MiniMax-H3 图生音视频".into(),
+            description: "MiniMax-H3 图片+文本到音视频生成，使用首帧图片引导视频生成".into(),
+            category: "video".into(),
+            nodes: vec![
+                TemplateNode {
+                    id: "1".into(),
+                    class_type: "LoadImage".into(),
+                    title: "Load Reference Image".into(),
+                    x: 50,
+                    y: 100,
+                    inputs: serde_json::json!({"image": ""}),
+                },
+                TemplateNode {
+                    id: "2".into(),
+                    class_type: "H3ContextIR".into(),
+                    title: "H3 Context-IR".into(),
+                    x: 350,
+                    y: 100,
+                    inputs: serde_json::json!({
+                        "text_prompt": "The scene comes alive with subtle motion, gentle camera movement, and immersive ambient sounds",
+                        "parse_sfx": true,
+                        "parse_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                TemplateNode {
+                    id: "3".into(),
+                    class_type: "H3Director".into(),
+                    title: "H3 Director".into(),
+                    x: 700,
+                    y: 100,
+                    inputs: serde_json::json!({
+                        "prompt": "",
+                        "mode": "i2va",
+                        "width": 848,
+                        "height": 480,
+                        "num_frames": 123,
+                        "steps": 50,
+                        "cfg": 7.0,
+                        "seed": 42,
+                        "negative_prompt": "low quality, blurry, distorted, ugly, deformed",
+                        "fps": 24,
+                        "generate_sfx": true,
+                        "generate_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                TemplateNode {
+                    id: "4".into(),
+                    class_type: "SaveVideoWithAudio".into(),
+                    title: "Save Video with Audio".into(),
+                    x: 1050,
+                    y: 50,
+                    inputs: serde_json::json!({
+                        "filename_prefix": "H3_I2VA",
+                        "format": "mp4"
+                    }),
+                },
+                TemplateNode {
+                    id: "5".into(),
+                    class_type: "SaveAudio".into(),
+                    title: "Save Audio".into(),
+                    x: 1050,
+                    y: 250,
+                    inputs: serde_json::json!({
+                        "filename_prefix": "H3_I2VA_audio",
+                        "format": "wav"
+                    }),
+                },
+            ],
+            connections: vec![
+                TemplateConnection { source: "1".into(), source_handle: "IMAGE".into(), target: "2".into(), target_handle: "image".into() },
+                TemplateConnection { source: "2".into(), source_handle: "H3_CONTEXT".into(), target: "3".into(), target_handle: "h3_context".into() },
+                TemplateConnection { source: "2".into(), source_handle: "formatted_prompt".into(), target: "3".into(), target_handle: "prompt".into() },
+                TemplateConnection { source: "1".into(), source_handle: "IMAGE".into(), target: "3".into(), target_handle: "reference_image".into() },
+                TemplateConnection { source: "3".into(), source_handle: "VIDEO".into(), target: "4".into(), target_handle: "video".into() },
+                TemplateConnection { source: "3".into(), source_handle: "AUDIO".into(), target: "4".into(), target_handle: "audio".into() },
+                TemplateConnection { source: "3".into(), source_handle: "AUDIO".into(), target: "5".into(), target_handle: "audio".into() },
+            ],
+        },
+        WorkflowTemplate {
+            id: "minimax_h3_timeline".into(),
+            name: "MiniMax-H3 Premiere时间线".into(),
+            description: "Premiere风格多轨时间线：V1主视频 + V2叠加层 + A1原声音频 + A2 BGM。每个轨道支持入点/出点/起始位置/音量/透明度控制。".into(),
+            category: "video".into(),
+            nodes: vec![
+                // H3 生成第一段（主视频）
+                TemplateNode {
+                    id: "1".into(),
+                    class_type: "H3ContextIR".into(),
+                    title: "H3 Context-IR (主视频)".into(),
+                    x: 50,
+                    y: 80,
+                    inputs: serde_json::json!({
+                        "text_prompt": "A cinematic wide shot of a serene mountain landscape at golden hour, gentle wind rustling through pine trees",
+                        "parse_sfx": true,
+                        "parse_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                TemplateNode {
+                    id: "2".into(),
+                    class_type: "H3Director".into(),
+                    title: "H3 Director (主视频)".into(),
+                    x: 400,
+                    y: 80,
+                    inputs: serde_json::json!({
+                        "prompt": "",
+                        "mode": "t2va",
+                        "width": 848,
+                        "height": 480,
+                        "num_frames": 123,
+                        "steps": 50,
+                        "cfg": 7.0,
+                        "seed": 42,
+                        "negative_prompt": "low quality, blurry, distorted, ugly, deformed",
+                        "fps": 24,
+                        "generate_sfx": true,
+                        "generate_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                // H3 生成第二段（叠加/补充）
+                TemplateNode {
+                    id: "3".into(),
+                    class_type: "H3ContextIR".into(),
+                    title: "H3 Context-IR (叠加)".into(),
+                    x: 50,
+                    y: 350,
+                    inputs: serde_json::json!({
+                        "text_prompt": "Close-up shot of flower petals gently falling in slow motion",
+                        "parse_sfx": false,
+                        "parse_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                TemplateNode {
+                    id: "4".into(),
+                    class_type: "H3Director".into(),
+                    title: "H3 Director (叠加)".into(),
+                    x: 400,
+                    y: 350,
+                    inputs: serde_json::json!({
+                        "prompt": "",
+                        "mode": "t2va",
+                        "width": 848,
+                        "height": 480,
+                        "num_frames": 73,
+                        "steps": 50,
+                        "cfg": 7.0,
+                        "seed": 123,
+                        "negative_prompt": "low quality, blurry, distorted, ugly, deformed",
+                        "fps": 24,
+                        "generate_sfx": false,
+                        "generate_bgm": false,
+                        "bridge_url": "http://127.0.0.1:8998"
+                    }),
+                },
+                // 加载 BGM
+                TemplateNode {
+                    id: "5".into(),
+                    class_type: "LoadAudio".into(),
+                    title: "Load BGM".into(),
+                    x: 50,
+                    y: 620,
+                    inputs: serde_json::json!({"audio": ""}),
+                },
+                // Premiere 风格多轨时间线
+                TemplateNode {
+                    id: "6".into(),
+                    class_type: "VideoTimeline".into(),
+                    title: "Video Timeline (多轨编辑器)".into(),
+                    x: 780,
+                    y: 200,
+                    inputs: serde_json::json!({
+                        "fps": 24,
+                        "width": 848,
+                        "height": 480,
+                        // V1: 主视频，放在0秒处
+                        "v1_start": 0.0,
+                        "v1_in": 0.0,
+                        "v1_out": 0.0,
+                        "v1_opacity": 1.0,
+                        // V2: 叠加花瓣视频，放在2秒处，半透明
+                        "v2_start": 2.0,
+                        "v2_in": 0.0,
+                        "v2_out": 0.0,
+                        "v2_opacity": 0.6,
+                        // V3, V4 未使用
+                        "v3_opacity": 1.0,
+                        "v4_opacity": 1.0,
+                        // A1: 主视频原生音频（自动从V1获取）
+                        "a1_start": 0.0,
+                        "a1_in": 0.0,
+                        "a1_out": 0.0,
+                        "a1_volume": 1.0,
+                        // A2: BGM，从0秒开始，音量0.3
+                        "a2_start": 0.0,
+                        "a2_in": 0.0,
+                        "a2_out": 0.0,
+                        "a2_volume": 0.3,
+                        // A3, A4 未使用
+                        "a3_volume": 1.0,
+                        "a4_volume": 1.0,
+                        // 黑色背景
+                        "bg_r": 0,
+                        "bg_g": 0,
+                        "bg_b": 0,
+                        "total_duration": 0.0
+                    }),
+                },
+                // 输出
+                TemplateNode {
+                    id: "7".into(),
+                    class_type: "SaveVideoWithAudio".into(),
+                    title: "Save Final Video".into(),
+                    x: 1200,
+                    y: 100,
+                    inputs: serde_json::json!({
+                        "filename_prefix": "H3_Timeline",
+                        "format": "mp4"
+                    }),
+                },
+                TemplateNode {
+                    id: "8".into(),
+                    class_type: "SaveAudio".into(),
+                    title: "Save Audio Mix".into(),
+                    x: 1200,
+                    y: 350,
+                    inputs: serde_json::json!({
+                        "filename_prefix": "H3_Timeline_audio",
+                        "format": "wav"
+                    }),
+                },
+            ],
+            connections: vec![
+                // 主视频生成链
+                TemplateConnection { source: "1".into(), source_handle: "H3_CONTEXT".into(), target: "2".into(), target_handle: "h3_context".into() },
+                TemplateConnection { source: "1".into(), source_handle: "formatted_prompt".into(), target: "2".into(), target_handle: "prompt".into() },
+                // 叠加视频生成链
+                TemplateConnection { source: "3".into(), source_handle: "H3_CONTEXT".into(), target: "4".into(), target_handle: "h3_context".into() },
+                TemplateConnection { source: "3".into(), source_handle: "formatted_prompt".into(), target: "4".into(), target_handle: "prompt".into() },
+                // V1 = 主视频
+                TemplateConnection { source: "2".into(), source_handle: "VIDEO".into(), target: "6".into(), target_handle: "v1_video".into() },
+                // V2 = 叠加视频
+                TemplateConnection { source: "4".into(), source_handle: "VIDEO".into(), target: "6".into(), target_handle: "v2_video".into() },
+                // A2 = BGM
+                TemplateConnection { source: "5".into(), source_handle: "AUDIO".into(), target: "6".into(), target_handle: "a2_audio".into() },
+                // Timeline -> 输出
+                TemplateConnection { source: "6".into(), source_handle: "VIDEO".into(), target: "7".into(), target_handle: "video".into() },
+                TemplateConnection { source: "6".into(), source_handle: "AUDIO".into(), target: "7".into(), target_handle: "audio".into() },
+                TemplateConnection { source: "6".into(), source_handle: "AUDIO".into(), target: "8".into(), target_handle: "audio".into() },
+            ],
+        },
     ]
 }
 

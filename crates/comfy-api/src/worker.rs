@@ -2,7 +2,7 @@ use crate::queue::JobStatus;
 use crate::state::AppState;
 use crate::ws::WsMessage;
 use comfy_core::NodeDefinition;
-use comfy_executor::NodeEventCallback;
+use comfy_executor::{NodeEventCallback, ProgressCallback};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -46,11 +46,27 @@ pub async fn run_executor(state: AppState) {
             broadcaster.send(WsMessage::executing(prompt_id, Some(node_id)));
         });
 
+        let broadcaster_progress = state.broadcaster.clone();
+        let pid_progress = prompt_id.clone();
+        let on_progress: ProgressCallback = Arc::new(move |_prompt_id: &str, node_id: &str, value: f64, max: f64| {
+            // Send progress via WebSocket; include node info in data
+            broadcaster_progress.send(WsMessage::new(
+                "progress",
+                serde_json::json!({
+                    "prompt_id": pid_progress,
+                    "node": node_id,
+                    "value": value,
+                    "max": max,
+                }),
+            ));
+        });
+
         let executor = comfy_executor::Executor::new(
             state.executor.registry().clone(),
             state.executor.backend().clone(),
         )
-        .with_node_event_callback(on_node_event);
+        .with_node_event_callback(on_node_event)
+        .with_progress_callback(on_progress);
 
         match executor.execute(dynprompt, &prompt_id).await {
             Ok(result) => {

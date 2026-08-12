@@ -8,8 +8,12 @@ use crate::params::{
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+
+/// Progress callback type: (step, total_steps, phase, message)
+pub type FlashProgressCallback = Arc<dyn Fn(u32, u32, &str, Option<&str>) + Send + Sync>;
 
 /// FlashAttn Bridge 配置
 #[derive(Debug, Clone)]
@@ -181,6 +185,11 @@ struct GenerationResultResponse {
     height: Option<i32>,
     num_frames: Option<i32>,
     error: Option<String>,
+    progress: Option<f64>,
+    step: Option<u32>,
+    total_steps: Option<u32>,
+    phase: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,6 +218,7 @@ pub struct FlashAttnBackend {
     config: FlashAttnConfig,
     client: reqwest::blocking::Client,
     model_loaded: std::sync::atomic::AtomicBool,
+    progress_callback: Option<FlashProgressCallback>,
 }
 
 impl std::fmt::Debug for FlashAttnBackend {
@@ -232,7 +242,13 @@ impl FlashAttnBackend {
             config,
             client,
             model_loaded: std::sync::atomic::AtomicBool::new(false),
+            progress_callback: None,
         }
+    }
+
+    pub fn with_progress_callback(mut self, cb: FlashProgressCallback) -> Self {
+        self.progress_callback = Some(cb);
+        self
     }
 
     fn url(&self, path: &str) -> String {
@@ -283,6 +299,12 @@ impl FlashAttnBackend {
             if resp.status().is_success() {
                 let status: LoadStatusResponse = resp.json()
                     .map_err(|e| InferenceError::ModelNotLoaded(format!("Failed to parse load status: {}", e)))?;
+
+                // Report loading progress
+                if let Some(ref cb) = self.progress_callback {
+                    let step = (status.progress * 100.0) as u32;
+                    cb(step, 100, "loading", status.message.as_deref());
+                }
 
                 match status.status.as_str() {
                     "loaded" | "completed" => {
@@ -365,6 +387,7 @@ impl FlashAttnBackend {
         let timeout = Duration::from_secs(self.config.timeout_sec);
         let start = std::time::Instant::now();
         let poll_interval = Duration::from_millis(self.config.poll_interval_ms);
+        let mut last_reported_step: u32 = 0;
 
         loop {
             if start.elapsed() > timeout {
@@ -387,6 +410,18 @@ impl FlashAttnBackend {
 
             let result: GenerationResultResponse = resp.json()
                 .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse result: {}", e)))?;
+
+            // Report progress if callback is set and step changed
+            if let Some(ref cb) = self.progress_callback {
+                let step = result.step.unwrap_or(0);
+                let total = result.total_steps.unwrap_or(0);
+                if step != last_reported_step || result.status == "completed" {
+                    let phase = result.phase.as_deref().unwrap_or("generating");
+                    let msg = result.message.as_deref();
+                    cb(step, total, phase, msg);
+                    last_reported_step = step;
+                }
+            }
 
             match result.status.as_str() {
                 "completed" => return Ok(result),

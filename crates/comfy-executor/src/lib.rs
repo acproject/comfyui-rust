@@ -12,6 +12,6 @@ pub mod prompt_relay;
 pub mod triposplat;
 
 pub use error::{ExecutorError, ErrorDetail, NodeErrorInfo, ValidationResult};
-pub use execution_context::{ExecutionContext, NodeOutput};
+pub use execution_context::{ExecutionContext, NodeOutput, ProgressCallback};
 pub use executor::{Executor, ExecutionResult, NodeEventCallback};
 pub use registry::NodeRegistry;

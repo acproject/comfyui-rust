@@ -1075,6 +1075,16 @@ impl ContextIrParams {
         }
     }
 
+    pub fn from_text(text: impl Into<String>) -> Self {
+        Self {
+            image: None,
+            video: None,
+            user_prompt: Some(text.into()),
+            parse_sfx: true,
+            parse_bgm: false,
+        }
+    }
+
     pub fn with_user_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.user_prompt = Some(prompt.into());
         self

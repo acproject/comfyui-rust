@@ -7,11 +7,13 @@ import { getTypeColor, getCategoryColor, isCustomNode } from '@/components/nodes
 import { AudioVideoTimeline } from '@/components/timeline/AudioVideoTimeline';
 import { PromptRelayTimelineEditor } from '@/components/timeline/PromptRelayTimelineEditor';
 import { LtxDirectorTimeline } from '@/components/timeline/LtxDirectorTimeline';
+import { PremiereTimeline } from '@/components/timeline/PremiereTimeline';
 
 // Node types that support custom resizing
 const RESIZABLE_NODE_TYPES = new Set([
   'PromptRelayEncodeTimeline',
   'LTXDirector',
+  'VideoTimeline',
 ]);
 
 const DEFAULT_NODE_WIDTH = 280;
@@ -87,10 +89,11 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const isSaveVideoWithAudioNode = classType === 'SaveVideoWithAudio';
   const isPromptRelayTimeline = classType === 'PromptRelayEncodeTimeline';
   const isLtxDirector = classType === 'LTXDirector';
+  const isVideoTimeline = classType === 'VideoTimeline';
 
   const isResizable = RESIZABLE_NODE_TYPES.has(classType);
-  const customWidth = (data.customWidth as number) || DEFAULT_NODE_WIDTH;
-  const customHeight = (data.customHeight as number) || DEFAULT_TIMELINE_HEIGHT;
+  const customWidth = (data.customWidth as number) || (isVideoTimeline ? 900 : DEFAULT_NODE_WIDTH);
+  const customHeight = (data.customHeight as number) || (isVideoTimeline ? 520 : DEFAULT_TIMELINE_HEIGHT);
 
   // Resize drag state
   const [isResizing, setIsResizing] = useState(false);
@@ -148,6 +151,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
     if (isSaveVideoWithAudioNode) y += 260;
     if (isPromptRelayTimeline) y += customHeight;
     if (isLtxDirector) y += customHeight + 60;
+    if (isVideoTimeline) y += customHeight;
   }
 
   const inputHandleY: Record<string, number> = {};
@@ -324,6 +328,16 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
               timelineData={String(data.inputs['timeline_data'] || '')}
               height={customHeight + 60}
             />
+          )}
+          {(isVideoTimeline) && (
+            <div style={{ padding: '4px 6px', borderBottom: '1px solid #333' }}>
+              <PremiereTimeline
+                totalDuration={Number(data.inputs['total_duration'] || 10)}
+                fps={Number(data.inputs['fps'] || 24)}
+                height={customHeight - 16}
+                width={customWidth - 24}
+              />
+            </div>
           )}
 
           <div style={{ padding: '2px 0' }}>

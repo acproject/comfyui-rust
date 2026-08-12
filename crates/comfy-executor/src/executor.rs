@@ -1,5 +1,5 @@
 use crate::error::{ExecutorError, ValidationResult, ErrorDetail, NodeErrorInfo};
-use crate::execution_context::{ExecutionContext, NodeOutput};
+use crate::execution_context::{ExecutionContext, NodeOutput, ProgressCallback};
 use crate::registry::NodeRegistry;
 use comfy_core::{CacheEntry, CacheEntryValue, CacheView, DynamicPrompt, ExecutionList, NullCacheView};
 use comfy_inference::InferenceBackend;
@@ -14,6 +14,7 @@ pub struct Executor {
     backend: Arc<dyn InferenceBackend>,
     cache: Arc<dyn CacheView>,
     on_node_event: Option<NodeEventCallback>,
+    on_progress: Option<ProgressCallback>,
 }
 
 impl Executor {
@@ -26,6 +27,7 @@ impl Executor {
             backend,
             cache: Arc::new(NullCacheView),
             on_node_event: None,
+            on_progress: None,
         }
     }
 
@@ -36,6 +38,11 @@ impl Executor {
 
     pub fn with_node_event_callback(mut self, callback: NodeEventCallback) -> Self {
         self.on_node_event = Some(callback);
+        self
+    }
+
+    pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
+        self.on_progress = Some(callback);
         self
     }
 
@@ -133,6 +140,10 @@ impl Executor {
             self.backend.clone(),
             &prompt_id,
         );
+
+        if let Some(ref cb) = self.on_progress {
+            ctx = ctx.with_progress_callback(cb.clone());
+        }
 
         let mut exec_list = ExecutionList::new(dynprompt.clone(), self.cache.clone());
 
