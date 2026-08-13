@@ -19,7 +19,7 @@ gif = "0.13"
 image = { version = "0.25", optional = true }
 imageproc = { version = "0.25", optional = true }
 opencv = { version = "0.94", default-features = false, features = ["imgproc", "imgcodecs"], optional = true }
-base64 = { version = "0.22", optional = true }
+base64 = "0.22"
 
 [features]
 default = []
@@ -29,7 +29,7 @@ local-build = ["local-ffi", "comfy-inference/local-build"]
 remote = ["comfy-inference/remote"]
 controlnet = ["image", "imageproc"]
 controlnet-opencv = ["controlnet", "opencv"]
-flash-attn = ["comfy-inference/flash-attn", "dep:base64"]
+flash-attn = ["comfy-inference/flash-attn"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync"] }

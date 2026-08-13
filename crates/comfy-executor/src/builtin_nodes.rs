@@ -9159,24 +9159,12 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
                 }
             }
 
-            let config = FlashAttnConfig::new(config_url)
-                .with_device(config_device)
-                .with_quantization(&config_quant)
-                .with_auto_start(config_auto_start)
-                .with_timeout(60);
-            let mut backend = FlashAttnBackend::new(config);
-
-            if let Some(cb) = progress_cb {
-                let nid2 = nid.clone();
-                let pid2 = pid.clone();
-                let flash_cb: FlashProgressCallback = Arc::new(move |step, total, _phase, _msg| {
-                    cb(&pid2, &nid2, step as f64, total as f64);
-                });
-                backend = backend.with_progress_callback(flash_cb);
-            }
-
+            // Build params outside spawn_blocking (parsing JSON values)
             let sd_image = image_val.and_then(|v| parse_sd_image_from_value(&v));
             let sd_video = video_val.and_then(|v| parse_sd_video_from_value(&v));
+
+            // Clone original prompt before it's moved into cir_params
+            let original_prompt = text_prompt.clone();
 
             let cir_params = if let Some(img) = sd_image {
                 let mut p = ContextIrParams::from_image(img);
@@ -9197,19 +9185,60 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
                 p
             };
 
-            let context: H3Context = backend.context_ir(cir_params)
-                .map_err(|e| ExecutorError::NodeExecutionFailed {
-                    node_id: node_id.to_string(),
-                    message: format!("Context-IR failed: {}", e),
-                })?;
+            // Prepare progress callback for move into spawn_blocking
+            let progress_cb_for_blocking = progress_cb.clone();
+            let nid_for_blocking = nid.clone();
+            let pid_for_blocking = pid.clone();
 
-            let formatted = context.build_positive_prompt();
+            // Run blocking HTTP calls on spawn_blocking to avoid tokio runtime drop panic
+            let (context, formatted) = tokio::task::spawn_blocking(move || -> Result<(H3Context, String), String> {
+                let config = FlashAttnConfig::new(config_url)
+                    .with_device(config_device)
+                    .with_quantization(&config_quant)
+                    .with_auto_start(config_auto_start)
+                    .with_timeout(60);
+                let mut backend = FlashAttnBackend::new(config);
+
+                if let Some(cb) = progress_cb_for_blocking {
+                    let nid2 = nid_for_blocking.clone();
+                    let pid2 = pid_for_blocking.clone();
+                    let flash_cb: FlashProgressCallback = Arc::new(move |step, total, _phase, _msg| {
+                        cb(&pid2, &nid2, step as f64, total as f64);
+                    });
+                    backend = backend.with_progress_callback(flash_cb);
+                }
+
+                let context: H3Context = backend.context_ir(cir_params)
+                    .map_err(|e| format!("Context-IR failed: {}", e))?;
+
+                let formatted = context.build_positive_prompt();
+                Ok((context, formatted))
+            })
+            .await
+            .map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("spawn_blocking join error: {}", e),
+            })?
+            .map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: e,
+            })?;
+
             let context_val = serde_json::to_value(&context).map_err(|e| ExecutorError::NodeExecutionFailed {
                 node_id: node_id.to_string(),
                 message: format!("Failed to serialize context: {}", e),
             })?;
 
-            Ok(vec![context_val, json!(formatted)])
+            // The formatted prompt combines the structured parsed fields with the original user prompt.
+            // This ensures the original detailed prompt is preserved for generation, while the
+            // H3Context struct provides structured metadata (SFX, camera motion, etc.) to the Director.
+            let combined_prompt = if !original_prompt.trim().is_empty() {
+                format!("{}. {}", formatted, original_prompt)
+            } else {
+                formatted
+            };
+
+            Ok(vec![context_val, json!(combined_prompt)])
         })
     }));
 }
@@ -9470,23 +9499,6 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                 }
             }
 
-            let config = FlashAttnConfig::new(config_url)
-                .with_device(config_device)
-                .with_quantization(&config_quant)
-                .with_auto_start(config_auto_start)
-                .with_timeout(900);
-            let mut backend = FlashAttnBackend::new(config);
-
-            // Wire progress callback: convert executor's ProgressCallback to FlashProgressCallback
-            if let Some(cb) = progress_cb {
-                let nid2 = nid.clone();
-                let pid2 = pid.clone();
-                let flash_cb: FlashProgressCallback = Arc::new(move |step, total, _phase, _msg| {
-                    cb(&pid2, &nid2, step as f64, total as f64);
-                });
-                backend = backend.with_progress_callback(flash_cb);
-            }
-
             let mode = match mode_str.as_str() {
                 "i2va" => H3Mode::I2VA,
                 "ref2va" => H3Mode::Ref2VA,
@@ -9542,11 +9554,41 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                 }
             }
 
-            let video = backend.generate_av(params)
-                .map_err(|e| ExecutorError::NodeExecutionFailed {
-                    node_id: node_id.to_string(),
-                    message: format!("H3 generation failed: {}", e),
-                })?;
+            // Prepare progress callback for move into spawn_blocking
+            let progress_cb_for_blocking = progress_cb.clone();
+            let nid_for_blocking = nid.clone();
+            let pid_for_blocking = pid.clone();
+
+            // Run blocking HTTP calls on spawn_blocking to avoid tokio runtime drop panic
+            let video = tokio::task::spawn_blocking(move || -> Result<comfy_inference::SdVideo, String> {
+                let config = FlashAttnConfig::new(config_url)
+                    .with_device(config_device)
+                    .with_quantization(&config_quant)
+                    .with_auto_start(config_auto_start)
+                    .with_timeout(900);
+                let mut backend = FlashAttnBackend::new(config);
+
+                if let Some(cb) = progress_cb_for_blocking {
+                    let nid2 = nid_for_blocking.clone();
+                    let pid2 = pid_for_blocking.clone();
+                    let flash_cb: FlashProgressCallback = Arc::new(move |step, total, _phase, _msg| {
+                        cb(&pid2, &nid2, step as f64, total as f64);
+                    });
+                    backend = backend.with_progress_callback(flash_cb);
+                }
+
+                backend.generate_av(params)
+                    .map_err(|e| format!("H3 generation failed: {}", e))
+            })
+            .await
+            .map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: format!("spawn_blocking join error: {}", e),
+            })?
+            .map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: node_id.to_string(),
+                message: e,
+            })?;
 
             let duration_sec = video.frames.len() as f64 / video.fps as f64;
 
@@ -9669,31 +9711,39 @@ fn register_h3_model_loader(registry: &mut NodeRegistry) {
         Box::pin(async move {
             use comfy_inference::{FlashAttnBackend, FlashAttnConfig};
 
-            let config = FlashAttnConfig::new(&bridge_url)
-                .with_device(device_id)
-                .with_quantization(&quantization)
-                .with_auto_start(auto_start)
-                .with_timeout(30);
+            // Clone values needed after spawn_blocking
+            let bridge_url_clone = bridge_url.clone();
+            let quantization_clone = quantization.clone();
 
-            let backend = FlashAttnBackend::new(config);
+            // Run blocking HTTP calls on spawn_blocking to avoid tokio runtime drop panic
+            let status_msg = tokio::task::spawn_blocking(move || -> String {
+                let config = FlashAttnConfig::new(&bridge_url_clone)
+                    .with_device(device_id)
+                    .with_quantization(&quantization_clone)
+                    .with_auto_start(auto_start)
+                    .with_timeout(30);
 
-            // Try to ensure bridge is running (with auto-start if enabled)
-            let status_msg = match backend.check_health() {
-                Ok(health) => {
-                    if health.model_loaded {
-                        format!("Connected to Bridge at {} (model loaded)", bridge_url)
-                    } else {
-                        format!("Connected to Bridge at {} (model not loaded yet)", bridge_url)
+                let backend = FlashAttnBackend::new(config);
+
+                match backend.check_health() {
+                    Ok(health) => {
+                        if health.model_loaded {
+                            format!("Connected to Bridge at {} (model loaded)", bridge_url_clone)
+                        } else {
+                            format!("Connected to Bridge at {} (model not loaded yet)", bridge_url_clone)
+                        }
+                    }
+                    Err(e) => {
+                        if auto_start {
+                            format!("Bridge not available: {}. Auto-start may trigger on first generation.", e)
+                        } else {
+                            format!("Bridge not available at {}: {}", bridge_url_clone, e)
+                        }
                     }
                 }
-                Err(e) => {
-                    if auto_start {
-                        format!("Bridge not available: {}. Auto-start may trigger on first generation.", e)
-                    } else {
-                        format!("Bridge not available at {}: {}", bridge_url, e)
-                    }
-                }
-            };
+            })
+            .await
+            .unwrap_or_else(|e| format!("Health check task failed: {}", e));
 
             let config_out = H3ConfigOutput {
                 bridge_url,

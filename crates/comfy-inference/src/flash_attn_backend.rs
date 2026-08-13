@@ -468,23 +468,22 @@ impl FlashAttnBackend {
             ))?;
 
         // 设置环境变量
+        // MiniMax-H3 requires multi-GPU tensor parallelism (blocks split across GPUs).
+        // Do NOT set CUDA_VISIBLE_DEVICES - let Python auto-detect all available GPUs.
         let mut envs = vec![
             ("FA_BRIDGE_HOST".to_string(), "127.0.0.1".to_string()),
             ("FA_BRIDGE_PORT".to_string(), port.to_string()),
             ("FA_QUANTIZATION".to_string(), self.config.quantization.clone()),
-            ("FA_TRANSFORMER_DEVICES".to_string(), format!("cuda:{}", self.config.device_id)),
-            ("FA_VAE_DEVICE".to_string(), format!("cuda:{}", self.config.device_id)),
+            ("FA_VAE_DEVICE".to_string(), "cuda:0".to_string()),
             ("FA_VAE_FP16".to_string(), "1".to_string()),
             ("FA_USE_CACHE".to_string(), "1".to_string()),
             ("FA_AUTO_LOAD".to_string(), "0".to_string()),
             ("OMP_NUM_THREADS".to_string(), "4".to_string()),
             ("MKL_NUM_THREADS".to_string(), "4".to_string()),
             ("PYTORCH_CUDA_ALLOC_CONF".to_string(), "expandable_segments:True".to_string()),
+            ("PYTORCH_NVML_BASED_CUDA_CHECK".to_string(), "0".to_string()),
             ("TOKENIZERS_PARALLELISM".to_string(), "false".to_string()),
         ];
-
-        // 设置 CUDA_VISIBLE_DEVICES
-        envs.push(("CUDA_VISIBLE_DEVICES".to_string(), self.config.device_id.to_string()));
 
         // 继承 PATH 和 LD_LIBRARY_PATH
         for key in &["PATH", "LD_LIBRARY_PATH", "HOME", "USER", "LANG", "LC_ALL"] {
@@ -493,7 +492,20 @@ impl FlashAttnBackend {
             }
         }
 
-        // 如果指定了模型目录
+        // 自动检测模型路径 - 优先 USB 路径
+        let known_model_paths = [
+            "/home/acproject/usb/hf_models/MiniMax-H3",
+            "/mnt/usb/hf_models/MiniMax-H3",
+        ];
+        for p in &known_model_paths {
+            if Path::new(p).join("modular_model_index.json").exists() {
+                envs.push(("FA_MODEL_PATH".to_string(), p.to_string()));
+                tracing::info!("Auto-detected model path: {}", p);
+                break;
+            }
+        }
+
+        // 如果指定了模型目录（兼容旧配置）
         if let Some(ref models_dir) = self.config.models_dir {
             let model_path = format!("{}/HunyuanVideoAudio", models_dir);
             if Path::new(&model_path).exists() {
@@ -524,6 +536,8 @@ impl FlashAttnBackend {
         }
 
         // 启动进程
+        // Note: Don't pass --transformer-devices or --vae-device on CLI;
+        // let Python auto-detect GPUs (_auto_detect_devices expands to all available GPUs).
         let mut cmd = Command::new(&python);
         cmd.current_dir(&project_root)
             .arg("-m")
@@ -534,10 +548,6 @@ impl FlashAttnBackend {
             .arg(port.to_string())
             .arg("--quantization")
             .arg(&self.config.quantization)
-            .arg("--transformer-devices")
-            .arg(format!("cuda:{}", self.config.device_id))
-            .arg("--vae-device")
-            .arg(format!("cuda:{}", self.config.device_id))
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_file_err));
@@ -1279,7 +1289,9 @@ impl FlashAttnBackend {
 
     /// Context-IR 调用
     fn do_context_ir(&self, params: &ContextIrParams) -> InferenceResult<ContextIrResponse> {
-        self.ensure_model_loaded()?;
+        // Context-IR is a rule-based text parser that does NOT need the model loaded.
+        // Only ensure the bridge server is running.
+        self.ensure_bridge_running()?;
 
         let image_b64 = if let Some(ref img) = params.image {
             Some(self.encode_image_to_b64(img)?)
@@ -1423,17 +1435,10 @@ impl InferenceBackend for FlashAttnBackend {
 
 impl Drop for FlashAttnBackend {
     fn drop(&mut self) {
-        // Best-effort unload model (free GPU memory) using a short timeout
-        let unload_client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .connect_timeout(Duration::from_secs(2))
-            .build();
-        if let Ok(client) = unload_client {
-            let _ = client.post(self.url("/unload")).send();
-        }
-        // Note: We do NOT kill the Bridge process on Drop.
-        // The Bridge persists across node calls for reuse.
-        // It will be reaped by the background wait thread when it eventually exits.
+        // Do NOT call /unload on Drop - the Bridge persists across node calls for reuse,
+        // and the model should stay loaded for subsequent nodes in the workflow.
+        // Use shutdown() explicitly to unload the model and kill the child process.
+        // The Bridge process will be reaped by the background wait thread when it exits.
         // Use stop.sh or `kill <pid>` to stop it manually.
     }
 }
