@@ -270,6 +270,7 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     // H3 (MiniMax-HunyuanVideoAudio) ecosystem nodes - gated behind flash-attn feature
     #[cfg(feature = "flash-attn")]
     {
+        register_h3_model_loader(registry);
         register_h3_context_ir(registry);
         register_h3_director(registry);
     }
@@ -287,6 +288,7 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_video_mix_audio(registry);
     register_video_replace_audio(registry);
     register_video_timeline(registry);
+    register_whisper_transcribe(registry);
 }
 
 fn resolve_model_path(model_type: &str, filename: &str) -> String {
@@ -9081,12 +9083,20 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
                         e
                     },
                 });
+                m.insert("h3_config".to_string(), InputTypeSpec {
+                    type_name: "H3_CONFIG".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), serde_json::Value::Null);
+                        e
+                    },
+                });
                 m
             },
             hidden: HashMap::new(),
         },
         output_types: vec![
-            IoType::Custom("H3_CONTEXT".to_string()),
+            IoType::H3Context,
             IoType::String,
         ],
         output_names: vec!["H3_CONTEXT".to_string(), "formatted_prompt".to_string()],
@@ -9101,6 +9111,7 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
     registry.register(class_def, Arc::new(|ctx, _node, node_id| {
         let image_val = ctx.resolve_input(node_id, "image").ok();
         let video_val = ctx.resolve_input(node_id, "video").ok();
+        let h3_config_val = ctx.resolve_input(node_id, "h3_config").ok();
         let text_prompt = ctx.resolve_input(node_id, "text_prompt")
             .ok()
             .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -9125,7 +9136,34 @@ fn register_h3_context_ir(registry: &mut NodeRegistry) {
         Box::pin(async move {
             use comfy_inference::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, ContextIrParams, H3Context, InferenceBackend};
 
-            let config = FlashAttnConfig::new(bridge_url).with_timeout(60);
+            // Parse h3_config if provided (overrides individual params)
+            let mut config_url = bridge_url;
+            let mut config_device = 0;
+            let mut config_quant = "int8".to_string();
+            let mut config_auto_start = true;
+            
+            if let Some(cfg_val) = h3_config_val {
+                if let Some(obj) = cfg_val.as_object() {
+                    if let Some(u) = obj.get("bridge_url").and_then(|v| v.as_str()) {
+                        config_url = u.to_string();
+                    }
+                    if let Some(d) = obj.get("device_id").and_then(|v| v.as_i64()) {
+                        config_device = d as i32;
+                    }
+                    if let Some(q) = obj.get("quantization").and_then(|v| v.as_str()) {
+                        config_quant = q.to_string();
+                    }
+                    if let Some(a) = obj.get("auto_start").and_then(|v| v.as_bool()) {
+                        config_auto_start = a;
+                    }
+                }
+            }
+
+            let config = FlashAttnConfig::new(config_url)
+                .with_device(config_device)
+                .with_quantization(&config_quant)
+                .with_auto_start(config_auto_start)
+                .with_timeout(60);
             let mut backend = FlashAttnBackend::new(config);
 
             if let Some(cb) = progress_cb {
@@ -9197,7 +9235,7 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                     type_name: "COMBO".to_string(),
                     extra: {
                         let mut e = HashMap::new();
-                        e.insert("options".to_string(), json!(["t2va", "i2va", "ref2va", "mr2va"]));
+                        e.insert("options".to_string(), json!(["t2va", "i2va", "ref2va", "mr2va", "sfx", "audio"]));
                         e.insert("default".to_string(), json!("t2va"));
                         e
                     },
@@ -9320,6 +9358,14 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                         e
                     },
                 });
+                m.insert("h3_config".to_string(), InputTypeSpec {
+                    type_name: "H3_CONFIG".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), serde_json::Value::Null);
+                        e
+                    },
+                });
                 m
             },
             hidden: HashMap::new(),
@@ -9387,6 +9433,7 @@ fn register_h3_director(registry: &mut NodeRegistry) {
             .ok()
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| "http://127.0.0.1:8998".to_string());
+        let h3_config_val = ctx.resolve_input(node_id, "h3_config").ok();
 
         let context_val = ctx.resolve_input(node_id, "h3_context").ok();
         let ref_image_val = ctx.resolve_input(node_id, "reference_image").ok();
@@ -9400,7 +9447,34 @@ fn register_h3_director(registry: &mut NodeRegistry) {
         Box::pin(async move {
             use comfy_inference::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, H3Params, H3Mode, H3Context, InferenceBackend};
 
-            let config = FlashAttnConfig::new(bridge_url).with_timeout(900);
+            // Parse h3_config if provided (overrides individual params)
+            let mut config_url = bridge_url;
+            let mut config_device = 0;
+            let mut config_quant = "int8".to_string();
+            let mut config_auto_start = true;
+            
+            if let Some(cfg_val) = h3_config_val {
+                if let Some(obj) = cfg_val.as_object() {
+                    if let Some(u) = obj.get("bridge_url").and_then(|v| v.as_str()) {
+                        config_url = u.to_string();
+                    }
+                    if let Some(d) = obj.get("device_id").and_then(|v| v.as_i64()) {
+                        config_device = d as i32;
+                    }
+                    if let Some(q) = obj.get("quantization").and_then(|v| v.as_str()) {
+                        config_quant = q.to_string();
+                    }
+                    if let Some(a) = obj.get("auto_start").and_then(|v| v.as_bool()) {
+                        config_auto_start = a;
+                    }
+                }
+            }
+
+            let config = FlashAttnConfig::new(config_url)
+                .with_device(config_device)
+                .with_quantization(&config_quant)
+                .with_auto_start(config_auto_start)
+                .with_timeout(900);
             let mut backend = FlashAttnBackend::new(config);
 
             // Wire progress callback: convert executor's ProgressCallback to FlashProgressCallback
@@ -9417,6 +9491,8 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                 "i2va" => H3Mode::I2VA,
                 "ref2va" => H3Mode::Ref2VA,
                 "mr2va" => H3Mode::MR2VA,
+                "sfx" => H3Mode::SFX,
+                "audio" => H3Mode::Audio,
                 _ => H3Mode::T2VA,
             };
 
@@ -9495,6 +9571,144 @@ fn register_h3_director(registry: &mut NodeRegistry) {
             let duration_val = json!(duration_sec);
 
             Ok(vec![video_val, audio_val, duration_val])
+        })
+    }));
+}
+
+#[cfg(feature = "flash-attn")]
+fn register_h3_model_loader(registry: &mut NodeRegistry) {
+    #[derive(serde::Serialize)]
+    struct H3ConfigOutput {
+        bridge_url: String,
+        device_id: i32,
+        quantization: String,
+        auto_start: bool,
+        models_dir: Option<String>,
+    }
+
+    let class_def = NodeClassDef {
+        class_type: "H3ModelLoader".to_string(),
+        display_name: "H3 Model Loader (Bridge Config)".to_string(),
+        category: "H3/utils".to_string(),
+        input_types: NodeInputTypes {
+            required: HashMap::new(),
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("bridge_url".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!("http://127.0.0.1:8998"));
+                        e
+                    },
+                });
+                m.insert("device_id".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0));
+                        e.insert("min".to_string(), json!(0));
+                        e.insert("max".to_string(), json!(7));
+                        e
+                    },
+                });
+                m.insert("quantization".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["int8", "int4", "fp8", "none"]));
+                        e.insert("default".to_string(), json!("int8"));
+                        e
+                    },
+                });
+                m.insert("auto_start".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(true));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![
+            IoType::H3Config,
+            IoType::String,
+        ],
+        output_names: vec!["H3_CONFIG".to_string(), "status".to_string()],
+        output_is_list: vec![false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "load_config".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let bridge_url = ctx.resolve_input(node_id, "bridge_url")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "http://127.0.0.1:8998".to_string());
+        let device_id = ctx.resolve_input(node_id, "device_id")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        let quantization = ctx.resolve_input(node_id, "quantization")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "int8".to_string());
+        let auto_start = ctx.resolve_input(node_id, "auto_start")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let nid = node_id.to_string();
+
+        Box::pin(async move {
+            use comfy_inference::{FlashAttnBackend, FlashAttnConfig};
+
+            let config = FlashAttnConfig::new(&bridge_url)
+                .with_device(device_id)
+                .with_quantization(&quantization)
+                .with_auto_start(auto_start)
+                .with_timeout(30);
+
+            let backend = FlashAttnBackend::new(config);
+
+            // Try to ensure bridge is running (with auto-start if enabled)
+            let status_msg = match backend.check_health() {
+                Ok(health) => {
+                    if health.model_loaded {
+                        format!("Connected to Bridge at {} (model loaded)", bridge_url)
+                    } else {
+                        format!("Connected to Bridge at {} (model not loaded yet)", bridge_url)
+                    }
+                }
+                Err(e) => {
+                    if auto_start {
+                        format!("Bridge not available: {}. Auto-start may trigger on first generation.", e)
+                    } else {
+                        format!("Bridge not available at {}: {}", bridge_url, e)
+                    }
+                }
+            };
+
+            let config_out = H3ConfigOutput {
+                bridge_url,
+                device_id,
+                quantization,
+                auto_start,
+                models_dir: None,
+            };
+
+            let config_val = serde_json::to_value(&config_out).map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: nid.clone(),
+                message: format!("Failed to serialize config: {}", e),
+            })?;
+
+            Ok(vec![config_val, json!(status_msg)])
         })
     }));
 }
@@ -10161,6 +10375,8 @@ fn register_video_timeline(registry: &mut NodeRegistry) {
         struct VClipData {
             frames: Vec<SdImage>,
             src_fps: i32,
+            src_width: u32,
+            src_height: u32,
             start_frame: i64,
             src_in_frame: i64,
             src_out_frame: i64,
@@ -10233,13 +10449,14 @@ fn register_video_timeline(registry: &mut NodeRegistry) {
             if src_out <= src_in { continue; }
 
             let start_frame = (start * fps as f32) as i64;
-            let frames: Vec<SdImage> = video.frames.iter()
-                .map(|f| if f.width == width && f.height == height { f.clone() } else { f.resize(width, height) })
-                .collect();
+            // Store original frames (no pre-resize); resize lazily only if needed
+            let first_frame = &video.frames[0];
 
             vclips.push(VClipData {
-                frames,
+                frames: video.frames.clone(),
                 src_fps: video.fps,
+                src_width: first_frame.width,
+                src_height: first_frame.height,
                 start_frame,
                 src_in_frame: src_in,
                 src_out_frame: src_out,
@@ -10346,23 +10563,57 @@ fn register_video_timeline(registry: &mut NodeRegistry) {
 
             let total_duration = total_frames as f32 / fps as f32;
 
-            let bg = SdImage::solid(width, height, bg_r, bg_g, bg_b);
             let mut output_frames: Vec<SdImage> = Vec::with_capacity(total_frames as usize);
 
+            // Pre-resize all clips that need resizing once, cache them
+            struct ResizedClip {
+                frames: Vec<SdImage>,
+                src_fps: i32,
+                start_frame: i64,
+                src_in_frame: i64,
+                src_out_frame: i64,
+                opacity: f32,
+                total_src_frames: usize,
+            }
+
+            let resized_clips: Vec<ResizedClip> = vclips.iter().map(|c| {
+                let needs_resize = c.src_width != width || c.src_height != height;
+                ResizedClip {
+                    frames: if needs_resize {
+                        c.frames.iter().map(|f| f.resize(width, height)).collect()
+                    } else {
+                        c.frames.clone()
+                    },
+                    src_fps: c.src_fps,
+                    start_frame: c.start_frame,
+                    src_in_frame: c.src_in_frame,
+                    src_out_frame: c.src_out_frame,
+                    opacity: c.opacity,
+                    total_src_frames: c.total_src_frames,
+                }
+            }).collect();
+
             for frame_idx in 0..total_frames {
-                let mut canvas = bg.clone();
-                for clip in &vclips {
+                // Allocate new frame and fill with background directly
+                let mut canvas = SdImage::new(width, height, 3);
+                canvas.fill_solid(bg_r, bg_g, bg_b);
+
+                for clip in &resized_clips {
                     let timeline_t = frame_idx - clip.start_frame;
                     if timeline_t < 0 { continue; }
                     let src_frame_pos = timeline_t as f64 * clip.src_fps as f64 / fps as f64;
                     let src_idx = clip.src_in_frame + src_frame_pos as i64;
                     if src_idx >= clip.src_out_frame || src_idx < 0 { continue; }
                     let src_frame_idx = src_idx.min(clip.total_src_frames as i64 - 1).max(0) as usize;
-                    let src_frame = &clip.frames[src_frame_idx];
-                    canvas = src_frame.blend_over(&canvas, clip.opacity);
+
+                    canvas.blend_from(&clip.frames[src_frame_idx], clip.opacity);
                 }
                 output_frames.push(canvas);
             }
+
+            // Explicitly drop intermediate data to free memory before audio processing
+            drop(resized_clips);
+            drop(vclips);
 
             let out_sr = 44100u32;
             let out_ch = 2u32;
@@ -10424,6 +10675,215 @@ fn register_video_timeline(registry: &mut NodeRegistry) {
             };
 
             Ok(vec![video_out, audio_out, json!(duration)])
+        })
+    }));
+}
+
+// ========== Whisper ASR Transcription (Text-Based Editing) ==========
+
+fn register_whisper_transcribe(registry: &mut NodeRegistry) {
+    #[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+    struct TranscriptSegment {
+        id: i64,
+        start: f64,
+        end: f64,
+        text: String,
+        #[serde(default)]
+        speaker: Option<String>,
+    }
+
+    #[derive(serde::Deserialize, Debug)]
+    struct TranscribeResponse {
+        text: String,
+        language: String,
+        #[serde(default)]
+        duration_sec: f64,
+        #[serde(default)]
+        segments: Vec<TranscriptSegment>,
+        #[serde(default)]
+        model_used: String,
+    }
+
+    let class_def = NodeClassDef {
+        class_type: "WhisperTranscribe".to_string(),
+        display_name: "Whisper Transcribe (ASR)".to_string(),
+        category: "audio/text-editing".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("audio".to_string(), InputTypeSpec {
+                    type_name: "AUDIO".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("model_size".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("options".to_string(), json!(["tiny", "base", "small", "medium", "large-v3"]));
+                        e.insert("default".to_string(), json!("base"));
+                        e
+                    },
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("language".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(""));
+                        e.insert("tooltip".to_string(), json!("Language code (e.g. en, zh). Leave empty for auto-detect."));
+                        e
+                    },
+                });
+                m.insert("word_timestamps".to_string(), InputTypeSpec {
+                    type_name: "BOOLEAN".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(false));
+                        e
+                    },
+                });
+                m.insert("bridge_url".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!("http://127.0.0.1:8998"));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![
+            IoType::Custom("TRANSCRIPT".to_string()),
+            IoType::String,
+        ],
+        output_names: vec!["TRANSCRIPT".to_string(), "full_text".to_string()],
+        output_is_list: vec![false, false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "transcribe".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let audio_val = ctx.resolve_input(node_id, "audio").ok();
+        let model_size = ctx.resolve_input(node_id, "model_size")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "base".to_string());
+        let language = ctx.resolve_input(node_id, "language")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty());
+        let word_timestamps = ctx.resolve_input(node_id, "word_timestamps")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let bridge_url = ctx.resolve_input(node_id, "bridge_url")
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "http://127.0.0.1:8998".to_string());
+
+        let progress_cb = ctx.progress_callback();
+        let nid = node_id.to_string();
+        let pid = ctx.prompt_id().to_string();
+
+        Box::pin(async move {
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+            // Parse audio input
+            let audio = audio_val
+                .and_then(|v| parse_sd_audio_from_value(&v))
+                .ok_or_else(|| ExecutorError::NodeExecutionFailed {
+                    node_id: nid.clone(),
+                    message: "No audio input provided".to_string(),
+                })?;
+
+            // Report progress
+            if let Some(cb) = &progress_cb {
+                cb(&pid, &nid, 0.1, 1.0);
+            }
+
+            // Encode audio to WAV base64
+            let wav_bytes = audio.to_wav_bytes();
+            let audio_b64 = BASE64.encode(&wav_bytes);
+
+            if let Some(cb) = &progress_cb {
+                cb(&pid, &nid, 0.3, 1.0);
+            }
+
+            // Build request
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: nid.clone(),
+                    message: format!("Failed to create HTTP client: {}", e),
+                })?;
+
+            let url = format!("{}/asr/transcribe", bridge_url.trim_end_matches('/'));
+            let mut body = serde_json::json!({
+                "audio_b64": audio_b64,
+                "model_size": model_size,
+                "word_timestamps": word_timestamps,
+                "compute_type": "int8",
+            });
+            if let Some(lang) = language {
+                body["language"] = serde_json::Value::String(lang);
+            }
+
+            if let Some(cb) = &progress_cb {
+                cb(&pid, &nid, 0.5, 1.0);
+            }
+
+            let resp = client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: nid.clone(),
+                    message: format!("Failed to send transcription request: {}. Make sure FlashAttn Bridge is running with faster-whisper installed (pip install faster-whisper).", e),
+                })?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let err_text = resp.text().await.unwrap_or_default();
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: nid,
+                    message: format!("Transcription failed (HTTP {}): {}", status.as_u16(), err_text),
+                });
+            }
+
+            if let Some(cb) = &progress_cb {
+                cb(&pid, &nid, 0.9, 1.0);
+            }
+
+            let result: TranscribeResponse = resp.json().await
+                .map_err(|e| ExecutorError::NodeExecutionFailed {
+                    node_id: nid.clone(),
+                    message: format!("Failed to parse transcription response: {}", e),
+                })?;
+
+            // Build transcript value (JSON with segments for Text-Based Editing panel)
+            let transcript_val = serde_json::json!({
+                "segments": result.segments,
+                "language": result.language,
+                "duration_sec": result.duration_sec,
+                "model_used": result.model_used,
+                "full_text": result.text,
+            });
+
+            if let Some(cb) = &progress_cb {
+                cb(&pid, &nid, 1.0, 1.0);
+            }
+
+            Ok(vec![transcript_val, json!(result.text)])
         })
     }));
 }

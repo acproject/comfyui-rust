@@ -99,16 +99,59 @@ impl SdImage {
         Ok(base64_encode(&png_bytes))
     }
 
-    /// Create a solid color image
+    /// Create a solid color image (fast memset-based implementation)
     pub fn solid(width: u32, height: u32, r: u8, g: u8, b: u8) -> Self {
-        let data_size = (width * height * 3) as usize;
-        let mut data = vec![0u8; data_size];
-        for i in 0..(width * height) as usize {
-            data[i * 3] = r;
-            data[i * 3 + 1] = g;
-            data[i * 3 + 2] = b;
+        let pixel_count = (width * height) as usize;
+        let mut data = vec![0u8; pixel_count * 3];
+        // Fill using exact chunks for better cache utilization
+        const CHUNK_SIZE: usize = 64;
+        let mut i = 0;
+        while i + CHUNK_SIZE <= pixel_count {
+            let chunk_end = i + CHUNK_SIZE;
+            for p in i..chunk_end {
+                let offset = p * 3;
+                data[offset] = r;
+                data[offset + 1] = g;
+                data[offset + 2] = b;
+            }
+            i = chunk_end;
+        }
+        for p in i..pixel_count {
+            let offset = p * 3;
+            data[offset] = r;
+            data[offset + 1] = g;
+            data[offset + 2] = b;
         }
         Self { width, height, channel: 3, data }
+    }
+
+    /// Alpha blend source image onto self in-place (avoids allocation)
+    pub fn blend_from(&mut self, src: &SdImage, opacity: f32) {
+        if self.width != src.width || self.height != src.height {
+            return;
+        }
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= 0.0 {
+            return;
+        }
+        if opacity >= 1.0 {
+            self.data.copy_from_slice(&src.data);
+            return;
+        }
+        let inv_opacity = 1.0 - opacity;
+        for (i, &fg) in src.data.iter().enumerate() {
+            let bg = self.data[i] as f32;
+            self.data[i] = ((fg as f32 * opacity) + (bg * inv_opacity)) as u8;
+        }
+    }
+
+    /// Fill with solid color in-place
+    pub fn fill_solid(&mut self, r: u8, g: u8, b: u8) {
+        for pixel in self.data.chunks_exact_mut(3) {
+            pixel[0] = r;
+            pixel[1] = g;
+            pixel[2] = b;
+        }
     }
 
     /// Create a black frame

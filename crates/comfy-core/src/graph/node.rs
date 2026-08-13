@@ -132,6 +132,8 @@ pub enum IoType {
     RelayOptions,
     GuideData,
     Gaussian3D,
+    H3Context,
+    H3Config,
     Combo(Vec<String>),
     Custom(String),
 }
@@ -191,6 +193,8 @@ impl IoType {
             IoType::RelayOptions => "RELAY_OPTIONS".to_string(),
             IoType::GuideData => "GUIDE_DATA".to_string(),
             IoType::Gaussian3D => "GAUSSIAN_3D".to_string(),
+            IoType::H3Context => "H3_CONTEXT".to_string(),
+            IoType::H3Config => "H3_CONFIG".to_string(),
             IoType::Combo(opts) => opts.join(","),
             IoType::Custom(s) => s.clone(),
         }
@@ -231,6 +235,8 @@ impl IoType {
             "RELAY_OPTIONS" => IoType::RelayOptions,
             "GUIDE_DATA" => IoType::GuideData,
             "GAUSSIAN_3D" => IoType::Gaussian3D,
+            "H3_CONTEXT" => IoType::H3Context,
+            "H3_CONFIG" => IoType::H3Config,
             other => IoType::Custom(other.to_string()),
         }
     }

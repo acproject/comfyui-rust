@@ -32,4 +32,4 @@ pub use local::{LocalBackend, convert_model, get_system_info, get_version, get_c
 pub use remote::{RemoteBackend, RemoteConfig};
 
 #[cfg(feature = "flash-attn")]
-pub use flash_attn_backend::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback};
+pub use flash_attn_backend::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, HealthResponse, JobResponse};
