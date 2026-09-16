@@ -902,9 +902,9 @@ impl Default for H3Params {
             negative_prompt: "low quality, blurry, distorted, static, noise".to_string(),
             num_inference_steps: 50,
             guidance_scale: 7.0,
-            width: 848,
+            width: 832,
             height: 480,
-            num_frames: 123, // 17*7+4=123, default ~4s
+            num_frames: 124, // 17*7+5=124, default ~5s @ 24fps
             fps: 24,
             audio_duration: None,
             seed: 42,

@@ -474,7 +474,6 @@ impl FlashAttnBackend {
             ("FA_BRIDGE_HOST".to_string(), "127.0.0.1".to_string()),
             ("FA_BRIDGE_PORT".to_string(), port.to_string()),
             ("FA_QUANTIZATION".to_string(), self.config.quantization.clone()),
-            ("FA_VAE_DEVICE".to_string(), "cuda:0".to_string()),
             ("FA_VAE_FP16".to_string(), "1".to_string()),
             ("FA_USE_CACHE".to_string(), "1".to_string()),
             ("FA_AUTO_LOAD".to_string(), "0".to_string()),
@@ -485,21 +484,56 @@ impl FlashAttnBackend {
             ("TOKENIZERS_PARALLELISM".to_string(), "false".to_string()),
         ];
 
-        // 继承 PATH 和 LD_LIBRARY_PATH
-        for key in &["PATH", "LD_LIBRARY_PATH", "HOME", "USER", "LANG", "LC_ALL"] {
+        // 继承 PATH，但不继承 LD_LIBRARY_PATH 和 CUDA_VISIBLE_DEVICES
+        // (LD_LIBRARY_PATH 需要加上 torch lib 路径；CUDA_VISIBLE_DEVICES 不限制，让模型看到所有GPU)
+        for key in &["PATH", "HOME", "USER", "LANG", "LC_ALL"] {
             if let Ok(val) = std::env::var(key) {
                 envs.push((key.to_string(), val));
             }
         }
 
+        // Detect Python venv path to add torch lib to LD_LIBRARY_PATH
+        let venv_python = project_root.join("venv-cu128").join("bin").join("python");
+        let torch_lib_path = if venv_python.exists() {
+            // Query Python for torch lib path - need to clear CUDA_VISIBLE_DEVICES
+            // and set NVML check before importing torch
+            let output = std::process::Command::new(&venv_python)
+                .env_remove("CUDA_VISIBLE_DEVICES")
+                .env("PYTORCH_NVML_BASED_CUDA_CHECK", "0")
+                .args(["-c", "import torch,os;print(os.path.dirname(torch.__file__)+'/lib')"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string());
+            output
+        } else {
+            None
+        };
+
+        // Build LD_LIBRARY_PATH: torch/lib + /usr/lib/x86_64-linux-gnu + inherited
+        let mut ld_path = String::new();
+        if let Some(ref tp) = torch_lib_path {
+            ld_path.push_str(tp);
+            ld_path.push(':');
+        }
+        ld_path.push_str("/usr/lib/x86_64-linux-gnu");
+        if let Ok(inherited) = std::env::var("LD_LIBRARY_PATH") {
+            if !inherited.is_empty() {
+                ld_path.push(':');
+                ld_path.push_str(&inherited);
+            }
+        }
+        envs.push(("LD_LIBRARY_PATH".to_string(), ld_path));
+
         // 自动检测模型路径 - 优先 USB 路径
+        let mut detected_model_path: Option<String> = None;
         let known_model_paths = [
             "/home/acproject/usb/hf_models/MiniMax-H3",
             "/mnt/usb/hf_models/MiniMax-H3",
         ];
         for p in &known_model_paths {
             if Path::new(p).join("modular_model_index.json").exists() {
-                envs.push(("FA_MODEL_PATH".to_string(), p.to_string()));
+                detected_model_path = Some(p.to_string());
                 tracing::info!("Auto-detected model path: {}", p);
                 break;
             }
@@ -509,8 +543,51 @@ impl FlashAttnBackend {
         if let Some(ref models_dir) = self.config.models_dir {
             let model_path = format!("{}/HunyuanVideoAudio", models_dir);
             if Path::new(&model_path).exists() {
-                envs.push(("FA_MODEL_PATH".to_string(), model_path));
+                detected_model_path = Some(model_path);
             }
+        }
+
+        // Determine transformer_devices and vae_device based on actual GPU count.
+        // Query Python to detect GPU count before starting the bridge.
+        let python_for_detect = if venv_python.exists() {
+            venv_python.clone()
+        } else {
+            PathBuf::from("python3")
+        };
+        let gpu_count = std::process::Command::new(&python_for_detect)
+            .env_remove("CUDA_VISIBLE_DEVICES")
+            .env("PYTORCH_NVML_BASED_CUDA_CHECK", "0")
+            .args(["-c", "import torch;print(torch.cuda.device_count())"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        tracing::info!("Detected {} GPU(s)", gpu_count);
+
+        let tf_devices = if gpu_count >= 3 {
+            "cuda:0,cuda:1".to_string()
+        } else if gpu_count == 2 {
+            "cuda:0,cuda:1".to_string()
+        } else if gpu_count == 1 {
+            // Single GPU: put everything on cuda:0, but model parallelism
+            // requires >=2 GPUs. Will need to use 4bit or CPU offload.
+            tracing::warn!("Only 1 GPU detected - model parallelism requires 2+ GPUs. Using cuda:0 for all.");
+            "cuda:0,cuda:0".to_string()  // duplicate device as fallback
+        } else {
+            tracing::warn!("No GPUs detected via torch.cuda.device_count()");
+            "cuda:0,cuda:0".to_string()
+        };
+        envs.push(("FA_TRANSFORMER_DEVICES".to_string(), tf_devices.clone()));
+        let vae_dev_str = if gpu_count >= 3 { "cuda:2".to_string() } else { "cuda:0".to_string() };
+        envs.push(("FA_VAE_DEVICE".to_string(), vae_dev_str.clone()));
+        // text_encoder (qwen_vl) on same device as VAE (examples/run.sh convention)
+        let te_dev_str = vae_dev_str.clone();
+        envs.push(("FA_TEXT_ENCODER_DEVICES".to_string(), te_dev_str.clone()));
+
+        // Set model path if detected
+        if let Some(ref mp) = detected_model_path {
+            envs.push(("FA_MODEL_PATH".to_string(), mp.clone()));
         }
 
         // 先杀掉可能残留的子进程（由本实例启动的）
@@ -536,8 +613,8 @@ impl FlashAttnBackend {
         }
 
         // 启动进程
-        // Note: Don't pass --transformer-devices or --vae-device on CLI;
-        // let Python auto-detect GPUs (_auto_detect_devices expands to all available GPUs).
+        // Explicitly pass ALL configuration via CLI args to avoid any ambiguity
+        // with environment variables or argparse defaults.
         let mut cmd = Command::new(&python);
         cmd.current_dir(&project_root)
             .arg("-m")
@@ -548,13 +625,34 @@ impl FlashAttnBackend {
             .arg(port.to_string())
             .arg("--quantization")
             .arg(&self.config.quantization)
-            .stdin(Stdio::null())
+            .arg("--transformer-devices")
+            .arg(&tf_devices)
+            .arg("--vae-device")
+            .arg(&vae_dev_str)
+            .arg("--text-encoder-devices")
+            .arg(&te_dev_str)
+            .arg("--vae-fp16");
+
+        // Pass model path if detected
+        if let Some(ref mp) = detected_model_path {
+            cmd.arg("--model-path").arg(mp);
+        }
+
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_file_err));
 
         for (k, v) in &envs {
             cmd.env(k, v);
         }
+
+        // Explicitly remove CUDA_VISIBLE_DEVICES inherited from parent shell
+        // so the bridge can see ALL available GPUs for tensor model parallelism.
+        cmd.env_remove("CUDA_VISIBLE_DEVICES");
+
+        // Also ensure PYTORCH_NVML_BASED_CUDA_CHECK is set BEFORE torch import
+        // (V100 NVML init can fail and cause device_count=0)
+        cmd.env("PYTORCH_NVML_BASED_CUDA_CHECK", "0");
 
         // 添加PYTHONPATH: 确保project_root在路径中
         let existing_pythonpath = std::env::var("PYTHONPATH").unwrap_or_default();
@@ -851,13 +949,13 @@ impl FlashAttnBackend {
         }
 
         // 发起加载请求
-        let model_path = self.config.models_dir.as_ref()
-            .map(|d| format!("{}/HunyuanVideoAudio", d));
-
+        // Don't hardcode model_path - let the Python bridge auto-detect it
+        // (the bridge already has FA_MODEL_PATH env set from spawn_bridge_process,
+        //  and its _auto_detect_model_path() checks USB path, HF cache, etc.)
         let req = LoadRequest {
             model_id: "MiniMax-H3".to_string(),
             model_type: "t2va".to_string(),
-            model_path,
+            model_path: None,
             quantization: self.config.quantization.clone(),
             device_id: self.config.device_id,
             dtype: "bf16".to_string(),

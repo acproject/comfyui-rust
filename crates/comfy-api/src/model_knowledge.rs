@@ -1462,9 +1462,9 @@ pub fn get_workflow_templates() -> Vec<WorkflowTemplate> {
                     inputs: serde_json::json!({
                         "prompt": "",
                         "mode": "t2va",
-                        "width": 848,
+                        "width": 832,
                         "height": 480,
-                        "num_frames": 123,
+                        "num_frames": 124,
                         "steps": 50,
                         "cfg": 7.0,
                         "seed": 42,
@@ -1542,9 +1542,9 @@ pub fn get_workflow_templates() -> Vec<WorkflowTemplate> {
                     inputs: serde_json::json!({
                         "prompt": "",
                         "mode": "i2va",
-                        "width": 848,
+                        "width": 832,
                         "height": 480,
-                        "num_frames": 123,
+                        "num_frames": 124,
                         "steps": 50,
                         "cfg": 7.0,
                         "seed": 42,
@@ -1617,9 +1617,9 @@ pub fn get_workflow_templates() -> Vec<WorkflowTemplate> {
                     inputs: serde_json::json!({
                         "prompt": "",
                         "mode": "t2va",
-                        "width": 848,
+                        "width": 832,
                         "height": 480,
-                        "num_frames": 123,
+                        "num_frames": 124,
                         "steps": 50,
                         "cfg": 7.0,
                         "seed": 42,
@@ -1653,7 +1653,7 @@ pub fn get_workflow_templates() -> Vec<WorkflowTemplate> {
                     inputs: serde_json::json!({
                         "prompt": "",
                         "mode": "t2va",
-                        "width": 848,
+                        "width": 832,
                         "height": 480,
                         "num_frames": 73,
                         "steps": 50,
@@ -1684,7 +1684,7 @@ pub fn get_workflow_templates() -> Vec<WorkflowTemplate> {
                     y: 200,
                     inputs: serde_json::json!({
                         "fps": 24,
-                        "width": 848,
+                        "width": 832,
                         "height": 480,
                         // V1: 主视频，放在0秒处
                         "v1_start": 0.0,

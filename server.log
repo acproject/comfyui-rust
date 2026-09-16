@@ -1,0 +1,66 @@
+[1m[92m   Compiling[0m comfy-inference v0.1.0 (/home/acproject/workspace/python_projects/flash_attn_v100/comfyui-rust/crates/comfy-inference)
+[1m[33mwarning[0m[1m: field `job_id` is never read[0m
+   [1m[94m--> [0mcrates/comfy-inference/src/flash_attn_backend.rs:148:5
+    [1m[94m|[0m
+[1m[94m147[0m [1m[94m|[0m struct LoadStatusResponse {
+    [1m[94m|[0m        [1m[94m------------------[0m [1m[94mfield in this struct[0m
+[1m[94m148[0m [1m[94m|[0m     job_id: String,
+    [1m[94m|[0m     [1m[33m^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `LoadStatusResponse` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: multiple fields are never read[0m
+   [1m[94m--> [0mcrates/comfy-inference/src/flash_attn_backend.rs:211:5
+    [1m[94m|[0m
+[1m[94m210[0m [1m[94m|[0m struct GenerationResultResponse {
+    [1m[94m|[0m        [1m[94m------------------------[0m [1m[94mfields in this struct[0m
+[1m[94m211[0m [1m[94m|[0m     job_id: String,
+    [1m[94m|[0m     [1m[33m^^^^^^[0m
+[1m[94m212[0m [1m[94m|[0m     status: String,
+[1m[94m213[0m [1m[94m|[0m     video_path: Option<String>,  // server-side path (not directly accessible)
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^[0m
+[1m[94m214[0m [1m[94m|[0m     audio_path: Option<String>,
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^[0m
+[1m[94m215[0m [1m[94m|[0m     duration_sec: Option<f64>,
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^^^[0m
+[1m[94m216[0m [1m[94m|[0m     fps: Option<i32>,
+[1m[94m217[0m [1m[94m|[0m     width: Option<i32>,
+    [1m[94m|[0m     [1m[33m^^^^^[0m
+[1m[94m218[0m [1m[94m|[0m     height: Option<i32>,
+    [1m[94m|[0m     [1m[33m^^^^^^[0m
+[1m[94m219[0m [1m[94m|[0m     num_frames: Option<i32>,
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^[0m
+[1m[94m220[0m [1m[94m|[0m     error: Option<String>,
+[1m[94m221[0m [1m[94m|[0m     progress: Option<f64>,
+    [1m[94m|[0m     [1m[33m^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `GenerationResultResponse` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+[1m[92m   Compiling[0m comfy-executor v0.1.0 (/home/acproject/workspace/python_projects/flash_attn_v100/comfyui-rust/crates/comfy-executor)
+[1m[33mwarning[0m: `comfy-inference` (lib) generated 2 warnings
+[1m[33mwarning[0m[1m: unused variable: `erode_radius`[0m
+   [1m[94m--> [0mcrates/comfy-executor/src/triposplat.rs:245:13
+    [1m[94m|[0m
+[1m[94m245[0m [1m[94m|[0m         let erode_radius = node.inputs.get("erode_radius")
+    [1m[94m|[0m             [1m[33m^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_erode_radius`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[92m   Compiling[0m comfy-api v0.1.0 (/home/acproject/workspace/python_projects/flash_attn_v100/comfyui-rust/crates/comfy-api)
+[1m[33mwarning[0m: `comfy-executor` (lib) generated 1 warning (run `cargo fix --lib -p comfy-executor` to apply 1 suggestion)
+[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 24.46s
+[1m[92m     Running[0m `target/debug/comfy-server`
+[2m2026-08-14T01:34:19.663697Z[0m [32m INFO[0m [2mcomfy_api::database[0m[2m:[0m Database opened at config/comfyui.db
+[2m2026-08-14T01:34:19.663801Z[0m [32m INFO[0m [2mcomfy_server[0m[2m:[0m Database opened at config/comfyui.db
+[2m2026-08-14T01:34:19.664315Z[0m [32m INFO[0m [2mcomfy_server[0m[2m:[0m Loaded config from database
+[2m2026-08-14T01:34:19.670989Z[0m [32m INFO[0m [2mcomfy_server[0m[2m:[0m Using CLI inference backend (sd-cli subprocess, FFI not available)
+[2m2026-08-14T01:34:19.677437Z[0m [33m WARN[0m [2mcomfy_inference::cli[0m[2m:[0m sd-cli not found at '/home/acproject/workspace/rust_projects/comfyui-rust/cpp/stable-diffusion.cpp/build/bin', CLI backend may not work
+[2m2026-08-14T01:34:19.677477Z[0m [32m INFO[0m [2mcomfy_api::state[0m[2m:[0m CliBackend created with sd-cli at '/home/acproject/workspace/rust_projects/comfyui-rust/cpp/stable-diffusion.cpp/build/bin'
+[2m2026-08-14T01:34:19.678522Z[0m [32m INFO[0m [2mcomfy_api::database[0m[2m:[0m Database opened at config/comfyui.db
+[2m2026-08-14T01:34:19.678772Z[0m [32m INFO[0m [2mcomfy_api::state[0m[2m:[0m Loaded agent config from database
+[2m2026-08-14T01:34:19.724184Z[0m [32m INFO[0m [2mcomfy_server[0m[2m:[0m Starting ComfyUI-Rust server on 127.0.0.1:8188
+[2m2026-08-14T01:34:19.724220Z[0m [32m INFO[0m [2mcomfy_server[0m[2m:[0m Config file: config/config.json
+[2m2026-08-14T01:34:19.727939Z[0m [32m INFO[0m [2mcomfy_api::server[0m[2m:[0m ComfyUI-Rust server listening on 127.0.0.1:8188
+[2m2026-08-14T01:34:19.727986Z[0m [32m INFO[0m [2mcomfy_api::server[0m[2m:[0m Config: backend=local, models_dir=models, output_dir=output
+[2m2026-08-14T01:34:19.730780Z[0m [32m INFO[0m [2mcomfy_api::assets[0m[2m:[0m Asset scan complete: 0 new assets registered
