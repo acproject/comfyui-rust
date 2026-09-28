@@ -108,6 +108,20 @@ pub struct InferenceConfig {
     pub audio_vae_path: Option<String>,
     #[serde(default = "default_flash_attn_bridge_url")]
     pub flash_attn_bridge_url: String,
+    /// Enable Python (HF/transformers/diffusers) fallback when the primary
+    /// CLI/FFI backend cannot handle a model.
+    #[serde(default = "default_true")]
+    pub python_fallback: bool,
+    /// Python interpreter for the fallback (None = auto-detect venv/python3).
+    #[serde(default)]
+    pub python_path: Option<String>,
+    /// Directory containing comfy_fallback scripts (None = workspace default).
+    #[serde(default)]
+    pub python_script_dir: Option<String>,
+    #[serde(default = "default_python_device")]
+    pub python_device: String,
+    #[serde(default = "default_python_dtype")]
+    pub python_dtype: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +206,11 @@ impl Default for InferenceConfig {
             embeddings_connectors_path: None,
             audio_vae_path: None,
             flash_attn_bridge_url: default_flash_attn_bridge_url(),
+            python_fallback: true,
+            python_path: None,
+            python_script_dir: None,
+            python_device: default_python_device(),
+            python_dtype: default_python_dtype(),
         }
     }
 }
@@ -318,6 +337,14 @@ fn default_flash_attn_bridge_url() -> String {
     "http://127.0.0.1:8998".to_string()
 }
 
+fn default_python_device() -> String {
+    "auto".to_string()
+}
+
+fn default_python_dtype() -> String {
+    "auto".to_string()
+}
+
 fn default_n_threads() -> u32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as u32)
@@ -391,6 +418,15 @@ impl ComfyConfig {
         }
         if let Ok(url) = std::env::var("FLASH_ATTN_BRIDGE_URL") {
             config.inference.flash_attn_bridge_url = url;
+        }
+        if let Ok(v) = std::env::var("COMFY_PYTHON_FALLBACK") {
+            config.inference.python_fallback = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(p) = std::env::var("COMFY_PYTHON_PATH") {
+            config.inference.python_path = Some(p);
+        }
+        if let Ok(d) = std::env::var("COMFY_PYTHON_SCRIPT_DIR") {
+            config.inference.python_script_dir = Some(d);
         }
 
         config

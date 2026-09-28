@@ -263,6 +263,10 @@ export interface LlmConfig {
   temperature: number;
   top_p: number;
   system_prompt: string;
+  python_fallback: boolean;
+  python_path: string | null;
+  python_script_dir: string | null;
+  python_dtype: string;
 }
 
 export interface AgentChatMessage {

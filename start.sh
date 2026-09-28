@@ -55,7 +55,7 @@ if [ "$USE_OPENCV" = "true" ]; then
 fi
 
 SD_CPP_DIR=""
-for dir in "$PROJECT_DIR/cpp/stable-diffusion-cpp" "$PROJECT_DIR/cpp/stable-diffusion.cpp"; do
+for dir in "$PROJECT_DIR/cpp/stable-diffusion.cpp" "$PROJECT_DIR/cpp/stable-diffusion-cpp"; do
     if [ -d "$dir" ]; then
         SD_CPP_DIR="$dir"
         break

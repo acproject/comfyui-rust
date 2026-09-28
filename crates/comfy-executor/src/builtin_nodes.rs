@@ -1425,13 +1425,15 @@ fn register_audio_to_llm(registry: &mut NodeRegistry) {
             .cloned()
             .unwrap_or(json!({
                 "mode": "local",
-                "cli_path": "/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli",
             }));
 
         let model_path = llm.get("model_path")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let mmproj_path = llm.get("mmproj_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let audio_path = audio.get("path")
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -1453,53 +1455,24 @@ fn register_audio_to_llm(registry: &mut NodeRegistry) {
                 });
             }
 
-            let cli_path = llm_config.get("cli_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli")
-                .to_string();
+            let request = crate::llm_runner::LlmRunRequest {
+                model_path: &model_path,
+                prompt: &prompt_text,
+                system: None,
+                audio: Some(&audio_path),
+                mmproj: mmproj_path.as_deref(),
+                max_tokens,
+                temperature,
+                top_p: None,
+                seed: None,
+            };
 
-            let mut cmd = tokio::process::Command::new(&cli_path);
-            cmd.arg("-m").arg(&model_path)
-                .arg("--audio").arg(&audio_path)
-                .arg("-p").arg(&prompt_text)
-                .arg("--n-predict").arg(max_tokens.to_string())
-                .arg("--temp").arg(temperature.to_string())
-                .arg("--no-display-prompt")
-                .arg("--log-disable")
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-
-            if let Some(mmproj) = llm.get("mmproj_path").and_then(|v| v.as_str()) {
-                if !mmproj.is_empty() {
-                    cmd.arg("--mmproj").arg(mmproj);
-                }
-            }
-
-            if let Some(extra_args) = llm_config.get("extra_args").and_then(|v| v.as_str()) {
-                for arg in extra_args.split_whitespace() {
-                    cmd.arg(arg);
-                }
-            }
-
-            match cmd.output().await {
-                Ok(output) => {
-                    if output.status.success() {
-                        let text = String::from_utf8_lossy(&output.stdout).to_string();
-                        Ok(vec![json!(text.trim())])
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                        Err(ExecutorError::NodeExecutionFailed {
-                            node_id: node_id.to_string(),
-                            message: format!("llama-cli audio processing failed: {}", stderr),
-                        })
-                    }
-                }
-                Err(e) => {
-                    Err(ExecutorError::NodeExecutionFailed {
-                        node_id: node_id.to_string(),
-                        message: format!("Failed to execute llama-cli: {}", e),
-                    })
-                }
+            match crate::llm_runner::run_local_or_python(&llm_config, request).await {
+                Ok(text) => Ok(vec![json!(text)]),
+                Err(message) => Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id.to_string(),
+                    message: format!("AudioToLLM failed: {}", message),
+                }),
             }
         })
     }));
@@ -2183,13 +2156,15 @@ fn register_llm_text_gen(registry: &mut NodeRegistry) {
             .cloned()
             .unwrap_or(json!({
                 "mode": "local",
-                "cli_path": "/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli",
             }));
 
         let model_path = llm.get("model_path")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let mmproj_path = llm.get("mmproj_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let prompt_text = prompt.as_str().unwrap_or("").to_string();
 
         Box::pin(async move {
@@ -2257,11 +2232,6 @@ fn register_llm_text_gen(registry: &mut NodeRegistry) {
                     }
                 }
             } else {
-                let cli_path = llm_config.get("cli_path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli")
-                    .to_string();
-
                 if model_path.is_empty() {
                     return Err(ExecutorError::NodeExecutionFailed {
                         node_id: node_id.to_string(),
@@ -2269,58 +2239,24 @@ fn register_llm_text_gen(registry: &mut NodeRegistry) {
                     });
                 }
 
-                let mut cmd = tokio::process::Command::new(&cli_path);
-                cmd.arg("-m").arg(&model_path)
-                    .arg("-p").arg(&prompt_text)
-                    .arg("--n-predict").arg(max_tokens.to_string())
-                    .arg("--temp").arg(temperature.to_string())
-                    .arg("--top-p").arg(top_p.to_string())
-                    .arg("--no-display-prompt")
-                    .arg("--log-disable")
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped());
+                let request = crate::llm_runner::LlmRunRequest {
+                    model_path: &model_path,
+                    prompt: &prompt_text,
+                    system: system_prompt.as_deref(),
+                    audio: None,
+                    mmproj: mmproj_path.as_deref(),
+                    max_tokens,
+                    temperature,
+                    top_p: Some(top_p),
+                    seed: Some(seed),
+                };
 
-                if let Some(mmproj) = llm.get("mmproj_path").and_then(|v| v.as_str()) {
-                    if !mmproj.is_empty() {
-                        cmd.arg("--mmproj").arg(mmproj);
-                        tracing::info!("LLMTextGen: auto-detected mmproj: {}", mmproj);
-                    }
-                }
-
-                if seed >= 0 {
-                    cmd.arg("--seed").arg(seed.to_string());
-                }
-
-                if let Some(ref sp) = system_prompt {
-                    cmd.arg("--system-prompt").arg(sp);
-                }
-
-                if let Some(extra_args) = llm_config.get("extra_args").and_then(|v| v.as_str()) {
-                    for arg in extra_args.split_whitespace() {
-                        cmd.arg(arg);
-                    }
-                }
-
-                match cmd.output().await {
-                    Ok(output) => {
-                        if output.status.success() {
-                            let text = String::from_utf8_lossy(&output.stdout).to_string();
-                            let cleaned = text.trim().to_string();
-                            Ok(vec![json!(cleaned)])
-                        } else {
-                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                            Err(ExecutorError::NodeExecutionFailed {
-                                node_id: node_id.to_string(),
-                                message: format!("llama-cli failed: {}", stderr),
-                            })
-                        }
-                    }
-                    Err(e) => {
-                        Err(ExecutorError::NodeExecutionFailed {
-                            node_id: node_id.to_string(),
-                            message: format!("Failed to execute llama-cli: {}", e),
-                        })
-                    }
+                match crate::llm_runner::run_local_or_python(&llm_config, request).await {
+                    Ok(text) => Ok(vec![json!(text)]),
+                    Err(message) => Err(ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("LLMTextGen failed: {}", message),
+                    }),
                 }
             }
         })

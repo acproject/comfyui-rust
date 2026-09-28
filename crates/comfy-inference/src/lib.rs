@@ -5,6 +5,7 @@ pub mod cli;
 pub mod error;
 pub mod image;
 pub mod params;
+pub mod python;
 pub mod types;
 
 #[cfg(feature = "local-ffi")]
@@ -20,6 +21,10 @@ pub mod flash_attn_backend;
 
 pub use backend::{AsyncInferenceBackend, BackendCapabilities, InferenceBackend, NullBackend};
 pub use cli::{CliBackend, CliBackendConfig, convert_model_cli};
+pub use python::{
+    FallbackBackend, PythonBackend, PythonInferConfig, default_script_dir, is_diffusers_pipeline_dir,
+    is_hf_model_dir, resolve_python, resolve_script_dir,
+};
 pub use error::{GenerationMode, InferenceError, InferenceResult};
 pub use image::{ImageError, SdImage, SdVideo, SdAudio};
 pub use params::*;

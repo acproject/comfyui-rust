@@ -88,6 +88,10 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
             tracing::info!("Using CLI inference backend (sd-cli subprocess)");
             AppState::with_cli_backend(registry, config, config_path)
         }
+        "python" => {
+            tracing::info!("Using Python-only inference backend (HF transformers/diffusers)");
+            AppState::with_python_backend(registry, config, config_path)
+        }
         _ => {
             tracing::info!("Using local inference backend (stable-diffusion.cpp via FFI)");
             AppState::with_local_backend(registry, config, config_path)
@@ -107,6 +111,10 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
         "cli" => {
             tracing::info!("Using CLI inference backend (sd-cli subprocess)");
             AppState::with_cli_backend(registry, config, config_path)
+        }
+        "python" => {
+            tracing::info!("Using Python-only inference backend (HF transformers/diffusers)");
+            AppState::with_python_backend(registry, config, config_path)
         }
         _ => {
             tracing::info!("Using null inference backend (no local inference support compiled)");

@@ -9,13 +9,16 @@ use crate::queue::PromptQueue;
 use crate::ws::WsBroadcaster;
 use comfy_executor::{Executor, NodeRegistry};
 use comfy_inference::NullBackend;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "local-ffi")]
 use comfy_inference::{LocalBackend, ContextConfig};
-use comfy_inference::{CliBackend, CliBackendConfig};
+use comfy_inference::{
+    CliBackend, CliBackendConfig, FallbackBackend, InferenceBackend, PythonBackend,
+    PythonInferConfig,
+};
 
 pub struct AppState {
     pub executor: Arc<Executor>,
@@ -64,8 +67,8 @@ fn load_agent_config_from_db(db: &Database) -> AgentConfig {
     }
 }
 
-fn load_llm_config_from_db(db: &Database) -> LlmConfig {
-    match db.get::<LlmConfig>("llm_config") {
+fn load_llm_config_from_db(db: &Database, config_path: &Path) -> LlmConfig {
+    let mut config = match db.get::<LlmConfig>("llm_config") {
         Ok(Some(config)) => {
             tracing::info!("Loaded LLM config from database");
             config
@@ -75,13 +78,106 @@ fn load_llm_config_from_db(db: &Database) -> LlmConfig {
             tracing::warn!("Failed to load LLM config from database: {}, using defaults", e);
             LlmConfig::from_env()
         }
-    }
+    };
+    config.resolve_local_paths(workspace_root_from_config(config_path).as_deref());
+    config
 }
 
 fn config_dir_from_path(config_path: &PathBuf) -> String {
     config_path.parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "config".to_string())
+}
+
+/// Workspace root inferred from `<root>/config/config.json`.
+fn workspace_root_from_config(config_path: &Path) -> Option<PathBuf> {
+    config_path
+        .parent()
+        .and_then(|p| p.parent())
+        .map(PathBuf::from)
+}
+
+/// Build the Python HF fallback backend from inference config.
+fn build_python_backend(config: &ComfyConfig, workspace_root: Option<&Path>) -> PythonBackend {
+    let py_config = PythonInferConfig {
+        python_path: config.inference.python_path.clone(),
+        script_dir: config.inference.python_script_dir.clone(),
+        device: config.inference.python_device.clone(),
+        dtype: config.inference.python_dtype.clone(),
+        enabled: config.inference.python_fallback,
+    };
+    PythonBackend::new(py_config, workspace_root)
+}
+
+/// Wrap a primary backend with the Python fallback when enabled in config.
+fn with_optional_python_fallback(
+    primary: Arc<dyn comfy_inference::InferenceBackend>,
+    config: &ComfyConfig,
+    workspace_root: Option<&Path>,
+) -> Arc<dyn comfy_inference::InferenceBackend> {
+    if !config.inference.python_fallback {
+        return primary;
+    }
+    let python = build_python_backend(config, workspace_root);
+    if !python.supports_image_generation() {
+        tracing::warn!(
+            "Python fallback enabled but fallback scripts unavailable; \
+             using primary backend only"
+        );
+        return primary;
+    }
+    tracing::info!("Python HF fallback enabled (interpreter: {})", python.interpreter());
+    Arc::new(FallbackBackend::new(primary, python))
+}
+
+/// Shared AppState tail for constructors that already built an inference backend.
+fn build_state_with_backend(
+    registry: NodeRegistry,
+    config: ComfyConfig,
+    config_path: PathBuf,
+    backend: Arc<dyn comfy_inference::InferenceBackend>,
+) -> AppState {
+    let models_dir = PathBuf::from(&config.models.base_dir);
+    std::fs::create_dir_all(&models_dir).ok();
+
+    let output_dir = config.output.dir.clone();
+    let input_dir = PathBuf::from(std::env::var("COMFY_INPUT_DIR")
+        .unwrap_or_else(|_| "input".to_string()));
+    std::fs::create_dir_all(&input_dir).ok();
+
+    let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
+        .unwrap_or_else(|_| "custom_nodes".to_string()));
+    std::fs::create_dir_all(&custom_nodes_dir).ok();
+
+    let executor = Arc::new(Executor::new(registry.clone(), backend));
+    let registry = Arc::new(Mutex::new(registry));
+    let queue = Arc::new(PromptQueue::new());
+    let broadcaster = WsBroadcaster::new();
+    let images = Arc::new(ImageStore::new(output_dir));
+
+    let config_dir = config_dir_from_path(&config_path);
+    let db = create_database(&config_dir);
+    let agent_config = load_agent_config_from_db(&db);
+    let llm_config = load_llm_config_from_db(&db, &config_path);
+    let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
+
+    AppState {
+        executor,
+        queue,
+        broadcaster,
+        registry,
+        images,
+        assets,
+        input_dir,
+        custom_nodes_dir,
+        models_dir,
+        config: Arc::new(std::sync::RwLock::new(config)),
+        config_path: Arc::new(config_path),
+        agent: Arc::new(AgentService::new(agent_config)),
+        llm: Arc::new(LlmService::new(llm_config)),
+        download_tracker: create_download_tracker(),
+        db,
+    }
 }
 
 impl AppState {
@@ -117,7 +213,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
-        let llm_config = load_llm_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db, &config_path);
 
         let registry = Arc::new(Mutex::new(registry));
         let queue = Arc::new(PromptQueue::new());
@@ -173,7 +269,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
-        let llm_config = load_llm_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db, &config_path);
         let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
 
         Self {
@@ -225,58 +321,21 @@ impl AppState {
             }
         };
 
-        let output_dir = config.output.dir.clone();
-        let input_dir = PathBuf::from(std::env::var("COMFY_INPUT_DIR")
-            .unwrap_or_else(|_| "input".to_string()));
-        std::fs::create_dir_all(&input_dir).ok();
+        let workspace_root = workspace_root_from_config(&config_path);
+        let backend = with_optional_python_fallback(backend, &config, workspace_root.as_deref());
 
-        let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
-            .unwrap_or_else(|_| "custom_nodes".to_string()));
-        std::fs::create_dir_all(&custom_nodes_dir).ok();
-
-        let executor = Arc::new(Executor::new(registry.clone(), backend));
-        let registry = Arc::new(Mutex::new(registry));
-        let queue = Arc::new(PromptQueue::new());
-        let broadcaster = WsBroadcaster::new();
-        let images = Arc::new(ImageStore::new(output_dir));
-
-        let config_dir = config_dir_from_path(&config_path);
-        let db = create_database(&config_dir);
-        let agent_config = load_agent_config_from_db(&db);
-        let llm_config = load_llm_config_from_db(&db);
-        let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
-
-        Self {
-            executor,
-            queue,
-            broadcaster,
-            registry,
-            images,
-            assets,
-            input_dir,
-            custom_nodes_dir,
-            models_dir,
-            config: Arc::new(std::sync::RwLock::new(config)),
-            config_path: Arc::new(config_path),
-            agent: Arc::new(AgentService::new(agent_config)),
-            llm: Arc::new(LlmService::new(llm_config)),
-            download_tracker: create_download_tracker(),
-            db,
-        }
+        build_state_with_backend(registry, config, config_path, backend)
     }
 
     pub fn with_cli_backend(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
-        let models_dir = PathBuf::from(&config.models.base_dir);
-        std::fs::create_dir_all(&models_dir).ok();
-
         let sd_cli_path = config.inference.sd_cli_path.clone()
             .or_else(|| std::env::var("SD_CLI_PATH").ok())
             .or_else(|| {
                 let manifest_dir = config_path.parent()?;
                 let workspace_root = manifest_dir.parent()?;
                 let possible_dirs = [
-                    "cpp/stable-diffusion-cpp",
                     "cpp/stable-diffusion.cpp",
+                    "cpp/stable-diffusion-cpp",
                 ];
                 for dir in &possible_dirs {
                     let cli_path = workspace_root.join(dir).join("build/bin/sd-cli");
@@ -309,44 +368,20 @@ impl AppState {
             }
         };
 
-        let output_dir = config.output.dir.clone();
-        let input_dir = PathBuf::from(std::env::var("COMFY_INPUT_DIR")
-            .unwrap_or_else(|_| "input".to_string()));
-        std::fs::create_dir_all(&input_dir).ok();
+        let workspace_root = workspace_root_from_config(&config_path);
+        let backend = with_optional_python_fallback(backend, &config, workspace_root.as_deref());
 
-        let custom_nodes_dir = PathBuf::from(std::env::var("COMFY_CUSTOM_NODES_DIR")
-            .unwrap_or_else(|_| "custom_nodes".to_string()));
-        std::fs::create_dir_all(&custom_nodes_dir).ok();
+        build_state_with_backend(registry, config, config_path, backend)
+    }
 
-        let executor = Arc::new(Executor::new(registry.clone(), backend));
-        let registry = Arc::new(Mutex::new(registry));
-        let queue = Arc::new(PromptQueue::new());
-        let broadcaster = WsBroadcaster::new();
-        let images = Arc::new(ImageStore::new(output_dir));
-
-        let config_dir = config_dir_from_path(&config_path);
-        let db = create_database(&config_dir);
-        let agent_config = load_agent_config_from_db(&db);
-        let llm_config = load_llm_config_from_db(&db);
-        let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
-
-        Self {
-            executor,
-            queue,
-            broadcaster,
-            registry,
-            images,
-            assets,
-            input_dir,
-            custom_nodes_dir,
-            models_dir,
-            config: Arc::new(std::sync::RwLock::new(config)),
-            config_path: Arc::new(config_path),
-            agent: Arc::new(AgentService::new(agent_config)),
-            llm: Arc::new(LlmService::new(llm_config)),
-            download_tracker: create_download_tracker(),
-            db,
-        }
+    /// Python-only backend: run every supported model through the
+    /// `py/flash_attn_v100/comfy_fallback` scripts (HF transformers/diffusers).
+    pub fn with_python_backend(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
+        let workspace_root = workspace_root_from_config(&config_path);
+        let python = build_python_backend(&config, workspace_root.as_deref());
+        let backend = Arc::new(python) as Arc<dyn comfy_inference::InferenceBackend>;
+        tracing::info!("Using Python-only inference backend");
+        build_state_with_backend(registry, config, config_path, backend)
     }
 
     fn build(
@@ -382,7 +417,7 @@ impl AppState {
         let config_dir = config_dir_from_path(&config_path);
         let db = create_database(&config_dir);
         let agent_config = load_agent_config_from_db(&db);
-        let llm_config = load_llm_config_from_db(&db);
+        let llm_config = load_llm_config_from_db(&db, &config_path);
         let assets = Arc::new(AssetManager::new(db.clone(), input_dir.clone(), PathBuf::from(&config.output.dir)));
 
         Self {

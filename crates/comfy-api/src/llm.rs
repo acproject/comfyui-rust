@@ -24,6 +24,18 @@ pub struct LlmConfig {
     pub top_p: f64,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    /// In "local" mode, retry with the Python HF fallback when llama-cli
+    /// cannot load the model (HF format dirs, missing gguf support, etc.).
+    #[serde(default = "default_python_fallback")]
+    pub python_fallback: bool,
+    /// Python interpreter for the LLM fallback (None = auto-detect).
+    #[serde(default)]
+    pub python_path: Option<String>,
+    /// Directory containing comfy_fallback/llm_generate.py.
+    #[serde(default)]
+    pub python_script_dir: Option<String>,
+    #[serde(default = "default_python_dtype")]
+    pub python_dtype: String,
 }
 
 impl Default for LlmConfig {
@@ -39,6 +51,10 @@ impl Default for LlmConfig {
             temperature: default_temperature(),
             top_p: default_top_p(),
             system_prompt: default_system_prompt(),
+            python_fallback: default_python_fallback(),
+            python_path: None,
+            python_script_dir: None,
+            python_dtype: default_python_dtype(),
         }
     }
 }
@@ -80,6 +96,15 @@ impl LlmConfig {
                 config.top_p = p;
             }
         }
+        if let Ok(val) = std::env::var("COMFY_LLM_PYTHON_FALLBACK") {
+            config.python_fallback = val == "1" || val.eq_ignore_ascii_case("true");
+        }
+        if let Ok(val) = std::env::var("COMFY_LLM_PYTHON_PATH") {
+            config.python_path = Some(val);
+        }
+        if let Ok(val) = std::env::var("COMFY_LLM_PYTHON_SCRIPT_DIR") {
+            config.python_script_dir = Some(val);
+        }
 
         config
     }
@@ -96,7 +121,33 @@ impl LlmConfig {
             "temperature": self.temperature,
             "top_p": self.top_p,
             "system_prompt": self.system_prompt,
+            "python_fallback": self.python_fallback,
+            "python_path": self.python_path,
+            "python_script_dir": self.python_script_dir,
+            "python_dtype": self.python_dtype,
         })
+    }
+
+    /// Fill in machine-local paths that were left empty or point at
+    /// non-existent files, using the workspace layout as the source of truth.
+    pub fn resolve_local_paths(&mut self, workspace_root: Option<&std::path::Path>) {
+        if !std::path::Path::new(&self.cli_path).exists() {
+            if let Some(root) = workspace_root {
+                let llama_cli = root
+                    .join("cpp/llama.cpp/build/bin/llama-cli");
+                if llama_cli.exists() {
+                    self.cli_path = llama_cli.to_string_lossy().to_string();
+                }
+            }
+        }
+        if self.python_script_dir.as_deref().map(|p| p.is_empty()).unwrap_or(true) {
+            if let Some(root) = workspace_root {
+                let dir = root.join("py/flash_attn_v100/comfy_fallback");
+                if dir.is_dir() {
+                    self.python_script_dir = Some(dir.to_string_lossy().to_string());
+                }
+            }
+        }
     }
 }
 
@@ -105,7 +156,7 @@ fn default_mode() -> String {
 }
 
 fn default_cli_path() -> String {
-    "/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp-qwen3-omni/build/bin/llama-cli".to_string()
+    "/home/acproject/workspace/rust_projects/comfyui-rust/cpp/llama.cpp/build/bin/llama-cli".to_string()
 }
 
 fn default_extra_args() -> String {
@@ -134,6 +185,14 @@ fn default_top_p() -> f64 {
 
 fn default_system_prompt() -> String {
     "".to_string()
+}
+
+fn default_python_fallback() -> bool {
+    true
+}
+
+fn default_python_dtype() -> String {
+    "auto".to_string()
 }
 
 pub struct LlmService {

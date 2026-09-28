@@ -100,6 +100,7 @@ const LlmSettings: FC = () => {
           style={inputStyle}
         >
           <option value="local">Local (llama-cli)</option>
+          <option value="python">Python HF Fallback (transformers)</option>
           <option value="remote">Remote API (OpenAI-compatible)</option>
         </select>
       </div>
@@ -125,6 +126,53 @@ const LlmSettings: FC = () => {
               style={inputStyle}
               placeholder="--ctx-size 4096 --threads 4"
             />
+          </div>
+          <div style={{ ...sectionStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              id="llm-python-fallback"
+              type="checkbox"
+              checked={config.python_fallback}
+              onChange={(e) => updateConfig({ python_fallback: e.target.checked })}
+            />
+            <label htmlFor="llm-python-fallback" style={{ color: '#a0aec0', fontSize: 11 }}>
+              Retry HF-format models with Python fallback
+            </label>
+          </div>
+          <div style={sectionStyle}>
+            <div style={labelStyle}>Python Interpreter (optional)</div>
+            <input
+              type="text"
+              value={config.python_path || ''}
+              onChange={(e) => updateConfig({ python_path: e.target.value || null })}
+              style={inputStyle}
+              placeholder="/path/to/venv/bin/python (auto-detect if empty)"
+            />
+          </div>
+        </>
+      ) : config.mode === 'python' ? (
+        <>
+          <div style={sectionStyle}>
+            <div style={labelStyle}>Python Interpreter</div>
+            <input
+              type="text"
+              value={config.python_path || ''}
+              onChange={(e) => updateConfig({ python_path: e.target.value || null })}
+              style={inputStyle}
+              placeholder="/path/to/venv/bin/python (auto-detect if empty)"
+            />
+          </div>
+          <div style={sectionStyle}>
+            <div style={labelStyle}>Torch Dtype</div>
+            <select
+              value={config.python_dtype || 'auto'}
+              onChange={(e) => updateConfig({ python_dtype: e.target.value })}
+              style={inputStyle}
+            >
+              <option value="auto">auto</option>
+              <option value="float16">float16</option>
+              <option value="bfloat16">bfloat16</option>
+              <option value="float32">float32</option>
+            </select>
           </div>
         </>
       ) : (

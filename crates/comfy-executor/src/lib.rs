@@ -2,6 +2,7 @@ pub mod builtin_nodes;
 pub mod error;
 pub mod execution_context;
 pub mod executor;
+pub mod llm_runner;
 pub mod registry;
 
 #[cfg(feature = "controlnet")]
