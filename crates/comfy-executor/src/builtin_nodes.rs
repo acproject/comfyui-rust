@@ -12,17 +12,104 @@ use std::sync::Arc;
 enum ModelType {
     SD3,
     Flux,
+    Flux2,
     SDXL,
     SD15,
+    SD2,
+    QwenImage,
+    Anima,
     Wan,
     LTX,
+    /// Model family known to sd.cpp but without bespoke wiring here.
+    Other,
     Unknown,
 }
 
+fn model_type_str(t: ModelType) -> &'static str {
+    match t {
+        ModelType::SD3 => "sd3",
+        ModelType::Flux => "flux",
+        ModelType::Flux2 => "flux2",
+        ModelType::SDXL => "sdxl",
+        ModelType::SD15 => "sd15",
+        ModelType::SD2 => "sd2",
+        ModelType::QwenImage => "qwenimage",
+        ModelType::Anima => "anima",
+        ModelType::Wan => "wan",
+        ModelType::LTX => "ltx",
+        ModelType::Other => "other",
+        ModelType::Unknown => "unknown",
+    }
+}
+
+fn model_type_from_str(s: &str) -> Option<ModelType> {
+    Some(match s {
+        "sd3" => ModelType::SD3,
+        "flux" => ModelType::Flux,
+        "flux2" => ModelType::Flux2,
+        "sdxl" => ModelType::SDXL,
+        "sd15" => ModelType::SD15,
+        "sd2" => ModelType::SD2,
+        "qwenimage" | "qwen_image" => ModelType::QwenImage,
+        "anima" => ModelType::Anima,
+        "wan" => ModelType::Wan,
+        "ltx" => ModelType::LTX,
+        "other" => ModelType::Other,
+        "unknown" => ModelType::Unknown,
+        _ => return None,
+    })
+}
+
+/// Map a stable-diffusion.cpp support-list family id to a local ModelType.
+fn sdcpp_family_to_model_type(family_id: &str, raw_name: &str) -> ModelType {
+    let normalized = raw_name.to_lowercase();
+    match family_id {
+        "sd" => {
+            if normalized.contains("sd2") || normalized.contains("sd-2") {
+                ModelType::SD2
+            } else {
+                ModelType::SD15
+            }
+        }
+        "sdxl" | "distilled_sd" => ModelType::SDXL,
+        "sd3" => ModelType::SD3,
+        "flux" => ModelType::Flux,
+        "flux2" => ModelType::Flux2,
+        "qwen_image" | "qwen_image_2.1" | "qwen_image_edit" => ModelType::QwenImage,
+        "anima" => ModelType::Anima,
+        "wan" => ModelType::Wan,
+        "ltx2" => ModelType::LTX,
+        _ => ModelType::Other,
+    }
+}
+
+/// Resolve the architecture from a loader node's model JSON, falling back to
+/// filename based detection.
+fn resolve_model_type_from_json(model: &serde_json::Value) -> ModelType {
+    if let Some(s) = model.get("model_type").and_then(|v| v.as_str()) {
+        if let Some(t) = model_type_from_str(s) {
+            return t;
+        }
+    }
+    let ckpt = model
+        .get("model_path")
+        .or_else(|| model.get("diffusion_model_path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    detect_model_type(ckpt)
+}
+
 fn detect_model_type(checkpoint_name: &str) -> ModelType {
+    // Prefer the (refreshable) stable-diffusion.cpp support knowledge base.
+    if let Some(family) = comfy_inference::sdcpp_match(checkpoint_name) {
+        return sdcpp_family_to_model_type(&family.id, checkpoint_name);
+    }
+
     let lower = checkpoint_name.to_lowercase();
     if lower.contains("sd3") || lower.contains("sd3.5") {
         ModelType::SD3
+    } else if lower.contains("flux2") || lower.contains("flux.2") {
+        ModelType::Flux2
     } else if lower.contains("flux") {
         ModelType::Flux
     } else if lower.contains("sdxl") {
@@ -31,7 +118,11 @@ fn detect_model_type(checkpoint_name: &str) -> ModelType {
         ModelType::Wan
     } else if lower.contains("ltx") {
         ModelType::LTX
-    } else if lower.contains("v1") || lower.contains("sd1") || lower.contains("stable-diffusion-1") {
+    } else if lower.contains("sd2") || lower.contains("sd-2") {
+        ModelType::SD2
+    } else if lower.contains("v1-5") || lower.contains("sd15") || lower.contains("sd1.5")
+        || lower.contains("stable-diffusion-1")
+    {
         ModelType::SD15
     } else {
         ModelType::Unknown
@@ -95,19 +186,30 @@ fn find_file_in_dir_contains(dir: &std::path::Path, substrings: &[&str]) -> Opti
     None
 }
 
+/// External text-encoder files that must exist for a family. Families not
+/// listed here carry their encoder inside the checkpoint/GGUF (or use an
+/// LLM encoder) and are allowed to proceed without them.
+fn required_text_encoders(model_type: ModelType) -> (bool, bool, bool) {
+    match model_type {
+        ModelType::SD3 => (true, true, true),
+        ModelType::Flux => (true, false, true),
+        ModelType::SDXL | ModelType::SD2 => (true, true, false),
+        ModelType::SD15 => (true, false, false),
+        ModelType::Wan => (false, false, true),
+        ModelType::LTX
+        | ModelType::Flux2
+        | ModelType::QwenImage
+        | ModelType::Anima
+        | ModelType::Other
+        | ModelType::Unknown => (false, false, false),
+    }
+}
+
 fn auto_detect_text_encoders(model_type: ModelType) -> (Option<String>, Option<String>, Option<String>) {
     let base = get_models_base_dir();
     let te_dir = base.join("text_encoders");
 
-    let (need_clip_l, need_clip_g, need_t5xxl) = match model_type {
-        ModelType::SD3 => (true, true, true),
-        ModelType::Flux => (true, false, true),
-        ModelType::SDXL => (true, true, false),
-        ModelType::SD15 => (true, false, false),
-        ModelType::Wan => (false, false, true),
-        ModelType::LTX => (false, false, false),
-        ModelType::Unknown => (true, true, true),
-    };
+    let (need_clip_l, need_clip_g, need_t5xxl) = required_text_encoders(model_type);
 
     let clip_l_path = if need_clip_l {
         find_file_in_dir(&te_dir, &["clip_l"])
@@ -134,10 +236,17 @@ fn auto_detect_vae(model_type: ModelType) -> Option<String> {
 
     match model_type {
         ModelType::LTX => find_file_in_dir_contains(&vae_dir, &["video_vae", "video-vae"]),
-        ModelType::SD3 | ModelType::Flux => find_file_in_dir(&vae_dir, &["sd3_vae", "flux_vae", "ae"]),
-        ModelType::SDXL | ModelType::SD15 => find_file_in_dir(&vae_dir, &["sdxl_vae", "vae"]),
+        ModelType::SD3 => find_file_in_dir(&vae_dir, &["sd3_vae", "ae"]),
+        ModelType::Flux => find_file_in_dir(&vae_dir, &["flux_vae", "ae"]),
+        ModelType::Flux2 => find_file_in_dir_contains(&vae_dir, &["flux2"]),
+        ModelType::QwenImage => find_file_in_dir_contains(&vae_dir, &["qwen_image_vae", "qwen-image"]),
+        ModelType::SDXL | ModelType::SD15 | ModelType::SD2 => {
+            find_file_in_dir(&vae_dir, &["sdxl_vae", "vae"])
+        }
         ModelType::Wan => find_file_in_dir(&vae_dir, &["wan_vae"]),
-        ModelType::Unknown => find_file_in_dir(&vae_dir, &["sd3_vae", "flux_vae", "sdxl_vae", "vae", "ae"]),
+        ModelType::Anima | ModelType::Other | ModelType::Unknown => {
+            find_file_in_dir(&vae_dir, &["sd3_vae", "flux_vae", "sdxl_vae", "vae", "ae"])
+        }
     }
 }
 
@@ -356,7 +465,7 @@ fn register_checkpoint_loader(registry: &mut NodeRegistry) {
 
         let model_path = resolve_model_path("checkpoints", ckpt_name);
         let model_type = detect_model_type(ckpt_name);
-        let model_type_str = format!("{:?}", model_type).to_lowercase();
+        let model_type_str = model_type_str(model_type);
 
         Box::pin(async move {
             let is_gguf = model_path.to_lowercase().ends_with(".gguf");
@@ -927,24 +1036,7 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     || model_config.t5xxl_path.is_none();
                 let needs_vae_auto_detect = model_config.vae_path.is_none();
                 if needs_clip_auto_detect || needs_vae_auto_detect {
-                    let model_type_str = model.get("model_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let detected_type = match model_type_str {
-                        "sd3" => ModelType::SD3,
-                        "flux" => ModelType::Flux,
-                        "sdxl" => ModelType::SDXL,
-                        "sd15" => ModelType::SD15,
-                        "wan" => ModelType::Wan,
-                        "ltx" => ModelType::LTX,
-                        _ => {
-                            let ckpt = model.get("model_path")
-                                .or_else(|| model.get("diffusion_model_path"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            detect_model_type(ckpt)
-                        }
-                    };
+                    let detected_type = resolve_model_type_from_json(&model);
 
                     if needs_clip_auto_detect {
                         let (clip_l, clip_g, t5xxl) = auto_detect_text_encoders(detected_type);
@@ -963,9 +1055,17 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                                 model_config = model_config.with_t5xxl(path);
                             }
                         }
+                        // FLUX.2 uses a Gemma LLM text encoder passed via --llm.
+                        if detected_type == ModelType::Flux2 && model_config.llm_path.is_none() {
+                            let te_dir = get_models_base_dir().join("text_encoders");
+                            if let Some(path) = find_file_in_dir_contains(&te_dir, &["gemma"]) {
+                                tracing::info!("KSampler: auto-detected FLUX.2 LLM text encoder: {}", path);
+                                model_config = model_config.with_llm(path);
+                            }
+                        }
                         tracing::info!(
-                            "KSampler: auto-detected text encoders for {:?} model: clip_l={:?}, clip_g={:?}, t5xxl={:?}",
-                            detected_type, model_config.clip_l_path, model_config.clip_g_path, model_config.t5xxl_path
+                            "KSampler: auto-detected text encoders for {:?} model: clip_l={:?}, clip_g={:?}, t5xxl={:?}, llm={:?}",
+                            detected_type, model_config.clip_l_path, model_config.clip_g_path, model_config.t5xxl_path, model_config.llm_path
                         );
                     }
 
@@ -991,24 +1091,7 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     }
                 }
 
-                let model_type_str = model.get("model_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let detected_type = match model_type_str {
-                    "sd3" => ModelType::SD3,
-                    "flux" => ModelType::Flux,
-                    "sdxl" => ModelType::SDXL,
-                    "sd15" => ModelType::SD15,
-                    "wan" => ModelType::Wan,
-                    "ltx" => ModelType::LTX,
-                    _ => {
-                        let ckpt = model.get("model_path")
-                            .or_else(|| model.get("diffusion_model_path"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        detect_model_type(ckpt)
-                    }
-                };
+                let detected_type = resolve_model_type_from_json(&model);
 
                 if detected_type == ModelType::LTX {
                     let mut video_frames = 1i32;
@@ -1049,14 +1132,8 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                         Err(e) => Err(ExecutorError::Inference(e)),
                     }
                 } else {
-                    let (need_clip_l, need_clip_g, need_t5xxl) = match detected_type {
-                        ModelType::SD3 => (true, true, true),
-                        ModelType::Flux => (true, false, true),
-                        ModelType::SDXL => (true, true, false),
-                        ModelType::SD15 => (true, false, false),
-                        ModelType::Wan => (false, false, true),
-                        _ => (true, true, true),
-                    };
+                    let (need_clip_l, need_clip_g, need_t5xxl) =
+                        required_text_encoders(detected_type);
 
                     let mut params = ImageGenParams::new(prompt_text)
                         .with_negative_prompt(neg_prompt_text)
@@ -4041,8 +4118,13 @@ fn register_wan_video_sampler(registry: &mut NodeRegistry) {
                     let detected_type = match model_type_str {
                         "sd3" => ModelType::SD3,
                         "flux" => ModelType::Flux,
+                        "flux2" => ModelType::Flux2,
                         "sdxl" => ModelType::SDXL,
                         "sd15" => ModelType::SD15,
+                        "sd2" => ModelType::SD2,
+                        "qwenimage" | "qwen_image" => ModelType::QwenImage,
+                        "anima" => ModelType::Anima,
+                        "ltx" => ModelType::LTX,
                         "wan" => ModelType::Wan,
                         _ => ModelType::Wan,
                     };

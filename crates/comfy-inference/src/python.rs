@@ -111,7 +111,16 @@ pub fn resolve_python(explicit: Option<&str>, script_dir: Option<&Path>) -> Stri
         }
     }
 
-    // Machine-local venv used by the rest of the project (see flash_attn_backend).
+    // Prefer the venv shipped inside this repository's py project.
+    let repo_venv = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../py/flash_attn_v100/venv-cu128/bin/python"
+    );
+    if Path::new(repo_venv).exists() {
+        return repo_venv.to_string();
+    }
+
+    // Secondary machine-local venv (older layout, see flash_attn_backend).
     let known = "/home/acproject/workspace/python_projects/flash_attn_v100/venv-cu128/bin/python";
     if Path::new(known).exists() {
         return known.to_string();
@@ -338,9 +347,26 @@ impl FallbackBackend {
     }
 
     fn route_to_python(params: &ImageGenParams) -> bool {
-        PythonBackend::pick_model_path(params)
-            .map(|p| is_diffusers_pipeline_dir(&p))
-            .unwrap_or(false)
+        match PythonBackend::pick_model_path(params) {
+            Some(p) if is_diffusers_pipeline_dir(&p) => true,
+            Some(p) => {
+                // Weight files go to the primary (sd.cpp) backend. Log the
+                // matched family so unsupported models are easy to spot.
+                match crate::sdcpp_support::match_identifier(&p) {
+                    Some(family) => tracing::info!(
+                        "Model '{}' matched stable-diffusion.cpp supported family: {} ({:?})",
+                        p, family.name, family.kind
+                    ),
+                    None => tracing::info!(
+                        "Model '{}' is not in the known stable-diffusion.cpp support list; \
+                         primary backend will be tried first anyway",
+                        p
+                    ),
+                }
+                false
+            }
+            None => false,
+        }
     }
 }
 

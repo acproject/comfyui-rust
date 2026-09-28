@@ -85,6 +85,8 @@ impl ComfyServer {
             .route("/model_knowledge", axum::routing::get(routes::get_model_knowledge))
             .route("/model_knowledge/{model_name}", axum::routing::get(routes::get_model_knowledge_by_name))
             .route("/model_knowledge/recommend", axum::routing::post(routes::recommend_models))
+            .route("/sdcpp/supported_models", axum::routing::get(routes::get_sdcpp_supported))
+            .route("/sdcpp/refresh", axum::routing::post(routes::post_sdcpp_refresh))
             // Asset management routes
             .route("/assets", axum::routing::get(routes::list_assets))
             .route("/assets/scan", axum::routing::post(routes::scan_assets))

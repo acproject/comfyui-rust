@@ -4,6 +4,17 @@ set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# 模型库目录：外部 USB 模型库优先（存在时），可用 COMFY_MODELS_DIR 覆盖
+DEFAULT_USB_MODELS="/home/acproject/usb/comfyui/models"
+if [ -z "${COMFY_MODELS_DIR:-}" ]; then
+    if [ -d "$DEFAULT_USB_MODELS" ]; then
+        export COMFY_MODELS_DIR="$DEFAULT_USB_MODELS"
+    else
+        export COMFY_MODELS_DIR="$PROJECT_DIR/models"
+    fi
+fi
+echo "  模型库目录: $COMFY_MODELS_DIR"
+
 echo "========================================="
 echo "  ComfyUI-Rust 启动脚本"
 echo "========================================="

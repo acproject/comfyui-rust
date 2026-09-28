@@ -6,6 +6,7 @@ pub mod error;
 pub mod image;
 pub mod params;
 pub mod python;
+pub mod sdcpp_support;
 pub mod types;
 
 #[cfg(feature = "local-ffi")]
@@ -24,6 +25,11 @@ pub use cli::{CliBackend, CliBackendConfig, convert_model_cli};
 pub use python::{
     FallbackBackend, PythonBackend, PythonInferConfig, default_script_dir, is_diffusers_pipeline_dir,
     is_hf_model_dir, resolve_python, resolve_script_dir,
+};
+pub use sdcpp_support::{
+    RegistrySnapshot, SdCppModelEntry, SdCppModelKind, UPSTREAM_README, init as sdcpp_init,
+    match_identifier as sdcpp_match, merge_upstream_readme, parse_upstream_readme,
+    snapshot as sdcpp_snapshot,
 };
 pub use error::{GenerationMode, InferenceError, InferenceResult};
 pub use image::{ImageError, SdImage, SdVideo, SdAudio};

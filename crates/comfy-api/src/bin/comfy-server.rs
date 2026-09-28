@@ -14,6 +14,9 @@ async fn main() {
 
     std::fs::create_dir_all(&config_dir).ok();
 
+    // Load the (cacheable) stable-diffusion.cpp supported-family knowledge.
+    comfy_inference::sdcpp_init(Some(Path::new(&config_dir)));
+
     let db_path = Path::new(&config_dir).join("comfyui.db");
     let db = match Database::open(&db_path) {
         Ok(d) => {
@@ -26,7 +29,7 @@ async fn main() {
         }
     };
 
-    let config = if let Ok(Some(db_config)) = db.get::<ComfyConfig>("comfy_config") {
+    let mut config = if let Ok(Some(db_config)) = db.get::<ComfyConfig>("comfy_config") {
         tracing::info!("Loaded config from database");
         db_config
     } else if let Ok(file_config) = ComfyConfig::load(&config_path) {
@@ -43,6 +46,12 @@ async fn main() {
         } else {
             tracing::info!("Created default config at {}", config_path.display());
         }
+    }
+
+    // Environment always wins for the models directory (executor reads the
+    // same variable directly).
+    if let Ok(dir) = std::env::var("COMFY_MODELS_DIR") {
+        config.models.base_dir = dir;
     }
 
     let mut registry = NodeRegistry::new();

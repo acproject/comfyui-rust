@@ -1993,11 +1993,96 @@ pub async fn view_asset(
     let data = std::fs::read(&abs_canonical).map_err(|e| ApiError::Internal(e.to_string()))?;
     let filename_str = abs_canonical.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let content_type = crate::assets::AssetManager::guess_content_type(filename_str);
-    
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, &content_type)
         .header(header::CACHE_CONTROL, "public, max-age=31536000")
         .body(Body::from(data))
         .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+/// Build the stable-diffusion.cpp support-list payload: the (possibly cached)
+/// upstream scan merged over the built-in snapshot, plus local model files
+/// classified against it.
+fn sdcpp_support_payload(models_base_dir: &str) -> Value {
+    let snap = comfy_inference::sdcpp_snapshot();
+    let mut local_models: Vec<Value> = Vec::new();
+    let weight_exts = [".safetensors", ".gguf", ".ckpt", ".pt", ".pth"];
+
+    for subdir in ["checkpoints", "diffusion_models"] {
+        let dir = std::path::Path::new(models_base_dir).join(subdir);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lower = name.to_lowercase();
+            if !weight_exts.iter().any(|ext| lower.ends_with(ext)) {
+                continue;
+            }
+            let family = comfy_inference::sdcpp_match(&name);
+            local_models.push(json!({
+                "directory": subdir,
+                "file": name,
+                "supported": family.is_some(),
+                "family": family,
+            }));
+        }
+    }
+    local_models.sort_by(|a, b| {
+        a["directory"]
+            .as_str()
+            .cmp(&b["directory"].as_str())
+            .then_with(|| a["file"].as_str().cmp(&b["file"].as_str()))
+    });
+
+    json!({
+        "upstream": snap.upstream,
+        "source": snap.source,
+        "fetched_at_unix": snap.fetched_at_unix,
+        "models": snap.entries,
+        "local_models": local_models,
+    })
+}
+
+/// GET /sdcpp/supported_models — list supported families and classify local models.
+pub async fn get_sdcpp_supported(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let base_dir = state.config.read().unwrap().models.base_dir.clone();
+    Ok(Json(sdcpp_support_payload(&base_dir)))
+}
+
+/// POST /sdcpp/refresh — scan the upstream README on GitHub and rebuild the list.
+pub async fn post_sdcpp_refresh(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let readme = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .get(comfy_inference::UPSTREAM_README)
+        .header("User-Agent", "comfyui-rust")
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("fetch upstream README failed: {e}")))?
+        .error_for_status()
+        .map_err(|e| ApiError::Internal(format!("upstream HTTP error: {e}")))?
+        .text()
+        .await
+        .map_err(|e| ApiError::Internal(format!("read upstream body failed: {e}")))?;
+
+    let fetched_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let snapshot = comfy_inference::merge_upstream_readme(&readme, fetched_at);
+    tracing::info!(
+        "stable-diffusion.cpp support list refreshed from GitHub: {} families",
+        snapshot.entries.len()
+    );
+
+    let base_dir = state.config.read().unwrap().models.base_dir.clone();
+    Ok(Json(sdcpp_support_payload(&base_dir)))
 }
