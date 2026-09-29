@@ -10,10 +10,6 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::Mutex;
 
-extern "C" {
-    fn free(ptr: *mut c_void);
-}
-
 /// Derive the models base directory from a model path like "models/checkpoints/model.safetensors"
 fn derive_models_base_dir(model_path: &str) -> Option<PathBuf> {
     let path = PathBuf::from(model_path);
@@ -200,9 +196,7 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.embeddings_connectors_path = strings.opt_cstr(&config.embeddings_connectors_path);
     c_params.audio_vae_path = strings.opt_cstr(&config.audio_vae_path);
 
-    c_params.vae_decode_only = config.vae_decode_only;
-    c_params.free_params_immediately = config.free_params_immediately;
-    c_params.n_threads = config.n_threads;
+    c_params.n_threads = if config.n_threads > 0 { config.n_threads } else { 0 };
     c_params.wtype = match config.wtype {
         SdType::Auto => CSdType::Count,
         other => unsafe { std::mem::transmute::<u32, CSdType>(other as u32) },
@@ -211,14 +205,12 @@ fn create_sd_ctx(config: &ContextConfig) -> InferenceResult<*mut SdCtxT> {
     c_params.sampler_rng_type = CRngType::Count;
     c_params.prediction = CPredictionType::Count;
     c_params.lora_apply_mode = CLoraApplyMode::Auto;
-    c_params.offload_params_to_cpu = config.offload_params_to_cpu;
     c_params.enable_mmap = config.enable_mmap;
-    c_params.multi_gpu = config.multi_gpu;
-    c_params.keep_clip_on_cpu = config.keep_clip_on_cpu;
-    c_params.keep_control_net_on_cpu = config.keep_control_net_on_cpu;
-    c_params.keep_vae_on_cpu = config.keep_vae_on_cpu;
     c_params.flash_attn = config.flash_attn;
     c_params.diffusion_flash_attn = config.diffusion_flash_attn;
+    c_params.tae_preview_only = config.tae_preview_only;
+    c_params.diffusion_conv_direct = config.diffusion_conv_direct;
+    c_params.vae_conv_direct = config.vae_conv_direct;
 
     let ctx = unsafe { new_sd_ctx(&c_params) };
     if ctx.is_null() {
@@ -396,8 +388,6 @@ impl LocalBackend {
         c_params.seed = params.seed;
         c_params.batch_count = params.batch_count;
         c_params.control_strength = params.control_strength;
-        c_params.auto_resize_ref_image = params.auto_resize_ref_image;
-        c_params.increase_ref_index = params.increase_ref_index;
 
         c_params.sample_params = build_c_sample_params(&params.sample_params);
 
@@ -454,16 +444,18 @@ impl InferenceBackend for LocalBackend {
         let mut strings = CStringHolder::new();
         let c_params = Self::build_c_img_gen_params(&params, &mut strings);
 
-        let result = unsafe { generate_image(ctx, &c_params) };
+        let mut result: *mut CSdImage = ptr::null_mut();
+        let mut num_images: c_int = 0;
+        let ok = unsafe { generate_image(ctx, &c_params, &mut result, &mut num_images) };
 
-        if result.is_null() {
+        if !ok || result.is_null() || num_images <= 0 {
             return Err(InferenceError::GenerationFailed(
-                "generate_image returned null".to_string(),
+                "generate_image failed (returned no images)".to_string(),
             ));
         }
 
         let mut images = Vec::new();
-        let batch_count = params.batch_count.max(1) as usize;
+        let batch_count = num_images as usize;
         for i in 0..batch_count {
             let c_img = unsafe { &*result.add(i) };
             if c_img.data.is_null() {
@@ -478,7 +470,7 @@ impl InferenceBackend for LocalBackend {
         }
 
         unsafe {
-            free(result as *mut c_void);
+            free_sd_images(result, num_images);
         }
 
         if images.is_empty() {
@@ -506,6 +498,7 @@ impl InferenceBackend for LocalBackend {
         c_params.strength = params.strength;
         c_params.seed = params.seed;
         c_params.video_frames = params.video_frames;
+        c_params.fps = params.fps;
         c_params.vace_strength = params.vace_strength;
         c_params.moe_boundary = params.moe_boundary;
 
@@ -526,8 +519,16 @@ impl InferenceBackend for LocalBackend {
         let mut num_frames_out: c_int = 0;
         let mut frames_out: *mut CSdImage = ptr::null_mut();
         let mut audio_out: *mut CSdAudio = ptr::null_mut();
+        let mut fps_out: c_int = 0;
         let success = unsafe {
-            generate_video(ctx, &c_params, &mut frames_out, &mut num_frames_out, &mut audio_out)
+            generate_video(
+                ctx,
+                &c_params,
+                &mut frames_out,
+                &mut num_frames_out,
+                &mut audio_out,
+                &mut fps_out,
+            )
         };
 
         if !success || frames_out.is_null() || num_frames_out <= 0 {
@@ -585,7 +586,8 @@ impl InferenceBackend for LocalBackend {
             }
         }
 
-        Ok(SdVideo::new_without_audio(frames, 16))
+        let fps = if fps_out > 0 { fps_out } else { params.fps };
+        Ok(SdVideo::new_without_audio(frames, fps))
     }
 
     fn upscale(&self, image: SdImage, params: UpscaleParams) -> InferenceResult<SdImage> {
@@ -595,7 +597,6 @@ impl InferenceBackend for LocalBackend {
         let upscaler_ctx = unsafe {
             new_upscaler_ctx(
                 c_esrgan_path.as_ptr(),
-                params.offload_to_cpu,
                 params.direct,
                 params.n_threads,
                 params.tile_size,
@@ -609,23 +610,40 @@ impl InferenceBackend for LocalBackend {
         }
 
         let c_input = image_to_c(&image);
-        let c_result = unsafe { upscale(upscaler_ctx, c_input, params.upscale_factor) };
+        let mut images_out: *mut CSdImage = ptr::null_mut();
+        let mut num_images_out: c_int = 0;
+        let ok = unsafe {
+            upscale(
+                upscaler_ctx,
+                c_input,
+                params.upscale_factor,
+                &mut images_out,
+                &mut num_images_out,
+            )
+        };
 
         unsafe {
             free_upscaler_ctx(upscaler_ctx);
         }
 
-        if c_result.data.is_null() {
+        if !ok || images_out.is_null() || num_images_out <= 0 {
             return Err(InferenceError::GenerationFailed(
-                "upscale returned null".to_string(),
+                "upscale returned no images".to_string(),
             ));
         }
 
+        let c_result = unsafe { &*images_out };
         let len = (c_result.width * c_result.height * c_result.channel) as usize;
         let data = unsafe { std::slice::from_raw_parts(c_result.data, len) }.to_vec();
+        let image_result =
+            SdImage::from_raw(c_result.width, c_result.height, c_result.channel, data)
+                .map_err(|e| InferenceError::ImageDecodeError(e.to_string()));
 
-        SdImage::from_raw(c_result.width, c_result.height, c_result.channel, data)
-            .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))
+        unsafe {
+            free_sd_images(images_out, num_images_out);
+        }
+
+        image_result
     }
 
     fn generate_3d_gaussian(&self, _params: Gaussian3DParams) -> InferenceResult<Gaussian3DOutput> {

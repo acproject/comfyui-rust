@@ -37,7 +37,10 @@ pub enum CSampleMethod {
     EulerCfgPP = 15,
     EulerACfgPP = 16,
     EulerGe = 17,
-    Count = 18,
+    Dpmpp2mSde = 18,
+    Dpmpp2mSdeBt = 19,
+    Lms = 20,
+    Count = 21,
 }
 
 #[repr(u32)]
@@ -55,7 +58,12 @@ pub enum CScheduler {
     Lcm = 9,
     BongTangent = 10,
     Ltx2 = 11,
-    Count = 12,
+    LogitNormal = 12,
+    Flux2 = 13,
+    Flux = 14,
+    Beta = 15,
+    LladaImage = 16,
+    Count = 17,
 }
 
 #[repr(u32)]
@@ -66,8 +74,10 @@ pub enum CPredictionType {
     EdmV = 2,
     Flow = 3,
     FluxFlow = 4,
-    Flux2Flow = 5,
-    Count = 6,
+    SefiFlow = 5,
+    Minit2iFlow = 6,
+    SensenovaU1Flow = 7,
+    Count = 8,
 }
 
 #[repr(u32)]
@@ -88,7 +98,9 @@ pub enum CSdType {
     Q6_K = 14,
     Q8_K = 15,
     BF16 = 30,
-    Count = 42,
+    F8E4M3 = 43,
+    F8E5M2 = 44,
+    Count = 45,
 }
 
 #[repr(u32)]
@@ -145,7 +157,8 @@ pub enum CVaeFormat {
     Flux = 0,
     Sd3 = 1,
     Flux2 = 2,
-    Count = 3,
+    Wan = 3,
+    Count = 4,
 }
 
 #[repr(C)]
@@ -171,43 +184,45 @@ pub struct CSdCtxParams {
     pub embeddings_connectors_path: *const c_char,
     pub vae_path: *const c_char,
     pub audio_vae_path: *const c_char,
+    pub audio_encoder_path: *const c_char,
     pub taesd_path: *const c_char,
     pub control_net_path: *const c_char,
+    pub ip_adapter_path: *const c_char,
+    pub motion_module_path: *const c_char,
     pub embeddings: *const CEmbedding,
     pub embedding_count: u32,
     pub photo_maker_path: *const c_char,
+    pub pulid_weights_path: *const c_char,
     pub tensor_type_rules: *const c_char,
-    pub vae_decode_only: bool,
-    pub free_params_immediately: bool,
     pub n_threads: c_int,
     pub wtype: CSdType,
     pub rng_type: CRngType,
     pub sampler_rng_type: CRngType,
     pub prediction: CPredictionType,
     pub lora_apply_mode: CLoraApplyMode,
-    pub offload_params_to_cpu: bool,
     pub enable_mmap: bool,
-    pub keep_clip_on_cpu: bool,
-    pub keep_control_net_on_cpu: bool,
-    pub keep_vae_on_cpu: bool,
     pub flash_attn: bool,
     pub diffusion_flash_attn: bool,
     pub tae_preview_only: bool,
     pub diffusion_conv_direct: bool,
     pub vae_conv_direct: bool,
-    pub circular_x: bool,
-    pub circular_y: bool,
     pub force_sdxl_vae_conv_scale: bool,
-    pub chroma_use_dit_mask: bool,
-    pub chroma_use_t5_mask: bool,
-    pub chroma_t5_mask_pad: c_int,
-    pub qwen_image_zero_cond_t: bool,
     pub vae_format: CVaeFormat,
-    pub max_vram: c_float,
-    pub stream_layers: bool,
-    pub multi_gpu: bool,
+    pub max_vram: *const c_char,
+    pub disable_prefetch: bool,
+    pub eager_load: bool,
     pub backend: *const c_char,
     pub params_backend: *const c_char,
+    pub split_mode: *const c_char,
+    pub auto_fit: bool,
+    pub rpc_servers: *const c_char,
+    pub model_args: *const c_char,
+    pub disable_segmented_compute: bool,
+    pub linear_scale: c_float,
+    pub attn_scale: c_float,
+    pub tokenizer: *const c_char,
+    pub sage_attn: bool,
+    pub conditioning_cache_size: c_int,
 }
 
 #[repr(C)]
@@ -269,6 +284,19 @@ pub struct CPmParams {
     pub id_images_count: c_int,
     pub id_embed_path: *const c_char,
     pub style_strength: c_float,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CPulidParams {
+    pub id_embedding_path: *const c_char,
+    pub id_weight: c_float,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CImagePreprocessParams {
+    pub rules: *const c_char,
 }
 
 #[repr(C)]
@@ -348,8 +376,7 @@ pub struct CImgGenParams {
     pub init_image: CSdImage,
     pub ref_images: *mut CSdImage,
     pub ref_images_count: c_int,
-    pub auto_resize_ref_image: bool,
-    pub increase_ref_index: bool,
+    pub ref_image_args: *const c_char,
     pub mask_image: CSdImage,
     pub width: c_int,
     pub height: c_int,
@@ -359,10 +386,17 @@ pub struct CImgGenParams {
     pub batch_count: c_int,
     pub control_image: CSdImage,
     pub control_strength: c_float,
+    pub ip_adapter_image: CSdImage,
+    pub ip_adapter_strength: c_float,
     pub pm_params: CPmParams,
+    pub pulid_params: CPulidParams,
     pub vae_tiling_params: CTilingParams,
     pub cache: CCacheParams,
     pub hires: CHiresParams,
+    pub qwen_image_layers: c_int,
+    pub circular_x: bool,
+    pub circular_y: bool,
+    pub image_preprocess: CImagePreprocessParams,
 }
 
 #[repr(C)]
@@ -375,6 +409,12 @@ pub struct CVidGenParams {
     pub clip_skip: c_int,
     pub init_image: CSdImage,
     pub end_image: CSdImage,
+    pub ref_images: *mut CSdImage,
+    pub ref_images_count: c_int,
+    pub ref_videos: *mut c_void,
+    pub ref_videos_count: c_int,
+    pub ref_audios: *mut CSdAudio,
+    pub ref_audios_count: c_int,
     pub control_frames: *mut CSdImage,
     pub control_frames_size: c_int,
     pub width: c_int,
@@ -390,6 +430,9 @@ pub struct CVidGenParams {
     pub vae_tiling_params: CTilingParams,
     pub cache: CCacheParams,
     pub hires: CHiresParams,
+    pub circular_x: bool,
+    pub circular_y: bool,
+    pub image_preprocess: CImagePreprocessParams,
 }
 
 pub type SdLogCb = Option<unsafe extern "C" fn(level: u32, text: *const c_char, data: *mut c_void)>;
@@ -442,7 +485,12 @@ extern "C" {
 
     pub fn sd_img_gen_params_init(params: *mut CImgGenParams);
     pub fn sd_img_gen_params_to_str(params: *mut CImgGenParams) -> *mut c_char;
-    pub fn generate_image(ctx: *mut SdCtxT, params: *const CImgGenParams) -> *mut CSdImage;
+    pub fn generate_image(
+        ctx: *mut SdCtxT,
+        params: *const CImgGenParams,
+        images_out: *mut *mut CSdImage,
+        num_images_out: *mut c_int,
+    ) -> bool;
 
     pub fn sd_vid_gen_params_init(params: *mut CVidGenParams);
     pub fn generate_video(
@@ -451,11 +499,11 @@ extern "C" {
         frames_out: *mut *mut CSdImage,
         num_frames_out: *mut c_int,
         audio_out: *mut *mut CSdAudio,
+        fps_out: *mut c_int,
     ) -> bool;
 
     pub fn new_upscaler_ctx(
         esrgan_path: *const c_char,
-        offload_to_cpu: bool,
         direct: bool,
         n_threads: c_int,
         tile_size: c_int,
@@ -463,8 +511,14 @@ extern "C" {
         params_backend: *const c_char,
     ) -> *mut UpscalerCtxT;
     pub fn free_upscaler_ctx(ctx: *mut UpscalerCtxT);
-    pub fn upscale(ctx: *mut UpscalerCtxT, input: CSdImage, upscale_factor: u32) -> CSdImage;
-    pub fn get_upscale_factor(ctx: *mut UpscalerCtxT) -> c_int;
+    pub fn upscale(
+        ctx: *mut UpscalerCtxT,
+        input: CSdImage,
+        upscale_factor: u32,
+        images_out: *mut *mut CSdImage,
+        num_images_out: *mut c_int,
+    ) -> bool;
+    pub fn get_upscale_factor(ctx: *const UpscalerCtxT) -> c_int;
 
     pub fn convert(
         input_path: *const c_char,
