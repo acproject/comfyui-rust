@@ -1,0 +1,8 @@
+[submodule "cpp/llama.cpp"]
+	path = cpp/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp.git
+	branch = master
+[submodule "cpp/stable-diffusion.cpp"]
+	path = cpp/stable-diffusion.cpp
+	url = https://github.com/leejet/stable-diffusion.cpp.git
+	branch = master
