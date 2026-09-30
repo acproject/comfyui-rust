@@ -922,6 +922,12 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     type_name: "VAE".to_string(),
                     extra: HashMap::new(),
                 });
+                // Reference image for image-edit families (Boogu Edit,
+                // Qwen Image Edit, Kontext, ...). Passed via sd.cpp -r.
+                m.insert("reference_image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
                 m
             },
             hidden: HashMap::new(),
@@ -949,6 +955,7 @@ fn register_ksampler(registry: &mut NodeRegistry) {
         let negative = ctx.resolve_input(node_id, "negative").unwrap_or_else(|_| json!(null));
         let latent_image = ctx.resolve_input(node_id, "latent_image").unwrap_or_else(|_| json!(null));
         let vae = ctx.resolve_input(node_id, "vae").ok();
+        let reference_image_val = ctx.resolve_input(node_id, "reference_image").ok();
 
         let backend = ctx.backend();
         let supports_img_gen = backend.supports_image_generation();
@@ -1178,6 +1185,27 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     }
                     if let Some(cn_strength) = positive.get("control_strength") {
                         params.control_strength = cn_strength.as_f64().unwrap_or(0.9) as f32;
+                    }
+
+                    if let Some(ref_img_val) = &reference_image_val {
+                        let mut parsed = parse_sd_image_from_value(ref_img_val);
+                        // LoadImage emits {"type":"image","path":"<input-relative>"};
+                        // load such files from the input directory.
+                        #[cfg(feature = "controlnet")]
+                        if parsed.is_none() {
+                            if let Some(path) = ref_img_val.get("path").and_then(|v| v.as_str()) {
+                                match crate::controlnet::load_image_from_value(ref_img_val) {
+                                    Ok(sd_img) => parsed = Some(sd_img),
+                                    Err(e) => tracing::warn!("KSampler: failed to load reference image {:?}: {}", path, e),
+                                }
+                            }
+                        }
+                        if let Some(sd_img) = parsed {
+                            tracing::info!("KSampler: using reference image for image-edit sampling");
+                            params.ref_images.push(sd_img);
+                        } else {
+                            tracing::warn!("KSampler: reference_image provided but could not be resolved: {}", ref_img_val);
+                        }
                     }
 
                     let mut missing_encoders = Vec::new();

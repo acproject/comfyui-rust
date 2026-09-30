@@ -442,7 +442,14 @@ impl InferenceBackend for LocalBackend {
         let ctx = cache.get_or_create(&params.model_config, &self.base_config)?;
 
         let mut strings = CStringHolder::new();
-        let c_params = Self::build_c_img_gen_params(&params, &mut strings);
+        let mut c_params = Self::build_c_img_gen_params(&params, &mut strings);
+
+        // Reference images (image-edit families such as Boogu / Qwen Image Edit).
+        let ref_c_images: Vec<CSdImage> = params.ref_images.iter().map(image_to_c).collect();
+        if !ref_c_images.is_empty() {
+            c_params.ref_images = ref_c_images.as_ptr() as *mut CSdImage;
+            c_params.ref_images_count = ref_c_images.len() as c_int;
+        }
 
         let mut result: *mut CSdImage = ptr::null_mut();
         let mut num_images: c_int = 0;

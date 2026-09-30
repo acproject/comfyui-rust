@@ -392,6 +392,12 @@ impl InferenceBackend for CliBackend {
             args.push(tmp_path.to_string_lossy().to_string());
         }
 
+        for img in &params.ref_images {
+            let tmp_path = self.write_temp_image(img, "ref")?;
+            args.push("-r".to_string());
+            args.push(tmp_path.to_string_lossy().to_string());
+        }
+
         if let Some(ref mask) = params.mask_image {
             let tmp_path = self.write_temp_image(mask, "mask")?;
             args.push("--mask".to_string());

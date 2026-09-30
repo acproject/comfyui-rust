@@ -261,7 +261,7 @@ mod imp {
     }
 }
 
-fn load_image_from_value(image_val: &Value) -> Result<SdImage, String> {
+pub(crate) fn load_image_from_value(image_val: &Value) -> Result<SdImage, String> {
     if let Some(path) = image_val.get("path").and_then(|v| v.as_str()) {
         let dyn_img = imp::load_image(path)?;
         imp::dynamic_to_sd_image(&dyn_img)

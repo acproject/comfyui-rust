@@ -7,7 +7,6 @@ use std::path::Path;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-
     let config_dir = std::env::var("COMFY_CONFIG_DIR")
         .unwrap_or_else(|_| "config".to_string());
     let config_path = Path::new(&config_dir).join("config.json");

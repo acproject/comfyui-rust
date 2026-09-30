@@ -346,6 +346,168 @@ impl FallbackBackend {
         Self { primary, python }
     }
 
+    /// Families whose HF/diffusers pipeline directory also ships a
+    /// standalone component layout that sd.cpp can load directly:
+    /// `<dir>/transformer/*.safetensors(.index.json)` + `<dir>/vae/...`.
+    const SDCPP_PIPELINE_FAMILIES: &'static [&'static str] = &[
+        "qwen_image_2.1",
+        "qwen_image_edit",
+        "boogu_image",
+        "boogu_image_edit",
+    ];
+
+    fn models_base_dir() -> PathBuf {
+        let base =
+            std::env::var("COMFY_MODELS_DIR").unwrap_or_else(|_| "models".to_string());
+        let p = Path::new(&base);
+        if p.is_relative() {
+            std::env::current_dir().unwrap_or_default().join(p)
+        } else {
+            p.to_path_buf()
+        }
+    }
+
+    /// Locate a pipeline directory even if the loader produced a
+    /// `<base>/checkpoints/<name>` style path while the directory actually
+    /// lives at the models root.
+    fn resolve_pipeline_dir(raw: &str) -> Option<PathBuf> {
+        let p = Path::new(raw);
+        let candidates = if p.is_dir() {
+            vec![p.to_path_buf()]
+        } else {
+            let name = p.file_name()?;
+            let base = Self::models_base_dir();
+            vec![base.join(name), base.join("checkpoints").join(name)]
+        };
+        candidates
+            .into_iter()
+            .find(|c| c.is_dir() && c.join("model_index.json").exists())
+    }
+
+    fn first_existing(paths: &[PathBuf]) -> Option<PathBuf> {
+        paths.iter().find(|p| p.is_file()).cloned()
+    }
+
+    /// Best-effort search for the Qwen3-VL LLM encoder used by
+    /// Qwen Image 2.1 / Boogu: prefer a flattened (Comfy-Org style)
+    /// safetensors/GGUF file over the raw HF sharded directory.
+    fn find_qwen3vl_encoder(with_vision: bool) -> Option<String> {
+        let te_dir = Self::models_base_dir().join("text_encoders");
+        let entries = std::fs::read_dir(&te_dir).ok()?;
+        let mut files: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| {
+                let n = n.to_lowercase();
+                n.contains("qwen3vl") && (n.ends_with(".safetensors") || n.ends_with(".gguf"))
+            })
+            .collect();
+        files.sort();
+        let pick = if with_vision {
+            // Extracted visual-only weights (keys unprefixed to `visual.*`,
+            // matching sd.cpp's llm_vision loader).
+            files
+                .iter()
+                .find(|n| n.contains("visual"))
+                .cloned()
+        } else {
+            // Full encoder, excluding the vision-only extract.
+            files
+                .iter()
+                .find(|n| !n.contains("visual"))
+                .cloned()
+        };
+        pick.map(|n| te_dir.join(n).to_string_lossy().to_string())
+    }
+
+    /// Rewrite an sd.cpp-supported HF pipeline directory into standalone
+    /// component paths (transformer shard index + pipeline-local VAE +
+    /// Qwen3-VL LLM) so it runs on the primary backend instead of Python.
+    fn rewrite_pipeline_for_sdcpp(params: ImageGenParams) -> ImageGenParams {
+        let Some(raw) = params.model_config.model_path.clone() else {
+            return params;
+        };
+        if Path::new(&raw).is_file() {
+            return params;
+        }
+        let Some(dir) = Self::resolve_pipeline_dir(&raw) else {
+            return params;
+        };
+        let Some(family) = crate::sdcpp_support::match_identifier(&dir.to_string_lossy()) else {
+            return params;
+        };
+        if !Self::SDCPP_PIPELINE_FAMILIES.contains(&family.id.as_str()) {
+            return params;
+        }
+
+        let diffusion = Self::first_existing(&[
+            dir.join("transformer").join("diffusion_pytorch_model.safetensors.index.json"),
+            dir.join("transformer").join("model.safetensors.index.json"),
+            dir.join("transformer").join("diffusion_pytorch_model.safetensors"),
+            dir.join("transformer").join("model.safetensors"),
+        ]);
+        let Some(diffusion) = diffusion else {
+            tracing::warn!(
+                "Pipeline dir '{}' matched family {} but contains no standalone \
+                 transformer shard index; keeping original routing",
+                dir.display(),
+                family.id
+            );
+            return params;
+        };
+
+        let vae = Self::first_existing(&[
+            dir.join("vae").join("diffusion_pytorch_model.safetensors"),
+            dir.join("vae").join("model.safetensors"),
+        ])
+        .or_else(|| {
+            std::fs::read_dir(dir.join("vae")).ok().and_then(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .find(|p| {
+                        p.extension()
+                            .map(|x| x == "safetensors")
+                            .unwrap_or(false)
+                    })
+            })
+        });
+
+        let mut params = params;
+        params.model_config.model_path = None;
+        params.model_config.diffusion_model_path = Some(diffusion.to_string_lossy().to_string());
+        if let Some(vae) = vae {
+            // The component VAE shipped inside the pipeline directory is the
+            // authoritative match (e.g. Qwen Image 2.1 VAE is NOT
+            // interchangeable with the earlier Qwen Image VAE).
+            params.model_config.vae_path = Some(vae.to_string_lossy().to_string());
+        }
+        if params.model_config.llm_path.is_none() {
+            if let Some(llm) = Self::find_qwen3vl_encoder(false) {
+                tracing::info!("Pipeline '{}': auto-selected LLM encoder '{}'", dir.display(), llm);
+                params.model_config.llm_path = Some(llm);
+            }
+        }
+        if params.model_config.llm_vision_path.is_none() && !params.ref_images.is_empty() {
+            if let Some(vision) = Self::find_qwen3vl_encoder(true) {
+                tracing::info!(
+                    "Pipeline '{}': reference images present, auto-selected vision weights '{}'",
+                    dir.display(),
+                    vision
+                );
+                params.model_config.llm_vision_path = Some(vision);
+            }
+        }
+
+        tracing::info!(
+            "Pipeline dir '{}' matched sd.cpp family {} ({}); rewritten to native component paths",
+            dir.display(),
+            family.id,
+            family.name
+        );
+        params
+    }
+
     fn route_to_python(params: &ImageGenParams) -> bool {
         match PythonBackend::pick_model_path(params) {
             Some(p) if is_diffusers_pipeline_dir(&p) => true,
@@ -392,6 +554,7 @@ impl InferenceBackend for FallbackBackend {
     }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
+        let params = Self::rewrite_pipeline_for_sdcpp(params);
         if Self::route_to_python(&params) {
             tracing::info!("Model is a HF/diffusers pipeline directory, routing directly to Python fallback");
             return self.python.generate_image(params);
