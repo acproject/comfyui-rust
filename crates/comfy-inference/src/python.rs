@@ -13,7 +13,9 @@
 use crate::backend::InferenceBackend;
 use crate::error::{InferenceError, InferenceResult};
 use crate::image::{SdImage, SdVideo};
-use crate::params::{ImageGenParams, UpscaleParams, VideoGenParams};
+use crate::params::{
+    Gaussian3DOutput, Gaussian3DParams, ImageGenParams, UpscaleParams, VideoGenParams,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -298,6 +300,249 @@ impl PythonBackend {
         let img = SdImage::from_png_bytes(&bytes)?;
         Ok(vec![img])
     }
+
+    /// Run the Bernini-R one-shot script (t2i / i2i single frame).
+    pub fn generate_bernini_blocking(
+        &self,
+        params: &ImageGenParams,
+    ) -> InferenceResult<Vec<SdImage>> {
+        let model_path = Self::pick_model_path(params)
+            .ok_or_else(|| InferenceError::InvalidParameter("No model path for Bernini fallback".to_string()))?;
+        let script = self.script_path("bernini_generate.py")?;
+
+        let output_path = Self::temp_dir().join(format!("py_bernini_{}.png", params.seed));
+        let init_path = params
+            .init_image
+            .as_ref()
+            .map(|img| Self::write_temp_png(img, "py_bernini_init"))
+            .transpose()?;
+
+        let mut args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "--config".to_string(),
+            model_path,
+            "--prompt".to_string(),
+            params.prompt.clone(),
+            "--width".to_string(),
+            params.width.to_string(),
+            "--height".to_string(),
+            params.height.to_string(),
+            "--steps".to_string(),
+            params.sample_params.sample_steps.to_string(),
+            "--seed".to_string(),
+            params.seed.to_string(),
+            "--output".to_string(),
+            output_path.to_string_lossy().to_string(),
+            "--device".to_string(),
+            self.config.device.clone(),
+            "--dtype".to_string(),
+            self.config.dtype.clone(),
+        ];
+        if !params.negative_prompt.is_empty() {
+            args.push("--neg-prompt".to_string());
+            args.push(params.negative_prompt.clone());
+        }
+        if let Some(ref init) = init_path {
+            args.push("--input".to_string());
+            args.push(init.to_string_lossy().to_string());
+        }
+
+        tracing::info!(
+            "Python fallback Bernini-R image generation: {} {}",
+            self.interpreter,
+            args.join(" ")
+        );
+
+        let output = Command::new(&self.interpreter)
+            .args(&args)
+            .output()
+            .map_err(|e| InferenceError::BackendNotAvailable(format!(
+                "Failed to execute Python fallback '{}': {}",
+                self.interpreter, e
+            )))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InferenceError::GenerationFailed(format!(
+                "Python bernini_generate.py exited with status {}: {}",
+                output.status,
+                stderr.lines().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+            )));
+        }
+
+        if !output_path.exists() {
+            return Err(InferenceError::GenerationFailed(
+                "Python Bernini fallback produced no output image".to_string(),
+            ));
+        }
+
+        let bytes = std::fs::read(&output_path)
+            .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))?;
+        let img = SdImage::from_png_bytes(&bytes)?;
+        Ok(vec![img])
+    }
+
+    /// Whether `path` is a Bernini-R self-contained model directory.
+    ///
+    /// Such dirs ship a custom `config.json` (`model_type=bernini_renderer`)
+    /// rather than a diffusers `model_index.json`, so the regular pipeline-dir
+    /// detection does not see them.
+    pub fn is_bernini_model_dir(path: &str) -> bool {
+        if path.is_empty() {
+            return false;
+        }
+        let p = Path::new(path);
+        let name_ok = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase().contains("bernini"))
+            .unwrap_or(false);
+        name_ok && p.is_dir() && p.join("config.json").exists()
+    }
+
+    /// Run the TripoSplat one-shot script (image -> 3D Gaussian PLY/SPLAT).
+    pub fn generate_3d_gaussian_blocking(
+        &self,
+        params: &Gaussian3DParams,
+    ) -> InferenceResult<Gaussian3DOutput> {
+        let script = self.script_path("triposplat_generate.py")?;
+        let mc = &params.model_config;
+
+        let ckpt = mc
+            .model_path
+            .clone()
+            .or_else(|| mc.diffusion_model_path.clone())
+            .ok_or_else(|| {
+                InferenceError::InvalidParameter(
+                    "No TripoSplat checkpoint path for Python backend".to_string(),
+                )
+            })?;
+        let decoder = mc.decoder_path.clone().ok_or_else(|| {
+            InferenceError::InvalidParameter(
+                "No TripoSplat gaussian decoder path (triposplat_vae_decoder)".to_string(),
+            )
+        })?;
+        let dinov3 = mc.clip_vision_path.clone().ok_or_else(|| {
+            InferenceError::InvalidParameter("No DINOv3 clip-vision path".to_string())
+        })?;
+        let vae_encoder = mc.vae_path.clone().ok_or_else(|| {
+            InferenceError::InvalidParameter("No FLUX2 VAE encoder path".to_string())
+        })?;
+        let rmbg = mc.rmbg_path.clone().ok_or_else(|| {
+            InferenceError::InvalidParameter("No background-removal (BiRefNet) path".to_string())
+        })?;
+
+        let input_image = params.input_image.as_ref().ok_or_else(|| {
+            InferenceError::InvalidParameter("No input image for 3D generation".to_string())
+        })?;
+        let input_path = Self::write_temp_png(input_image, "py_3d_input")?;
+
+        let format = if params.output_format == 1 { "splat" } else { "ply" };
+        let output_path = match params.output_path.clone() {
+            Some(p) => PathBuf::from(p),
+            None => Self::temp_dir().join(format!("py_3d_{}.{}", params.seed, format)),
+        };
+        let prepared_path = output_path
+            .with_extension("")
+            .with_file_name(format!(
+                "{}_preprocessed.webp",
+                output_path
+                    .with_extension("")
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            ));
+
+        let args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "--input".into(),
+            input_path.to_string_lossy().to_string(),
+            "--output".into(),
+            output_path.to_string_lossy().to_string(),
+            "--format".into(),
+            format.into(),
+            "--prepared-output".into(),
+            prepared_path.to_string_lossy().to_string(),
+            "--ckpt".into(),
+            ckpt,
+            "--decoder".into(),
+            decoder,
+            "--dinov3".into(),
+            dinov3,
+            "--vae-encoder".into(),
+            vae_encoder,
+            "--rmbg".into(),
+            rmbg,
+            "--seed".into(),
+            params.seed.to_string(),
+            "--steps".into(),
+            params.steps.to_string(),
+            "--guidance-scale".into(),
+            params.guidance_scale.to_string(),
+            "--num-gaussians".into(),
+            params.num_gaussians.to_string(),
+            "--erode-radius".into(),
+            params.erode_radius.to_string(),
+            "--device".into(),
+            self.config.device.clone(),
+            "--dtype".into(),
+            self.config.dtype.clone(),
+        ];
+
+        tracing::info!(
+            "Python fallback TripoSplat 3D generation: {} {}",
+            self.interpreter,
+            args.join(" ")
+        );
+
+        let output = Command::new(&self.interpreter)
+            .args(&args)
+            .output()
+            .map_err(|e| InferenceError::BackendNotAvailable(format!(
+                "Failed to execute Python fallback '{}': {}",
+                self.interpreter, e
+            )))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InferenceError::GenerationFailed(format!(
+                "Python triposplat_generate.py exited with status {}: {}",
+                output.status,
+                stderr
+                    .lines()
+                    .rev()
+                    .take(10)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )));
+        }
+
+        if !output_path.exists() {
+            return Err(InferenceError::GenerationFailed(
+                "Python TripoSplat fallback produced no output file".to_string(),
+            ));
+        }
+
+        // The script's last stdout line is a JSON result object.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let last_line = stdout.lines().rev().find(|l| l.trim_start().starts_with('{'));
+        let num_gaussians = last_line
+            .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .and_then(|v| v.get("num_gaussians").and_then(|n| n.as_u64()))
+            .unwrap_or(0) as usize;
+
+        Ok(Gaussian3DOutput {
+            xyz: Vec::new(),
+            features_dc: Vec::new(),
+            opacity: Vec::new(),
+            scaling: Vec::new(),
+            rotation: Vec::new(),
+            num_gaussians,
+            output_file: Some(output_path.to_string_lossy().to_string()),
+        })
+    }
 }
 
 impl InferenceBackend for PythonBackend {
@@ -309,8 +554,21 @@ impl InferenceBackend for PythonBackend {
         false
     }
 
+    fn supports_3d_generation(&self) -> bool {
+        self.script_path("triposplat_generate.py")
+            .map(|p| p.exists())
+            .unwrap_or(false)
+    }
+
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
         self.generate_image_blocking(&params)
+    }
+
+    fn generate_3d_gaussian(
+        &self,
+        params: Gaussian3DParams,
+    ) -> InferenceResult<Gaussian3DOutput> {
+        self.generate_3d_gaussian_blocking(&params)
     }
 
     fn generate_video(&self, _params: VideoGenParams) -> InferenceResult<SdVideo> {
@@ -508,6 +766,15 @@ impl FallbackBackend {
         params
     }
 
+    /// Bernini-R ships a custom (non-diffusers) pipeline layout that neither
+    /// sd.cpp nor img_generate.py understand; it needs bernini_generate.py.
+    fn supports_bernini(&self) -> bool {
+        self.python
+            .script_path("bernini_generate.py")
+            .map(|p| p.exists())
+            .unwrap_or(false)
+    }
+
     fn route_to_python(params: &ImageGenParams) -> bool {
         match PythonBackend::pick_model_path(params) {
             Some(p) if is_diffusers_pipeline_dir(&p) => true,
@@ -534,7 +801,9 @@ impl FallbackBackend {
 
 impl InferenceBackend for FallbackBackend {
     fn supports_image_generation(&self) -> bool {
-        self.primary.supports_image_generation() || self.python.supports_image_generation()
+        self.primary.supports_image_generation()
+            || self.python.supports_image_generation()
+            || self.supports_bernini()
     }
 
     fn supports_video_generation(&self) -> bool {
@@ -542,7 +811,7 @@ impl InferenceBackend for FallbackBackend {
     }
 
     fn supports_3d_generation(&self) -> bool {
-        self.primary.supports_3d_generation()
+        self.primary.supports_3d_generation() || self.python.supports_3d_generation()
     }
 
     fn supports_audio_video_generation(&self) -> bool {
@@ -555,6 +824,19 @@ impl InferenceBackend for FallbackBackend {
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
         let params = Self::rewrite_pipeline_for_sdcpp(params);
+        if let Some(path) = PythonBackend::pick_model_path(&params) {
+            if PythonBackend::is_bernini_model_dir(&path) {
+                if !self.supports_bernini() {
+                    return Err(InferenceError::BackendNotAvailable(
+                        "Bernini-R model selected but bernini_generate.py is unavailable".to_string(),
+                    ));
+                }
+                tracing::info!(
+                    "Bernini-R model directory detected; routing directly to Python bernini_generate.py"
+                );
+                return self.python.generate_bernini_blocking(&params);
+            }
+        }
         if Self::route_to_python(&params) {
             tracing::info!("Model is a HF/diffusers pipeline directory, routing directly to Python fallback");
             return self.python.generate_image(params);
@@ -593,7 +875,42 @@ impl InferenceBackend for FallbackBackend {
         &self,
         params: crate::params::Gaussian3DParams,
     ) -> InferenceResult<crate::params::Gaussian3DOutput> {
-        self.primary.generate_3d_gaussian(params)
+        // sd.cpp has no TripoSplat support; if the primary backend cannot do
+        // 3D, route straight to the Python TripoSplat fallback.
+        if !self.primary.supports_3d_generation() {
+            if !self.python.supports_3d_generation() {
+                return Err(InferenceError::BackendNotAvailable(
+                    "3D Gaussian generation is unavailable (no primary backend, \
+                     no Python triposplat_generate.py)"
+                        .to_string(),
+                ));
+            }
+            tracing::info!(
+                "Primary backend does not support 3D Gaussian generation; \
+                 routing to Python TripoSplat fallback"
+            );
+            return self.python.generate_3d_gaussian(params);
+        }
+
+        match self.primary.generate_3d_gaussian(params.clone()) {
+            Ok(out) => Ok(out),
+            Err(primary_err) => {
+                if !self.python.supports_3d_generation() {
+                    return Err(primary_err);
+                }
+                tracing::warn!(
+                    "Primary 3D backend failed ({}); retrying with Python TripoSplat fallback",
+                    primary_err
+                );
+                match self.python.generate_3d_gaussian(params) {
+                    Ok(out) => Ok(out),
+                    Err(py_err) => Err(InferenceError::GenerationFailed(format!(
+                        "Primary backend error: {} | Python TripoSplat fallback error: {}",
+                        primary_err, py_err
+                    ))),
+                }
+            }
+        }
     }
 
     fn generate_av(&self, params: crate::params::H3Params) -> InferenceResult<SdVideo> {

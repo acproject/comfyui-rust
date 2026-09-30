@@ -8,6 +8,7 @@ pub mod registry;
 #[cfg(feature = "controlnet")]
 pub mod controlnet;
 
+pub mod bernini;
 pub mod mask;
 pub mod prompt_relay;
 pub mod triposplat;

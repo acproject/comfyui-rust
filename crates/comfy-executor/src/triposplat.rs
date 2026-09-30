@@ -336,7 +336,8 @@ fn register_triposplat_pipeline(registry: &mut NodeRegistry) {
                 .with_guidance_scale(guidance_scale)
                 .with_num_gaussians(num_gaussians)
                 .with_output_path(output_path.to_string_lossy().to_string())
-                .with_output_format(if output_format == "splat" { 1 } else { 0 });
+                .with_output_format(if output_format == "splat" { 1 } else { 0 })
+                .with_erode_radius(erode_radius);
 
             // Call the inference backend
             let backend = ctx.backend();

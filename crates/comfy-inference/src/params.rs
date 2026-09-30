@@ -73,6 +73,11 @@ impl Gaussian3DParams {
         self.output_format = format;
         self
     }
+
+    pub fn with_erode_radius(mut self, radius: i32) -> Self {
+        self.erode_radius = radius;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

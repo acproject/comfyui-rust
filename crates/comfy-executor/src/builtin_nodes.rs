@@ -390,6 +390,7 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     crate::mask::register_mask_nodes(registry);
     crate::prompt_relay::register_prompt_relay_nodes(registry);
     crate::triposplat::register_triposplat_nodes(registry);
+    crate::bernini::register_bernini_nodes(registry);
 
     // Video editing nodes (Premiere-like timeline editing)
     register_video_edit(registry);
