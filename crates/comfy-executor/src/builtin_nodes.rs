@@ -1188,18 +1188,16 @@ fn register_ksampler(registry: &mut NodeRegistry) {
                     }
 
                     if let Some(ref_img_val) = &reference_image_val {
-                        let mut parsed = parse_sd_image_from_value(ref_img_val);
+                        let parsed = parse_sd_image_from_value(ref_img_val);
                         // LoadImage emits {"type":"image","path":"<input-relative>"};
                         // load such files from the input directory.
                         #[cfg(feature = "controlnet")]
-                        if parsed.is_none() {
-                            if let Some(path) = ref_img_val.get("path").and_then(|v| v.as_str()) {
-                                match crate::controlnet::load_image_from_value(ref_img_val) {
-                                    Ok(sd_img) => parsed = Some(sd_img),
-                                    Err(e) => tracing::warn!("KSampler: failed to load reference image {:?}: {}", path, e),
-                                }
-                            }
-                        }
+                        let parsed = parsed.or_else(|| {
+                            let path = ref_img_val.get("path").and_then(|v| v.as_str())?;
+                            crate::controlnet::load_image_from_value(ref_img_val)
+                                .map_err(|e| tracing::warn!("KSampler: failed to load reference image {:?}: {}", path, e))
+                                .ok()
+                        });
                         if let Some(sd_img) = parsed {
                             tracing::info!("KSampler: using reference image for image-edit sampling");
                             params.ref_images.push(sd_img);
