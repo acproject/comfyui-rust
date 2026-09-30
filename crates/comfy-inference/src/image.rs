@@ -896,8 +896,12 @@ impl SdVideo {
                 .map_err(|e| ImageError::PngEncodeError(format!("Failed to write frame {}: {}", i, e)))?;
         }
 
+        let ffmpeg_path = Self::find_full_ffmpeg()
+            .or_else(Self::find_any_ffmpeg)
+            .ok_or_else(|| ImageError::PngEncodeError("No ffmpeg found".to_string()))?;
+
         let input_pattern = tmp_dir.join("frame_%06d.png");
-        let status = std::process::Command::new("ffmpeg")
+        let status = std::process::Command::new(&ffmpeg_path)
             .args([
                 "-y",
                 "-framerate", &fps.to_string(),
@@ -925,19 +929,26 @@ impl SdVideo {
     }
 
     pub fn decode_with_ffmpeg(video_path: &std::path::Path, fps: i32) -> Result<Self, ImageError> {
+        // Prefer a verified full-featured build: a stripped/broken ffmpeg on
+        // PATH can exist yet fail to demux otherwise-valid h264 mp4s.
+        let ffmpeg_path = Self::find_full_ffmpeg()
+            .or_else(Self::find_any_ffmpeg)
+            .ok_or_else(|| ImageError::PngEncodeError("No ffmpeg found".to_string()))?;
+
         let tmp_dir = std::env::temp_dir().join(format!("comfyui_ffmpeg_decode_{}", std::process::id()));
         std::fs::create_dir_all(&tmp_dir)
             .map_err(|e| ImageError::PngEncodeError(format!("Failed to create temp dir: {}", e)))?;
 
         let output_pattern = tmp_dir.join("frame_%06d.png");
-        let status = std::process::Command::new("ffmpeg")
+        let status = std::process::Command::new(&ffmpeg_path)
             .args([
+                "-y",
                 "-i", video_path.to_str().unwrap_or(""),
                 "-vf", &format!("fps={}", fps),
                 output_pattern.to_str().unwrap_or(""),
             ])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .status()
             .map_err(|e| ImageError::PngEncodeError(format!("Failed to run ffmpeg: {}", e)))?;
 
