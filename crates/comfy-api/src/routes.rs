@@ -969,6 +969,10 @@ fn guess_content_type_from_path(path: &std::path::Path) -> String {
         "webp" => "image/webp",
         "gif" => "image/gif",
         "bmp" => "image/bmp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "avi" => "video/x-msvideo",
         _ => "application/octet-stream",
     }.to_string()
 }

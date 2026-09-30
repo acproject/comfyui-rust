@@ -14,7 +14,8 @@ use crate::backend::InferenceBackend;
 use crate::error::{InferenceError, InferenceResult};
 use crate::image::{SdImage, SdVideo};
 use crate::params::{
-    Gaussian3DOutput, Gaussian3DParams, ImageGenParams, UpscaleParams, VideoGenParams,
+    BerniniVideoOutput, BerniniVideoParams, Gaussian3DOutput, Gaussian3DParams, ImageGenParams,
+    UpscaleParams, VideoGenParams,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -382,6 +383,157 @@ impl PythonBackend {
         Ok(vec![img])
     }
 
+    /// Run the Bernini-R one-shot script for video (t2v / v2v, mp4 output).
+    pub fn generate_bernini_video_blocking(
+        &self,
+        params: &BerniniVideoParams,
+    ) -> InferenceResult<BerniniVideoOutput> {
+        let model_path = params
+            .model_config
+            .model_path
+            .clone()
+            .or_else(|| params.model_config.diffusion_model_path.clone())
+            .ok_or_else(|| {
+                InferenceError::InvalidParameter("No model path for Bernini video fallback".to_string())
+            })?;
+        let script = self.script_path("bernini_generate.py")?;
+
+        let output_path = match params.output_path.clone() {
+            Some(p) => PathBuf::from(p),
+            None => Self::temp_dir().join(format!("py_bernini_v_{}.mp4", params.seed)),
+        };
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+
+        let mut args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "--config".to_string(),
+            model_path,
+            "--prompt".to_string(),
+            params.prompt.clone(),
+            "--output".to_string(),
+            output_path.to_string_lossy().to_string(),
+            "--steps".to_string(),
+            params.steps.to_string(),
+            "--seed".to_string(),
+            params.seed.to_string(),
+            "--num-frames".to_string(),
+            params.num_frames.to_string(),
+            "--fps".to_string(),
+            params.fps.to_string(),
+            "--max-image-size".to_string(),
+            params.max_image_size.to_string(),
+            "--device".to_string(),
+            self.config.device.clone(),
+            "--dtype".to_string(),
+            self.config.dtype.clone(),
+        ];
+        // Width/height only drive t2v; v2v follows the source clip. The script
+        // ignores them when --video is set, so passing them unconditionally is
+        // harmless and keeps the CLI uniform.
+        args.push("--width".to_string());
+        args.push(params.width.to_string());
+        args.push("--height".to_string());
+        args.push(params.height.to_string());
+        if !params.negative_prompt.is_empty() {
+            args.push("--neg-prompt".to_string());
+            args.push(params.negative_prompt.clone());
+        }
+        if let Some(ref video) = params.input_video_path {
+            args.push("--video".to_string());
+            args.push(video.clone());
+        }
+        if params.guidance_mode != "auto" {
+            args.push("--guidance-mode".to_string());
+            args.push(params.guidance_mode.clone());
+        }
+
+        tracing::info!(
+            "Python fallback Bernini-R video generation: {} {}",
+            self.interpreter,
+            args.join(" ")
+        );
+
+        let output = Command::new(&self.interpreter)
+            .args(&args)
+            .output()
+            .map_err(|e| InferenceError::BackendNotAvailable(format!(
+                "Failed to execute Python fallback '{}': {}",
+                self.interpreter, e
+            )))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InferenceError::GenerationFailed(format!(
+                "Python bernini_generate.py (video) exited with status {}: {}",
+                output.status,
+                stderr
+                    .lines()
+                    .rev()
+                    .take(12)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )));
+        }
+
+        // The script's last stdout line is a JSON result object. The script
+        // may rename non-mp4 outputs, so prefer its reported path.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let json_line = stdout
+            .lines()
+            .rev()
+            .find(|l| l.trim_start().starts_with('{'))
+            .map(|l| l.to_string());
+        let parsed = json_line
+            .as_deref()
+            .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok());
+
+        let reported = parsed
+            .as_ref()
+            .and_then(|v| v.get("output").and_then(|x| x.as_str()))
+            .map(PathBuf::from);
+        let final_path = match reported {
+            Some(p) if p.exists() => p,
+            _ if output_path.exists() => output_path,
+            _ => {
+                return Err(InferenceError::GenerationFailed(
+                    "Python Bernini video fallback produced no output mp4".to_string(),
+                ));
+            }
+        };
+
+        let as_str = |key: &str, default: &str| {
+            parsed
+                .as_ref()
+                .and_then(|v| v.get(key).and_then(|x| x.as_str()))
+                .unwrap_or(default)
+                .to_string()
+        };
+        let task = if params.input_video_path.is_some() { "v2v" } else { "t2v" };
+
+        Ok(BerniniVideoOutput {
+            output_file: final_path.to_string_lossy().to_string(),
+            task: as_str("task", task),
+            guidance_mode: as_str("guidance_mode", &params.guidance_mode),
+            num_frames: parsed
+                .as_ref()
+                .and_then(|v| v.get("num_frames").and_then(|x| x.as_i64()))
+                .unwrap_or(params.num_frames as i64) as i32,
+            fps: parsed
+                .as_ref()
+                .and_then(|v| v.get("fps").and_then(|x| x.as_i64()))
+                .unwrap_or(params.fps as i64) as i32,
+            seed: parsed
+                .as_ref()
+                .and_then(|v| v.get("seed").and_then(|x| x.as_i64()))
+                .unwrap_or(params.seed),
+        })
+    }
+
     /// Whether `path` is a Bernini-R self-contained model directory.
     ///
     /// Such dirs ship a custom `config.json` (`model_type=bernini_renderer`)
@@ -569,6 +721,13 @@ impl InferenceBackend for PythonBackend {
         params: Gaussian3DParams,
     ) -> InferenceResult<Gaussian3DOutput> {
         self.generate_3d_gaussian_blocking(&params)
+    }
+
+    fn generate_bernini_video(
+        &self,
+        params: BerniniVideoParams,
+    ) -> InferenceResult<BerniniVideoOutput> {
+        self.generate_bernini_video_blocking(&params)
     }
 
     fn generate_video(&self, _params: VideoGenParams) -> InferenceResult<SdVideo> {
@@ -913,6 +1072,38 @@ impl InferenceBackend for FallbackBackend {
         }
     }
 
+    fn generate_bernini_video(
+        &self,
+        params: crate::params::BerniniVideoParams,
+    ) -> InferenceResult<crate::params::BerniniVideoOutput> {
+        // Bernini-R video is Python-only (sd.cpp has no Bernini support).
+        let path = params
+            .model_config
+            .model_path
+            .clone()
+            .or_else(|| params.model_config.diffusion_model_path.clone());
+        let is_bernini = path
+            .as_deref()
+            .map(PythonBackend::is_bernini_model_dir)
+            .unwrap_or(false);
+        if !is_bernini {
+            return Err(InferenceError::InvalidParameter(
+                "generate_bernini_video requires a Bernini-R model directory".to_string(),
+            ));
+        }
+        if !self.supports_bernini() {
+            return Err(InferenceError::BackendNotAvailable(
+                "Bernini-R model selected but bernini_generate.py is unavailable".to_string(),
+            ));
+        }
+        tracing::info!(
+            "Bernini-R video task ({} frames, source: {}) routing to Python bernini_generate.py",
+            params.num_frames,
+            params.input_video_path.as_deref().unwrap_or("none (t2v)")
+        );
+        self.python.generate_bernini_video_blocking(&params)
+    }
+
     fn generate_av(&self, params: crate::params::H3Params) -> InferenceResult<SdVideo> {
         self.primary.generate_av(params)
     }
@@ -927,5 +1118,88 @@ impl InferenceBackend for FallbackBackend {
         params: &VideoGenParams,
     ) -> InferenceResult<SdVideo> {
         self.primary.decode_video_latent(latent, params)
+    }
+}
+
+#[cfg(test)]
+mod bernini_video_tests {
+    use super::*;
+    use crate::params::ModelConfig;
+
+    const DEFAULT_MODEL: &str = "/home/acproject/usb/comfyui/models/Bernini-R-1.3B-Diffusers";
+
+    fn backend() -> Option<PythonBackend> {
+        let model = std::env::var("COMFY_BERNINI_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        if !Path::new(&model).exists() {
+            eprintln!("skipping: Bernini model directory not found: {model}");
+            return None;
+        }
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        Some(PythonBackend::new(PythonInferConfig::default(), Some(&workspace)))
+    }
+
+    /// GPU smoke: Rust command assembly -> bernini_generate.py t2v -> mp4.
+    #[test]
+    #[ignore = "requires CUDA GPU, the 27GB Bernini-R weights and venv-cu128"]
+    fn bernini_t2v_smoke() {
+        let Some(backend) = backend() else { return };
+        let model = std::env::var("COMFY_BERNINI_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        let out = temp_dir_path().join("rust_bernini_t2v_smoke.mp4");
+        let params = BerniniVideoParams::new(
+            ModelConfig::new().with_model(model),
+            "A cute corgi running across a sunny grass field, cinematic.",
+        )
+        .with_output_path(out.to_string_lossy().to_string())
+        .with_num_frames(33)
+        .with_fps(16)
+        .with_dimensions(512, 320)
+        .with_max_image_size(512)
+        .with_steps(20)
+        .with_seed(42);
+
+        let result = backend.generate_bernini_video_blocking(&params).expect("t2v ok");
+        assert!(Path::new(&result.output_file).exists(), "mp4 missing");
+        assert_eq!(result.task, "t2v");
+        assert_eq!(result.guidance_mode, "t2v_apg");
+        assert_eq!(result.num_frames, 33);
+        assert!(result.output_file.ends_with(".mp4"));
+    }
+
+    /// GPU smoke: v2v editing through the Rust -> Python CLI path.
+    #[test]
+    #[ignore = "requires CUDA GPU, the 27GB Bernini-R weights and venv-cu128"]
+    fn bernini_v2v_smoke() {
+        let Some(backend) = backend() else { return };
+        let model = std::env::var("COMFY_BERNINI_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../py/flash_attn_v100/Bernini/assets/testcases/v2v/source_case1.mp4");
+        if !source.exists() {
+            eprintln!("skipping: v2v source missing: {}", source.display());
+            return;
+        }
+        let out = temp_dir_path().join("rust_bernini_v2v_smoke.mp4");
+        let params = BerniniVideoParams::new(
+            ModelConfig::new().with_model(model),
+            "Add a small snowman on the right side of the snowy path.",
+        )
+        .with_input_video(source.to_string_lossy().to_string())
+        .with_output_path(out.to_string_lossy().to_string())
+        .with_num_frames(9)
+        .with_fps(16)
+        .with_max_image_size(320)
+        .with_steps(10)
+        .with_seed(42);
+
+        let result = backend.generate_bernini_video_blocking(&params).expect("v2v ok");
+        assert!(Path::new(&result.output_file).exists(), "mp4 missing");
+        assert_eq!(result.task, "v2v");
+        assert_eq!(result.guidance_mode, "v2v_apg");
+        assert_eq!(result.num_frames, 9);
+    }
+
+    fn temp_dir_path() -> PathBuf {
+        let dir = std::env::temp_dir().join("comfyui-rust");
+        std::fs::create_dir_all(&dir).ok();
+        dir
     }
 }

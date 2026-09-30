@@ -91,6 +91,127 @@ pub struct Gaussian3DOutput {
     pub output_file: Option<String>,
 }
 
+/// Parameters for Bernini-R video tasks (t2v text-to-video, v2v video edit).
+///
+/// Runs through `comfy_fallback/bernini_generate.py`; sd.cpp has no Bernini
+/// support. When `input_video_path` is set the task is v2v (guidance
+/// `v2v_apg`), otherwise t2v (`t2v_apg`). The product is an mp4 file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BerniniVideoParams {
+    pub model_config: ModelConfig,
+    pub prompt: String,
+    pub negative_prompt: String,
+    /// Source video file for v2v (already on disk; no frame round-trip).
+    pub input_video_path: Option<String>,
+    /// Requested mp4 destination; a temp file is used when None.
+    pub output_path: Option<String>,
+    pub width: i32,
+    pub height: i32,
+    /// Long-edge resize budget (the script also aligns to 16).
+    pub max_image_size: i32,
+    pub num_frames: i32,
+    pub fps: i32,
+    pub seed: i64,
+    pub steps: i32,
+    /// "auto" | "t2v_apg" | "v2v_apg".
+    pub guidance_mode: String,
+}
+
+impl Default for BerniniVideoParams {
+    fn default() -> Self {
+        Self {
+            model_config: ModelConfig::default(),
+            prompt: String::new(),
+            negative_prompt: String::new(),
+            input_video_path: None,
+            output_path: None,
+            width: 832,
+            height: 480,
+            max_image_size: 848,
+            num_frames: 81,
+            fps: 16,
+            seed: 42,
+            steps: 40,
+            guidance_mode: "auto".to_string(),
+        }
+    }
+}
+
+impl BerniniVideoParams {
+    pub fn new(model_config: ModelConfig, prompt: impl Into<String>) -> Self {
+        Self {
+            model_config,
+            prompt: prompt.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_negative_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.negative_prompt = prompt.into();
+        self
+    }
+
+    pub fn with_input_video(mut self, path: impl Into<String>) -> Self {
+        self.input_video_path = Some(path.into());
+        self
+    }
+
+    pub fn with_output_path(mut self, path: impl Into<String>) -> Self {
+        self.output_path = Some(path.into());
+        self
+    }
+
+    pub fn with_dimensions(mut self, width: i32, height: i32) -> Self {
+        self.width = width;
+        self.height = height;
+        self
+    }
+
+    pub fn with_max_image_size(mut self, size: i32) -> Self {
+        self.max_image_size = size;
+        self
+    }
+
+    pub fn with_num_frames(mut self, n: i32) -> Self {
+        self.num_frames = n;
+        self
+    }
+
+    pub fn with_fps(mut self, fps: i32) -> Self {
+        self.fps = fps;
+        self
+    }
+
+    pub fn with_seed(mut self, seed: i64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    pub fn with_steps(mut self, steps: i32) -> Self {
+        self.steps = steps;
+        self
+    }
+
+    pub fn with_guidance_mode(mut self, mode: impl Into<String>) -> Self {
+        self.guidance_mode = mode.into();
+        self
+    }
+}
+
+/// Result of a Bernini-R video run. The mp4 lives at `output_file`; frames are
+/// not held in memory (nodes can decode them with [`crate::image::SdVideo`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BerniniVideoOutput {
+    pub output_file: String,
+    /// "t2v" | "v2v".
+    pub task: String,
+    /// Resolved guidance mode actually used ("t2v_apg" | "v2v_apg").
+    pub guidance_mode: String,
+    pub num_frames: i32,
+    pub fps: i32,
+    pub seed: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextConfig {
     pub model_path: Option<String>,

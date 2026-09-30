@@ -28,6 +28,16 @@ pub trait InferenceBackend: Send + Sync {
         Err(InferenceError::BackendNotAvailable("3D generation not implemented".to_string()))
     }
 
+    /// Bernini-R t2v / v2v video via the Python bernini_generate.py fallback.
+    fn generate_bernini_video(
+        &self,
+        _params: BerniniVideoParams,
+    ) -> InferenceResult<BerniniVideoOutput> {
+        Err(InferenceError::BackendNotAvailable(
+            "Bernini-R video generation not implemented".to_string(),
+        ))
+    }
+
     /// H3 音视频联合生成 (T2VA/Ref2VA/I2VA/MR2VA/SFX/Audio)
     fn generate_av(&self, _params: H3Params) -> InferenceResult<SdVideo> {
         Err(InferenceError::BackendNotAvailable("Audio-Video generation not available on this backend".to_string()))
