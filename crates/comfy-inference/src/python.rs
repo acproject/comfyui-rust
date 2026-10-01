@@ -12,10 +12,11 @@
 
 use crate::backend::InferenceBackend;
 use crate::error::{InferenceError, InferenceResult};
-use crate::image::{SdImage, SdVideo};
+use crate::image::{SdAudio, SdImage, SdVideo};
 use crate::params::{
-    BerniniVideoOutput, BerniniVideoParams, Gaussian3DOutput, Gaussian3DParams, ImageGenParams,
-    UpscaleParams, VideoGenParams,
+    BerniniVideoOutput, BerniniVideoParams, ContextIrParams, Gaussian3DOutput, Gaussian3DParams,
+    H3Context, H3Mode, H3Params, ImageGenParams, Music3Output, Music3Params, UpscaleParams,
+    VideoGenParams,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -695,6 +696,272 @@ impl PythonBackend {
             output_file: Some(output_path.to_string_lossy().to_string()),
         })
     }
+
+    /// Run a fallback script and parse its last stdout JSON object.
+    fn run_json_script(&self, label: &str, args: &[String]) -> InferenceResult<serde_json::Value> {
+        tracing::info!("Python fallback {label}: {} {}", self.interpreter, args.join(" "));
+        let output = Command::new(&self.interpreter)
+            .args(args)
+            .output()
+            .map_err(|e| InferenceError::BackendNotAvailable(format!(
+                "Failed to execute Python fallback '{}': {}", self.interpreter, e
+            )))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InferenceError::GenerationFailed(format!(
+                "Python {label} exited with status {}: {}",
+                output.status,
+                stderr.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev()
+                    .collect::<Vec<_>>().join("\n")
+            )));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout
+            .lines()
+            .rev()
+            .find(|l| l.trim_start().starts_with('{'))
+            .ok_or_else(|| InferenceError::GenerationFailed(
+                format!("Python {label} produced no JSON result line")
+            ))?;
+        serde_json::from_str(line).map_err(|e| InferenceError::GenerationFailed(
+            format!("Python {label} returned invalid JSON: {e}")
+        ))
+    }
+
+    /// Run the MiniMax-H3 script (t2va/fl2va/ref2va -> mp4 with stereo audio).
+    pub fn generate_h3_blocking(&self, params: &H3Params) -> InferenceResult<SdVideo> {
+        let model_path = params.model_path.clone().ok_or_else(|| {
+            InferenceError::InvalidParameter("H3Params.model_path is required for the Python H3 fallback".to_string())
+        })?;
+        let script = self.script_path("h3_generate.py")?;
+
+        // The released Python pipeline supports the omni-av tasks; audio-only
+        // modes (SFX/Audio) have no dedicated entry point here.
+        let (workflow, keyframe_paths, reference_paths) = match params.mode {
+            H3Mode::T2VA => ("t2va", Vec::new(), Vec::new()),
+            H3Mode::I2VA | H3Mode::MR2VA | H3Mode::Ref2VA => {
+                let variant = params.variant.as_deref().unwrap_or("");
+                if variant == "ref2va" || (variant.is_empty() && matches!(params.mode, H3Mode::Ref2VA)) {
+                    if params.reference_video.is_some() || params.audio_guide.is_some() {
+                        return Err(InferenceError::InvalidParameter(
+                            "Python H3 fallback currently supports image references only for ref2va \
+                             (video/audio references are not wired through)".to_string()
+                        ));
+                    }
+                    let mut refs = Vec::new();
+                    for img in &params.reference_images {
+                        refs.push((Self::write_temp_png(img, "py_h3_ref")?, "@image".to_string()));
+                    }
+                    ("ref2va", Vec::new(), refs)
+                } else {
+                    // I2VA -> first-keyframe (fl2va)
+                    let Some(first) = params.reference_images.first() else {
+                        return Err(InferenceError::InvalidParameter(
+                            "I2VA requires at least one reference image".to_string()
+                        ));
+                    };
+                    let path = Self::write_temp_png(first, "py_h3_first")?;
+                    ("fl2va", vec![("--first-frame".to_string(), path.to_string_lossy().to_string())], Vec::new())
+                }
+            }
+            H3Mode::SFX | H3Mode::Audio => {
+                return Err(InferenceError::UnsupportedOperation(
+                    "The Python H3 fallback supports joint audio-video tasks (t2va/i2va/ref2va), \
+                     not SFX/audio-only modes".to_string()
+                ));
+            }
+        };
+
+        let output_path = Self::temp_dir().join(format!("py_h3_{}.mp4", params.seed));
+        let mut args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "--model".into(), model_path,
+            "--workflow".into(), workflow.into(),
+            "--prompt".into(), params.prompt.clone(),
+            "--output".into(), output_path.to_string_lossy().to_string(),
+            "--num-frames".into(), params.num_frames.to_string(),
+            "--steps".into(), params.num_inference_steps.to_string(),
+            "--seed".into(), params.seed.to_string(),
+            "--device".into(), self.config.device.clone(),
+            "--dtype".into(), self.config.dtype.clone(),
+        ];
+        if params.width > 0 && params.height > 0 {
+            args.push("--width".into());
+            args.push(params.width.to_string());
+            args.push("--height".into());
+            args.push(params.height.to_string());
+        }
+        for (flag, value) in keyframe_paths {
+            args.push(flag);
+            args.push(value);
+        }
+        for (path, suffix) in reference_paths {
+            args.push("--reference".into());
+            args.push(format!("{}{}", path.to_string_lossy(), suffix));
+        }
+
+        let json = self.run_json_script("h3_generate.py", &args)?;
+        let reported = json.get("output").and_then(|v| v.as_str()).map(PathBuf::from);
+        let mp4 = match reported {
+            Some(p) if p.exists() => p,
+            _ if output_path.exists() => output_path,
+            _ => return Err(InferenceError::GenerationFailed(
+                "Python h3_generate.py produced no output mp4".to_string()
+            )),
+        };
+
+        let fps = json.get("fps").and_then(|v| v.as_i64()).unwrap_or(params.fps as i64) as i32;
+        let mut video = SdVideo::decode_with_ffmpeg(&mp4, fps).map_err(|e| {
+            InferenceError::GenerationFailed(format!("failed to decode H3 mp4 frames: {e}"))
+        })?;
+
+        // The mp4 already carries the generated stereo track; demux it once so
+        // downstream AUDIO consumers (SaveAudio, SaveVideoWithAudio) can use it.
+        if let Some(ffmpeg) = SdVideo::resolve_full_or_any_ffmpeg() {
+            let wav_path = Self::temp_dir().join(format!("py_h3_{}.wav", params.seed));
+            let ff = Command::new(ffmpeg)
+                .arg("-y").arg("-i").arg(&mp4)
+                .arg("-vn").arg("-acodec").arg("pcm_s16le")
+                .arg("-ar").arg("32000").arg("-ac").arg("2")
+                .arg(&wav_path)
+                .output();
+            if let Ok(out) = ff {
+                if out.status.success() {
+                    if let Ok(bytes) = std::fs::read(&wav_path) {
+                        if let Ok(audio) = SdAudio::from_wav_bytes(&bytes) {
+                            video.audio = Some(audio);
+                        }
+                    }
+                } else {
+                    tracing::warn!("H3 audio demux failed; video frames are still available");
+                }
+            }
+        } else {
+            tracing::warn!("ffmpeg unavailable; H3 SdVideo carries no decoded audio track");
+        }
+        Ok(video)
+    }
+
+    /// Run the H3-Context-IR script (hosted MiniMax API, or local template).
+    pub fn context_ir_blocking(&self, params: &ContextIrParams) -> InferenceResult<H3Context> {
+        let script = self.script_path("h3_context_ir.py")?;
+        let mut args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "--text".into(),
+            params.user_prompt.clone().unwrap_or_default(),
+        ];
+        if params.parse_bgm {
+            args.push("--parse-bgm".into());
+        }
+        if !params.parse_sfx {
+            args.push("--no-parse-sfx".into());
+        }
+        // Local template mode ignores media; the hosted API receives a text note
+        // for attachments. Passing the files themselves requires a hosted upload
+        // URL the platform does not currently expose here.
+        let v = self.run_json_script("h3_context_ir.py", &args)?;
+        let as_str = |key: &str| v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        Ok(H3Context {
+            subject: as_str("subject"),
+            environment: as_str("environment"),
+            style: as_str("style"),
+            camera_motion: as_str("camera_motion"),
+            sound_effects: v.get("sound_effects")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default(),
+            bgm: v.get("bgm").and_then(|x| x.as_str()).map(str::to_string),
+            negative_prompt: v.get("negative_prompt").and_then(|x| x.as_str()).map(str::to_string),
+        })
+    }
+
+    /// Run the MiniMax-Music3 script (lyrics + structured caption -> WAV).
+    pub fn generate_music3_blocking(&self, params: &Music3Params) -> InferenceResult<Music3Output> {
+        let model_path = params.model_path.clone().ok_or_else(|| {
+            InferenceError::InvalidParameter("Music3Params.model_path is required".to_string())
+        })?;
+        let script = self.script_path("music3_generate.py")?;
+        let output_path = match params.output_path.clone() {
+            Some(p) => PathBuf::from(p),
+            None => Self::temp_dir().join(format!("py_music3_{}.wav", params.seed)),
+        };
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "--model".into(), model_path,
+            "--lyrics".into(), params.lyrics.clone(),
+            "--prompt".into(), params.prompt.clone(),
+            "--output".into(), output_path.to_string_lossy().to_string(),
+            "--audio-duration".into(), params.audio_duration.to_string(),
+            "--seed".into(), params.seed.to_string(),
+            "--max-new-tokens".into(), params.resolved_max_new_tokens().to_string(),
+            "--device".into(), self.config.device.clone(),
+            "--dtype".into(), self.config.dtype.clone(),
+        ];
+
+        let json = self.run_json_script("music3_generate.py", &args)?;
+        let final_path = json.get("output").and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+            .unwrap_or(output_path);
+        if !final_path.exists() {
+            return Err(InferenceError::GenerationFailed(
+                "Python music3_generate.py produced no output wav".to_string()
+            ));
+        }
+        let bytes = std::fs::read(&final_path).map_err(|e| {
+            InferenceError::ImageDecodeError(format!("failed to read Music3 wav: {e}"))
+        })?;
+        let audio = SdAudio::from_wav_bytes(&bytes)?;
+        Ok(Music3Output {
+            output_file: final_path.to_string_lossy().to_string(),
+            sample_rate: json.get("sample_rate").and_then(|v| v.as_u64())
+                .unwrap_or(audio.sample_rate as u64) as u32,
+            channels: json.get("channels").and_then(|v| v.as_u64())
+                .unwrap_or(audio.channels as u64) as u32,
+            duration_sec: json.get("duration_sec").and_then(|v| v.as_f64())
+                .unwrap_or_else(|| audio.duration_sec() as f64),
+            seed: json.get("seed").and_then(|v| v.as_i64()).unwrap_or(params.seed),
+            audio,
+        })
+    }
+
+    /// Whether `path` is a MiniMax-H3 modular model repository.
+    pub fn is_minimax_h3_dir(path: &str) -> bool {
+        Self::read_modular_class(path).map(|c| c.contains("MiniMaxH3")).unwrap_or(false)
+    }
+
+    /// Whether `path` is a MiniMax-Music3 modular model repository.
+    pub fn is_music3_dir(path: &str) -> bool {
+        Self::read_modular_class(path).map(|c| c.contains("Music3")).unwrap_or(false)
+    }
+
+    fn read_modular_class(path: &str) -> Option<String> {
+        if path.is_empty() {
+            return None;
+        }
+        let p = Path::new(path);
+        if !p.is_dir() {
+            return None;
+        }
+        for file in ["modular_model_index.json", "model_index.json", "config.json"] {
+            if let Ok(text) = std::fs::read_to_string(p.join(file)) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(c) = v.get("_class_name").and_then(|x| x.as_str()) {
+                        return Some(c.to_string());
+                    }
+                    if let Some(a) = v.get("architectures").and_then(|x| x.as_array()) {
+                        if let Some(c) = a.first().and_then(|x| x.as_str()) {
+                            return Some(c.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 impl InferenceBackend for PythonBackend {
@@ -710,6 +977,18 @@ impl InferenceBackend for PythonBackend {
         self.script_path("triposplat_generate.py")
             .map(|p| p.exists())
             .unwrap_or(false)
+    }
+
+    fn supports_audio_video_generation(&self) -> bool {
+        self.script_path("h3_generate.py").map(|p| p.exists()).unwrap_or(false)
+    }
+
+    fn supports_context_ir(&self) -> bool {
+        self.script_path("h3_context_ir.py").map(|p| p.exists()).unwrap_or(false)
+    }
+
+    fn supports_music3(&self) -> bool {
+        self.script_path("music3_generate.py").map(|p| p.exists()).unwrap_or(false)
     }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
@@ -728,6 +1007,18 @@ impl InferenceBackend for PythonBackend {
         params: BerniniVideoParams,
     ) -> InferenceResult<BerniniVideoOutput> {
         self.generate_bernini_video_blocking(&params)
+    }
+
+    fn generate_av(&self, params: H3Params) -> InferenceResult<SdVideo> {
+        self.generate_h3_blocking(&params)
+    }
+
+    fn context_ir(&self, params: ContextIrParams) -> InferenceResult<H3Context> {
+        self.context_ir_blocking(&params)
+    }
+
+    fn generate_music3(&self, params: Music3Params) -> InferenceResult<Music3Output> {
+        self.generate_music3_blocking(&params)
     }
 
     fn generate_video(&self, _params: VideoGenParams) -> InferenceResult<SdVideo> {
@@ -975,10 +1266,15 @@ impl InferenceBackend for FallbackBackend {
 
     fn supports_audio_video_generation(&self) -> bool {
         self.primary.supports_audio_video_generation()
+            || self.python.supports_audio_video_generation()
     }
 
     fn supports_context_ir(&self) -> bool {
-        self.primary.supports_context_ir()
+        self.primary.supports_context_ir() || self.python.supports_context_ir()
+    }
+
+    fn supports_music3(&self) -> bool {
+        self.primary.supports_music3() || self.python.supports_music3()
     }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
@@ -1105,11 +1401,55 @@ impl InferenceBackend for FallbackBackend {
     }
 
     fn generate_av(&self, params: crate::params::H3Params) -> InferenceResult<SdVideo> {
+        // MiniMax-H3 modular repositories only run through the Python
+        // (diffusers modular pipeline / hosted SGLang) path; sd.cpp cannot
+        // load them yet.
+        let is_h3 = params
+            .model_path
+            .as_deref()
+            .map(PythonBackend::is_minimax_h3_dir)
+            .unwrap_or(false);
+        if is_h3 {
+            if !self.python.supports_audio_video_generation() {
+                return Err(InferenceError::BackendNotAvailable(
+                    "MiniMax-H3 selected but h3_generate.py is unavailable".to_string(),
+                ));
+            }
+            return self.python.generate_h3_blocking(&params);
+        }
         self.primary.generate_av(params)
     }
 
-    fn context_ir(&self, params: crate::params::ContextIrParams) -> InferenceResult<crate::params::H3Context> {
+    fn context_ir(
+        &self,
+        params: crate::params::ContextIrParams,
+    ) -> InferenceResult<crate::params::H3Context> {
+        // Context-IR is served by the hosted MiniMax API / local template
+        // script; the primary backend has no implementation.
+        if self.python.supports_context_ir() {
+            return self.python.context_ir_blocking(&params);
+        }
         self.primary.context_ir(params)
+    }
+
+    fn generate_music3(
+        &self,
+        params: crate::params::Music3Params,
+    ) -> InferenceResult<crate::params::Music3Output> {
+        let is_music3 = params
+            .model_path
+            .as_deref()
+            .map(PythonBackend::is_music3_dir)
+            .unwrap_or(false);
+        if is_music3 || !self.primary.supports_music3() {
+            if !self.python.supports_music3() {
+                return Err(InferenceError::BackendNotAvailable(
+                    "MiniMax-Music3 selected but music3_generate.py is unavailable".to_string(),
+                ));
+            }
+            return self.python.generate_music3_blocking(&params);
+        }
+        self.primary.generate_music3(params)
     }
 
     fn decode_video_latent(
@@ -1201,5 +1541,104 @@ mod bernini_video_tests {
         let dir = std::env::temp_dir().join("comfyui-rust");
         std::fs::create_dir_all(&dir).ok();
         dir
+    }
+}
+
+#[cfg(test)]
+mod minimax_tests {
+    use super::*;
+
+    const DEFAULT_H3_MODEL: &str = "/home/acproject/usb/comfyui/models/MiniMax-H3";
+    const DEFAULT_MUSIC3_MODEL: &str = "/home/acproject/usb/comfyui/models/MiniMax-Music3";
+
+    fn fallback_backend() -> Option<PythonBackend> {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let backend = PythonBackend::new(PythonInferConfig::default(), Some(&workspace));
+        let dir = backend.script_path("h3_context_ir.py").ok()?;
+        if !dir.exists() {
+            eprintln!("skipping: comfy_fallback scripts not found");
+            return None;
+        }
+        Some(backend)
+    }
+
+    fn h3_model() -> Option<String> {
+        let m = std::env::var("COMFY_H3_TEST_MODEL").unwrap_or_else(|_| DEFAULT_H3_MODEL.to_string());
+        Path::new(&m).exists().then_some(m)
+    }
+
+    fn music3_model() -> Option<String> {
+        let m = std::env::var("COMFY_MUSIC3_TEST_MODEL")
+            .unwrap_or_else(|_| DEFAULT_MUSIC3_MODEL.to_string());
+        Path::new(&m).exists().then_some(m)
+    }
+
+    #[test]
+    fn detects_minimax_modular_dirs() {
+        assert!(PythonBackend::is_minimax_h3_dir(DEFAULT_H3_MODEL) || !Path::new(DEFAULT_H3_MODEL).exists());
+        assert!(PythonBackend::is_music3_dir(DEFAULT_MUSIC3_MODEL) || !Path::new(DEFAULT_MUSIC3_MODEL).exists());
+        assert!(!PythonBackend::is_minimax_h3_dir(""));
+        assert!(!PythonBackend::is_music3_dir("/nonexistent/path"));
+    }
+
+    /// Fast, GPU-free path: Context-IR local-template fallback through the
+    /// Rust -> Python command boundary (runs offline unless MINIMAX_API_KEY set).
+    #[test]
+    fn context_ir_local_template_through_backend() {
+        let Some(backend) = fallback_backend() else { return };
+        let params = ContextIrParams::from_text(
+            "A corgi running on the beach at sunset, slow tracking shot, cinematic",
+        )
+        .with_bgm(true);
+        let ctx = backend.context_ir_blocking(&params).expect("context_ir ok");
+        assert!(!ctx.subject.is_empty(), "subject should be populated");
+        let prompt = ctx.build_positive_prompt();
+        assert!(prompt.contains("corgi"));
+    }
+
+    /// GPU smoke: H3 t2va -> mp4 with stereo audio.
+    #[test]
+    #[ignore = "requires CUDA GPU, the 26GB MiniMax-H3 weights and venv-cu128"]
+    fn minimax_h3_t2va_smoke() {
+        let Some(backend) = fallback_backend() else { return };
+        let Some(model) = h3_model() else {
+            eprintln!("skipping: MiniMax-H3 model directory not found");
+            return;
+        };
+        let params = H3Params::new(
+            "A red panda eating a bamboo leaf in a misty bamboo forest, cinematic.",
+        )
+        .with_model_path(model)
+        .with_steps(10)
+        .with_num_frames(123)
+        .with_seed(42);
+        let video = backend.generate_h3_blocking(&params).expect("h3 t2va ok");
+        assert!(!video.frames.is_empty(), "decoded frames expected");
+        assert!(video.audio.is_some(), "stereo audio track expected");
+    }
+
+    /// GPU smoke: Music3 lyrics+caption -> 32kHz stereo wav.
+    #[test]
+    #[ignore = "requires CUDA GPU, the 10GB MiniMax-Music3 weights and venv-cu128"]
+    fn minimax_music3_smoke() {
+        let Some(backend) = fallback_backend() else { return };
+        let Some(model) = music3_model() else {
+            eprintln!("skipping: MiniMax-Music3 model directory not found");
+            return;
+        };
+        let out = std::env::temp_dir()
+            .join("comfyui-rust")
+            .join("rust_music3_smoke.wav");
+        let params = Music3Params::new(
+            "Instrumental lo-fi hip hop, warm electric piano, laid-back drums, 75 bpm",
+        )
+        .with_model_path(model)
+        .with_duration(5.0)
+        .with_seed(0)
+        .with_output_path(out.to_string_lossy().to_string());
+        let result = backend.generate_music3_blocking(&params).expect("music3 ok");
+        assert!(Path::new(&result.output_file).exists(), "wav missing");
+        assert_eq!(result.sample_rate, 32000);
+        assert!(result.duration_sec >= 3.0);
     }
 }

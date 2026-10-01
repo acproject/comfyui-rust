@@ -857,7 +857,7 @@ impl SdVideo {
     /// first, then any binary that merely exists. Mirrors
     /// `find_full_ffmpeg().or_else(find_any_ffmpeg)` as a single call site so
     /// the tier order cannot drift between users.
-    fn resolve_full_or_any_ffmpeg() -> Option<String> {
+    pub(crate) fn resolve_full_or_any_ffmpeg() -> Option<String> {
         Self::find_full_ffmpeg().or_else(Self::find_any_ffmpeg)
     }
 

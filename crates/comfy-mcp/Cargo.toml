@@ -1,0 +1,35 @@
+[package]
+name = "comfy-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP (Model Context Protocol) server for ComfyUI-Rust: workflow construction helpers for AI IDEs"
+
+[lib]
+name = "comfy_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "comfy-mcp"
+path = "src/bin/comfy_mcp.rs"
+
+[dependencies]
+rmcp = { version = "3.5", features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+futures = "0.3"
+tower = "0.5"
+http = "1"
+
+[dev-dependencies]

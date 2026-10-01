@@ -1018,6 +1018,11 @@ pub struct H3Params {
     pub generate_sfx: bool,
     /// 是否生成背景音乐
     pub generate_bgm: bool,
+    /// MiniMax-H3 仓库目录（modular_model_index.json 所在目录，本地 diffusers 兜底用）
+    pub model_path: Option<String>,
+    /// 任务分区变体："fl2va"（t2va/fl2va，transformer/）或
+    /// "ref2va"（transformer_ref/）；None 时按 mode 自动选择
+    pub variant: Option<String>,
 }
 
 impl Default for H3Params {
@@ -1041,6 +1046,8 @@ impl Default for H3Params {
             shift: None,
             generate_sfx: true,
             generate_bgm: false,
+            model_path: None,
+            variant: None,
         }
     }
 }
@@ -1154,6 +1161,18 @@ impl H3Params {
         self
     }
 
+    /// 设置 MiniMax-H3 仓库目录（本地 diffusers 兜底路径）
+    pub fn with_model_path(mut self, path: impl Into<String>) -> Self {
+        self.model_path = Some(path.into());
+        self
+    }
+
+    /// 强制任务分区："fl2va" 或 "ref2va"
+    pub fn with_variant(mut self, variant: impl Into<String>) -> Self {
+        self.variant = Some(variant.into());
+        self
+    }
+
     /// 获取视频时长（秒）
     pub fn video_duration_sec(&self) -> f64 {
         self.num_frames as f64 / self.fps as f64
@@ -1225,4 +1244,101 @@ impl ContextIrParams {
         self.parse_bgm = enable;
         self
     }
+}
+
+/// MiniMax-Music3 文生音乐参数（lyrics + structured caption，32kHz 立体声 WAV）
+#[derive(Debug, Clone)]
+pub struct Music3Params {
+    /// MiniMax-Music3 仓库目录（modular_model_index.json 所在目录）
+    pub model_path: Option<String>,
+    /// 带段落标签的歌词（"[Verse] ... [Chorus] ..."），可为空（纯器乐）
+    pub lyrics: String,
+    /// 结构化说明 / Structured Caption（Global Metadata / Vocal Details /
+    /// Arrangement）；自然语言描述也可
+    pub prompt: String,
+    /// 目标时长（秒），上限 360
+    pub audio_duration: f64,
+    /// 种子
+    pub seed: i64,
+    /// 声学帧预算（25fps，硬上限 9000）；None 表示由 audio_duration 推导
+    pub max_new_tokens: Option<i32>,
+    /// 输出 WAV 路径（None 时由后端写入临时目录）
+    pub output_path: Option<String>,
+}
+
+impl Default for Music3Params {
+    fn default() -> Self {
+        Self {
+            model_path: None,
+            lyrics: String::new(),
+            prompt: String::new(),
+            audio_duration: 60.0,
+            seed: 0,
+            max_new_tokens: None,
+            output_path: None,
+        }
+    }
+}
+
+impl Music3Params {
+    pub fn new(prompt: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_model_path(mut self, path: impl Into<String>) -> Self {
+        self.model_path = Some(path.into());
+        self
+    }
+
+    pub fn with_lyrics(mut self, lyrics: impl Into<String>) -> Self {
+        self.lyrics = lyrics.into();
+        self
+    }
+
+    pub fn with_duration(mut self, seconds: f64) -> Self {
+        self.audio_duration = seconds.clamp(1.0, 360.0);
+        self
+    }
+
+    pub fn with_seed(mut self, seed: i64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    pub fn with_max_new_tokens(mut self, tokens: i32) -> Self {
+        self.max_new_tokens = Some(tokens.clamp(1, 9000));
+        self
+    }
+
+    pub fn with_output_path(mut self, path: impl Into<String>) -> Self {
+        self.output_path = Some(path.into());
+        self
+    }
+
+    /// 25 声学帧/秒，硬上限 9000（约 360 秒）
+    pub fn resolved_max_new_tokens(&self) -> i32 {
+        self.max_new_tokens
+            .unwrap_or_else(|| (self.audio_duration * 25.0).round() as i32)
+            .clamp(1, 9000)
+    }
+}
+
+/// MiniMax-Music3 生成结果
+#[derive(Debug, Clone)]
+pub struct Music3Output {
+    /// 输出 WAV 文件绝对路径
+    pub output_file: String,
+    /// 采样率（通常 32000）
+    pub sample_rate: u32,
+    /// 声道数（通常 2）
+    pub channels: u32,
+    /// 实际时长（秒）
+    pub duration_sec: f64,
+    /// 使用的种子
+    pub seed: i64,
+    /// 解码后的音频（便于直接连接 AUDIO 消费者）
+    pub audio: crate::image::SdAudio,
 }

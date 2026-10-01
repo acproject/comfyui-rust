@@ -4,5 +4,6 @@ members = [
     "crates/comfy-inference",
     "crates/comfy-executor",
     "crates/comfy-api",
+    "crates/comfy-mcp",
 ]
 resolver = "2"

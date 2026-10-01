@@ -24,6 +24,8 @@ echo ""
 if lsof -i :8188 >/dev/null 2>&1; then
     echo "⚠️  端口 8188 已被占用，正在停止旧服务..."
     pkill -f "comfy-server" 2>/dev/null || true
+    # 停止旧的 MCP stdio 进程（AI IDE 也可能自行拉起该二进制，这里只停本项目启动的）
+    pkill -f "target/debug/comfy-mcp" 2>/dev/null || true
     sleep 1
 fi
 
@@ -105,9 +107,24 @@ fi
 export FLASH_ATTN_BRIDGE_URL="${FLASH_ATTN_BRIDGE_URL:-http://127.0.0.1:8998}"
 echo "  FlashAttn Bridge URL: $FLASH_ATTN_BRIDGE_URL"
 
+# MCP 配置（供 AI IDE 接入：Cursor / Trae / Claude Code 等）
+# - HTTP 端点 /mcp 随 comfy-server 自动挂载，无需额外进程
+# - COMFY_MCP_ENABLED=0 可关闭；COMFY_MCP_ALLOWED_HOSTS 控制允许的 Host（默认仅本机）
+export COMFY_MCP_ENABLED="${COMFY_MCP_ENABLED:-1}"
+if [ -z "${COMFY_MCP_ALLOWED_HOSTS:-}" ]; then
+    export COMFY_MCP_ALLOWED_HOSTS="localhost,127.0.0.1,::1"
+fi
+echo "  MCP HTTP 端点: http://127.0.0.1:8188/mcp (COMFY_MCP_ENABLED=$COMFY_MCP_ENABLED)"
+
+# 预先构建 MCP stdio 独立二进制（cargo run -p comfy-api 不会构建其它 workspace 成员的 bin）
+# AI IDE 通过子进程方式接入 MCP 时使用 target/debug/comfy-mcp
+echo "  预构建 MCP stdio 二进制 (comfy-mcp)..."
+cargo build -p comfy-mcp
+
 cargo run -p comfy-api --features "$CARGO_FEATURES" &
 SERVER_PID=$!
 echo "  ✓ 后端 PID: $SERVER_PID"
+echo "  ✓ MCP stdio: $PROJECT_DIR/target/debug/comfy-mcp"
 
 echo ""
 echo "等待后端启动..."
@@ -124,8 +141,10 @@ echo ""
 echo "========================================="
 echo "  服务已启动"
 echo "========================================="
-echo "  前端: http://localhost:3022"
-echo "  后端: http://127.0.0.1:8188"
+echo "  前端    : http://localhost:3022"
+echo "  后端    : http://127.0.0.1:8188"
+echo "  MCP HTTP: http://127.0.0.1:8188/mcp  (AI IDE Streamable HTTP 接入)"
+echo "  MCP stdio: target/debug/comfy-mcp    (AI IDE 子进程方式接入)"
 echo ""
 echo "  按 Ctrl+C 停止所有服务"
 echo "========================================="

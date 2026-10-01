@@ -109,6 +109,12 @@ impl ComfyServer {
 
         let mut router = Router::new().merge(api_routes).merge(upload_routes);
 
+        // MCP Streamable HTTP endpoint for AI IDEs (/mcp), unless disabled via
+        // COMFY_MCP_ENABLED=0.
+        if let Some(mcp_routes) = crate::mcp::mcp_router(self.addr.port()) {
+            router = router.merge(mcp_routes);
+        }
+
         if let Some(ref static_dir) = self.static_dir {
             router = router.fallback_service(ServeDir::new(static_dir));
         }

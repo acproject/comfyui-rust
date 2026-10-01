@@ -17,6 +17,9 @@ pub trait InferenceBackend: Send + Sync {
     fn supports_context_ir(&self) -> bool {
         false
     }
+    fn supports_music3(&self) -> bool {
+        false
+    }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>>;
 
@@ -48,6 +51,11 @@ pub trait InferenceBackend: Send + Sync {
         Err(InferenceError::BackendNotAvailable("Context-IR not available on this backend".to_string()))
     }
 
+    /// MiniMax-Music3 文生音乐（32kHz 立体声 WAV）
+    fn generate_music3(&self, _params: Music3Params) -> InferenceResult<Music3Output> {
+        Err(InferenceError::BackendNotAvailable("Music3 generation not available on this backend".to_string()))
+    }
+
     fn decode_video_latent(&self, _latent: &Value, _params: &VideoGenParams) -> InferenceResult<SdVideo> {
         Err(InferenceError::BackendNotAvailable("decode_video_latent not implemented".to_string()))
     }
@@ -59,6 +67,7 @@ pub trait InferenceBackend: Send + Sync {
             supports_3d_generation: self.supports_3d_generation(),
             supports_audio_video_generation: self.supports_audio_video_generation(),
             supports_context_ir: self.supports_context_ir(),
+            supports_music3: self.supports_music3(),
         }
     }
 }
@@ -126,6 +135,7 @@ pub struct BackendCapabilities {
     pub supports_3d_generation: bool,
     pub supports_audio_video_generation: bool,
     pub supports_context_ir: bool,
+    pub supports_music3: bool,
 }
 
 pub struct NullBackend;
@@ -160,6 +170,14 @@ impl InferenceBackend for NullBackend {
     }
 
     fn context_ir(&self, _params: ContextIrParams) -> InferenceResult<H3Context> {
+        Err(InferenceError::BackendNotAvailable("NullBackend".to_string()))
+    }
+
+    fn supports_music3(&self) -> bool {
+        false
+    }
+
+    fn generate_music3(&self, _params: Music3Params) -> InferenceResult<Music3Output> {
         Err(InferenceError::BackendNotAvailable("NullBackend".to_string()))
     }
 

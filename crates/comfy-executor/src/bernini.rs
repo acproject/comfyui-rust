@@ -672,6 +672,7 @@ mod tests {
 
     #[test]
     fn scans_only_self_contained_bernini_dirs() {
+        let _env = crate::TEST_ENV_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("comfy_bernini_scan_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -726,6 +727,7 @@ mod tests {
 
     #[test]
     fn video_node_is_registered_in_builtin_registry() {
+        let _env = crate::TEST_ENV_LOCK.lock().unwrap();
         // Point at the real models tree when it exists so the combo gets the
         // self-contained Bernini-R directory; otherwise just verify wiring.
         let real_models = Path::new("/home/acproject/usb/comfyui/models");
@@ -764,6 +766,7 @@ mod tests {
 
     #[test]
     fn resolves_relative_video_under_input_dir() {
+        let _env = crate::TEST_ENV_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("comfy_bernini_input_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let cwd = std::env::current_dir().unwrap();
