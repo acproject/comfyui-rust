@@ -806,18 +806,67 @@ impl SdVideo {
         Ok(())
     }
 
+    /// Absolute locations probed first by [`SdVideo::find_any_ffmpeg`].
+    /// `/usr/local/bin` sorts first: this tier makes no capability checks.
+    const ANY_FFMPEG_CANDIDATES: &[&str] = &[
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+        "/bin/ffmpeg",
+    ];
+
+    /// Absolute locations probed first by [`SdVideo::find_full_ffmpeg`].
+    /// `/usr/bin` (distro build) sorts first because a stripped/custom
+    /// `/usr/local/bin/ffmpeg` can exist yet fail to demux valid h264 mp4s.
+    const FULL_FFMPEG_CANDIDATES: &[&str] = &[
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/bin/ffmpeg",
+    ];
+
+    /// Select the first existing candidate that passes `capable`.
+    ///
+    /// Pure apart from the injected `capable` probe, which lets the ordering
+    /// and skip-fallback behaviour be unit-tested without touching the
+    /// hardcoded system paths.
+    fn pick_existing<I, S>(candidates: I, capable: impl Fn(&str) -> bool) -> Option<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        candidates
+            .into_iter()
+            .map(|c| c.as_ref().to_string())
+            .filter(|path| std::path::Path::new(path).exists())
+            .find(|path| capable(path))
+    }
+
+    /// True when the binary advertises the `rawvideo` demuxer (used as the
+    /// proxy for "full-featured build able to pipe/decode frames"). A missing
+    /// binary or failed probe is reported as `false`, never an error.
+    fn ffmpeg_reports_rawvideo(ffmpeg: &str) -> bool {
+        std::process::Command::new(ffmpeg)
+            .args(["-demuxers"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains("rawvideo"))
+            .unwrap_or(false)
+    }
+
+    /// Resolve ffmpeg for decode / webm encode: a capability-verified build
+    /// first, then any binary that merely exists. Mirrors
+    /// `find_full_ffmpeg().or_else(find_any_ffmpeg)` as a single call site so
+    /// the tier order cannot drift between users.
+    fn resolve_full_or_any_ffmpeg() -> Option<String> {
+        Self::find_full_ffmpeg().or_else(Self::find_any_ffmpeg)
+    }
+
     /// Find any available ffmpeg binary
     fn find_any_ffmpeg() -> Option<String> {
-        let candidates = [
-            "/usr/local/bin/ffmpeg",
-            "/usr/bin/ffmpeg",
-            "/bin/ffmpeg",
-        ];
-
-        for path in &candidates {
-            if std::path::Path::new(path).exists() {
-                return Some(path.to_string());
-            }
+        if let Some(path) =
+            Self::pick_existing(Self::ANY_FFMPEG_CANDIDATES.iter().copied(), |_| true)
+        {
+            return Some(path);
         }
 
         // Check PATH
@@ -836,42 +885,16 @@ impl SdVideo {
 
     /// Find a full-featured ffmpeg that supports rawvideo demuxer and pipe protocol
     fn find_full_ffmpeg() -> Option<String> {
-        // Check common locations for full ffmpeg
-        let candidates = [
-            "/usr/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "/bin/ffmpeg",
-        ];
-
-        for path in &candidates {
-            if std::path::Path::new(path).exists() {
-                // Check if it supports rawvideo demuxer
-                // ffmpeg -demuxers outputs to stdout
-                let output = std::process::Command::new(path)
-                    .args(["-demuxers"])
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null())
-                    .output()
-                    .ok()?;
-
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if stdout.contains("rawvideo") {
-                    tracing::info!("Found full-featured ffmpeg at {}", path);
-                    return Some(path.to_string());
-                }
-            }
+        if let Some(path) = Self::pick_existing(
+            Self::FULL_FFMPEG_CANDIDATES.iter().copied(),
+            Self::ffmpeg_reports_rawvideo,
+        ) {
+            tracing::info!("Found full-featured ffmpeg at {}", path);
+            return Some(path);
         }
 
         // Fallback to PATH
-        let output = std::process::Command::new("ffmpeg")
-            .args(["-demuxers"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("rawvideo") {
+        if Self::ffmpeg_reports_rawvideo("ffmpeg") {
             tracing::info!("Using ffmpeg from PATH");
             return Some("ffmpeg".to_string());
         }
@@ -896,8 +919,7 @@ impl SdVideo {
                 .map_err(|e| ImageError::PngEncodeError(format!("Failed to write frame {}: {}", i, e)))?;
         }
 
-        let ffmpeg_path = Self::find_full_ffmpeg()
-            .or_else(Self::find_any_ffmpeg)
+        let ffmpeg_path = Self::resolve_full_or_any_ffmpeg()
             .ok_or_else(|| ImageError::PngEncodeError("No ffmpeg found".to_string()))?;
 
         let input_pattern = tmp_dir.join("frame_%06d.png");
@@ -931,8 +953,7 @@ impl SdVideo {
     pub fn decode_with_ffmpeg(video_path: &std::path::Path, fps: i32) -> Result<Self, ImageError> {
         // Prefer a verified full-featured build: a stripped/broken ffmpeg on
         // PATH can exist yet fail to demux otherwise-valid h264 mp4s.
-        let ffmpeg_path = Self::find_full_ffmpeg()
-            .or_else(Self::find_any_ffmpeg)
+        let ffmpeg_path = Self::resolve_full_or_any_ffmpeg()
             .ok_or_else(|| ImageError::PngEncodeError("No ffmpeg found".to_string()))?;
 
         let tmp_dir = std::env::temp_dir().join(format!("comfyui_ffmpeg_decode_{}", std::process::id()));
@@ -1285,4 +1306,186 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, ImageError> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod ffmpeg_resolution_tests {
+    use super::SdVideo;
+    use std::path::{Path, PathBuf};
+
+    // ------------------------------------------------------------------
+    // Pure selection logic: candidate order, missing-path skipping and
+    // the capability-probe fallback. These run on every platform and do
+    // not execute any external binary.
+    // ------------------------------------------------------------------
+
+    fn touch(path: &Path) -> String {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"x").unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "comfy_ffmpeg_resolve_{}_{}_{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn candidate_constants_pin_the_regression_order() {
+        // The fix: full-featured tier probes /usr/bin (distro build) first,
+        // while the capability-free tier keeps /usr/bin compatibility order
+        // with /usr/local first.
+        assert_eq!(SdVideo::FULL_FFMPEG_CANDIDATES[0], "/usr/bin/ffmpeg");
+        assert_eq!(SdVideo::ANY_FFMPEG_CANDIDATES[0], "/usr/local/bin/ffmpeg");
+        // /usr/local must still be considered by both tiers, just probed.
+        assert!(SdVideo::FULL_FFMPEG_CANDIDATES.contains(&"/usr/local/bin/ffmpeg"));
+    }
+
+    #[test]
+    fn returns_first_existing_capable_candidate() {
+        let root = unique_temp_dir("first");
+        let a = touch(&root.join("a/ffmpeg"));
+        let b = touch(&root.join("b/ffmpeg"));
+        let missing = root.join("missing/ffmpeg").to_string_lossy().to_string();
+
+        // Missing path skipped; first existing candidate wins when all pass.
+        let picked = SdVideo::pick_existing([missing.as_str(), a.as_str(), b.as_str()], |_| true)
+            .unwrap();
+        assert_eq!(picked, a);
+    }
+
+    #[test]
+    fn skips_existing_but_incapable_candidates() {
+        let root = unique_temp_dir("skip");
+        let broken = touch(&root.join("local_bin/ffmpeg"));
+        let good = touch(&root.join("usr_bin/ffmpeg"));
+
+        // Probe accepts only the second candidate: a broken binary earlier in
+        // the list must be skipped instead of short-circuiting the search.
+        let picked = SdVideo::pick_existing(
+            [broken.as_str(), good.as_str()],
+            |path| path == good.as_str(),
+        )
+        .unwrap();
+        assert_eq!(picked, good);
+    }
+
+    #[test]
+    fn none_when_no_candidate_exists() {
+        let root = unique_temp_dir("none");
+        let missing = root.join("nope/ffmpeg").to_string_lossy().to_string();
+        assert!(SdVideo::pick_existing([missing.as_str()], |_| true).is_none());
+    }
+
+    #[test]
+    fn none_when_existing_candidates_all_fail_probe() {
+        let root = unique_temp_dir("probe_fail");
+        let broken = touch(&root.join("ffmpeg"));
+        assert!(SdVideo::pick_existing([broken.as_str()], |_| false).is_none());
+    }
+
+    /// Mirrors `find_full_ffmpeg().or_else(find_any_ffmpeg)` with injected
+    /// tiers: the capability-verified result must win even when the
+    /// capability-free tier would have returned a broken binary first.
+    #[test]
+    fn full_tier_takes_precedence_over_any_tier() {
+        let root = unique_temp_dir("tiers");
+        let broken = touch(&root.join("local_bin/ffmpeg"));
+        let good = touch(&root.join("usr_bin/ffmpeg"));
+        let candidates = [broken.as_str(), good.as_str()];
+
+        let full = SdVideo::pick_existing(candidates, |p| p == good.as_str());
+        let any = SdVideo::pick_existing(candidates, |_| true);
+
+        // The any-tier alone would pick the broken binary...
+        assert_eq!(any.as_deref(), Some(broken.as_str()));
+        // ...but full-or-any resolution must surface the verified build.
+        assert_eq!(full.or(any).as_deref(), Some(good.as_str()));
+    }
+
+    #[test]
+    fn falls_back_to_any_tier_when_full_tier_finds_nothing() {
+        let root = unique_temp_dir("fallback");
+        let broken = touch(&root.join("local_bin/ffmpeg"));
+        let candidates = [broken.as_str()];
+
+        let full = SdVideo::pick_existing(candidates, |_| false);
+        assert!(full.is_none());
+        let any = SdVideo::pick_existing(candidates, |_| true);
+        assert_eq!(full.or(any).as_deref(), Some(broken.as_str()));
+    }
+
+    // ------------------------------------------------------------------
+    // End-to-end probe behaviour against fake ffmpeg executables.
+    // Unix-only: relies on executable shell scripts.
+    // ------------------------------------------------------------------
+
+    #[cfg(unix)]
+    mod unix_probe {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn fake_ffmpeg(dir: &Path, body: &str) -> String {
+            std::fs::create_dir_all(dir).unwrap();
+            let path = dir.join("ffmpeg");
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_string_lossy().to_string()
+        }
+
+        #[test]
+        fn probe_accepts_binary_listing_rawvideo() {
+            let root = unique_temp_dir("probe_ok");
+            let good = fake_ffmpeg(&root.join("usr_bin"), "echo 'Demuxers: rawvideo'");
+            assert!(SdVideo::ffmpeg_reports_rawvideo(&good));
+        }
+
+        #[test]
+        fn probe_rejects_binary_without_rawvideo_and_missing_path() {
+            let root = unique_temp_dir("probe_bad");
+            let broken = fake_ffmpeg(&root.join("local_bin"), "echo 'Demuxers:'; exit 0");
+            assert!(!SdVideo::ffmpeg_reports_rawvideo(&broken));
+            assert!(!SdVideo::ffmpeg_reports_rawvideo(
+                &root.join("does_not_exist/ffmpeg").to_string_lossy()
+            ));
+        }
+
+        /// Exact regression: `/usr/local/bin/ffmpeg` exists but cannot demux
+        /// h264 mp4s, `/usr/bin/ffmpeg` is full-featured. The full tier must
+        /// skip the broken first... note that here the broken path sorts
+        /// FIRST, proving selection is capability-driven rather than
+        /// existence-driven.
+        #[test]
+        fn full_tier_skips_broken_first_binary_and_picks_working_one() {
+            let root = unique_temp_dir("regression");
+            let broken = fake_ffmpeg(
+                &root.join("first"),
+                "echo 'this build cannot demux mp4'; exit 0",
+            );
+            let good = fake_ffmpeg(&root.join("second"), "echo rawvideo");
+
+            let picked = SdVideo::pick_existing(
+                [broken.as_str(), good.as_str()],
+                SdVideo::ffmpeg_reports_rawvideo,
+            )
+            .unwrap();
+            assert_eq!(picked, good);
+
+            // Same list with the any-tier probe takes the broken binary,
+            // demonstrating why decode/webm must use the full tier first.
+            let any_pick =
+                SdVideo::pick_existing([broken.as_str(), good.as_str()], |_| true).unwrap();
+            assert_eq!(any_pick, broken);
+            assert_ne!(picked, any_pick);
+        }
+    }
 }
