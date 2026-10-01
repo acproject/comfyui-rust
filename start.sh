@@ -4,6 +4,15 @@ set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# 非交互 shell（如 setsid/nohup 拉起）通常没有 nvm 注入的 PATH，
+# 导致 npx 找不到：若 npx 不在 PATH 且存在 nvm node，则补上最新版本的 bin
+if ! command -v npx >/dev/null 2>&1 && [ -d "$HOME/.nvm/versions/node" ]; then
+    NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)"
+    if [ -n "$NVM_NODE_BIN" ]; then
+        export PATH="$NVM_NODE_BIN:$PATH"
+    fi
+fi
+
 # 模型库目录：外部 USB 模型库优先（存在时），可用 COMFY_MODELS_DIR 覆盖
 DEFAULT_USB_MODELS="/home/acproject/usb/comfyui/models"
 if [ -z "${COMFY_MODELS_DIR:-}" ]; then
