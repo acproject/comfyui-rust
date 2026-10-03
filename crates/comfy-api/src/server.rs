@@ -52,6 +52,7 @@ impl ComfyServer {
             .route("/embeddings", axum::routing::get(routes::get_embeddings))
             .route("/models", axum::routing::get(routes::get_models))
             .route("/model_manager/list", axum::routing::get(routes::list_model_files))
+            .route("/model_manager/scan", axum::routing::post(routes::scan_models))
             .route("/model_manager/delete", axum::routing::post(routes::delete_model_file))
             .route("/extensions", axum::routing::get(routes::get_extensions))
             .route("/ws", axum::routing::get(routes::ws_handler))

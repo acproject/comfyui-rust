@@ -406,38 +406,122 @@ pub struct ModelListQuery {
     pub model_type: Option<String>,
 }
 
+/// Recognised weight-file extensions (note: bare `.json` config files are NOT
+/// considered models; directory-based/diffusers repos are reported under the
+/// synthetic `modular` category by `scan_root_model_dirs`).
+const WEIGHT_EXTENSIONS: &[&str] = &[
+    ".safetensors",
+    ".ckpt",
+    ".pt",
+    ".pth",
+    ".bin",
+    ".onnx",
+    ".gguf",
+    ".sft",
+];
+
+fn is_weight_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    WEIGHT_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+}
+
 pub async fn list_model_files(
     State(state): State<AppState>,
     Query(query): Query<ModelListQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
-    let models_dir = &state.models_dir;
 
-    let model_types: Vec<&str> = if let Some(ref mt) = query.model_type {
-        vec![mt.as_str()]
-    } else {
-        ComfyConfig::model_types()
-    };
+    if let Some(ref mt) = query.model_type {
+        let mut result = serde_json::Map::new();
+        if mt == "modular" {
+            result.insert(
+                "modular".to_string(),
+                Value::Array(scan_root_model_dirs(&state.models_dir, &config)),
+            );
+        } else {
+            result.insert(
+                mt.to_string(),
+                Value::Array(scan_typed_model_dir(&state.models_dir, &config, mt)),
+            );
+        }
+        return Ok(Json(Value::Object(result)));
+    }
 
+    Ok(Json(Value::Object(collect_all_models(
+        &state.models_dir,
+        &config,
+    ))))
+}
+
+/// Full on-demand scan of COMFY_MODELS_DIR: every configured category subdir
+/// plus directory-based model repos living directly under the model root
+/// (e.g. MiniMax-H3, MiniMax-Music3, Bernini-R, Qwen-Image-2.1).
+pub async fn scan_models(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let models = collect_all_models(&state.models_dir, &config);
+
+    let mut category_counts = serde_json::Map::new();
+    let mut total_files: u64 = 0;
+    let mut total_size: u64 = 0;
+    for (cat, arr) in &models {
+        let items = arr.as_array().cloned().unwrap_or_default();
+        let n = items.len() as u64;
+        let size: u64 = items
+            .iter()
+            .filter_map(|v| v.get("size").and_then(|s| s.as_u64()))
+            .sum();
+        total_files += n;
+        total_size += size;
+        category_counts.insert(cat.clone(), json!({ "count": n, "size": size }));
+    }
+
+    Ok(Json(json!({
+        "ok": true,
+        "models_dir": state.models_dir.to_string_lossy(),
+        "total_files": total_files,
+        "total_size": total_size,
+        "categories": category_counts,
+        "models": Value::Object(models),
+    })))
+}
+
+/// Scan every known category + the root-level modular repos.
+fn collect_all_models(
+    models_dir: &std::path::Path,
+    config: &ComfyConfig,
+) -> serde_json::Map<String, Value> {
     let mut result = serde_json::Map::new();
 
-    for model_type in model_types {
-        let sub_dir = config.get_model_type_dir(model_type);
-        let dir_path = models_dir.join(&sub_dir);
-
-        let mut files: Vec<serde_json::Value> = Vec::new();
-
-        if dir_path.exists() {
-            scan_model_files(&dir_path, &dir_path, &mut files);
-        }
-
+    for model_type in ComfyConfig::model_types() {
         result.insert(
             model_type.to_string(),
-            serde_json::Value::Array(files),
+            Value::Array(scan_typed_model_dir(models_dir, config, model_type)),
         );
     }
 
-    Ok(Json(serde_json::Value::Object(result)))
+    result.insert(
+        "modular".to_string(),
+        Value::Array(scan_root_model_dirs(models_dir, config)),
+    );
+
+    result
+}
+
+fn scan_typed_model_dir(
+    models_dir: &std::path::Path,
+    config: &ComfyConfig,
+    model_type: &str,
+) -> Vec<Value> {
+    let sub_dir = config.get_model_type_dir(model_type);
+    let dir_path = models_dir.join(&sub_dir);
+
+    let mut files: Vec<Value> = Vec::new();
+    if dir_path.exists() {
+        scan_model_files(&dir_path, &dir_path, &mut files);
+    }
+    files
 }
 
 fn scan_model_files(
@@ -451,18 +535,7 @@ fn scan_model_files(
             if path.is_dir() {
                 scan_model_files(&path, base, results);
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                let lower = name.to_lowercase();
-                let is_model = lower.ends_with(".safetensors")
-                    || lower.ends_with(".ckpt")
-                    || lower.ends_with(".pt")
-                    || lower.ends_with(".pth")
-                    || lower.ends_with(".bin")
-                    || lower.ends_with(".onnx")
-                    || lower.ends_with(".gguf")
-                    || lower.ends_with(".sft")
-                    || lower.ends_with(".json");
-
-                if is_model {
+                if is_weight_file(name) {
                     if let Ok(rel) = path.strip_prefix(base) {
                         let rel_path = rel.to_string_lossy().to_string();
                         let metadata = std::fs::metadata(&path).ok();
@@ -483,6 +556,152 @@ fn scan_model_files(
             }
         }
     }
+}
+
+/// Names of subdirectories owned by the configured category layout — anything
+/// else directly under the model root is treated as a standalone model repo.
+fn known_category_dirs(config: &ComfyConfig) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    for mt in ComfyConfig::model_types() {
+        set.insert(mt.to_string());
+        set.insert(config.get_model_type_dir(mt));
+    }
+    set
+}
+
+/// Classify a directory-based model repo from its index/config markers.
+fn detect_modular_kind(dir: &std::path::Path, dir_name: &str) -> Option<String> {
+    let mut marker: Option<String> = None;
+    for marker_name in ["modular_model_index.json", "model_index.json", "config.json"] {
+        if let Ok(text) = std::fs::read_to_string(dir.join(marker_name)) {
+            if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                let class = json
+                    .get("_class_name")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        json.get("architectures")
+                            .and_then(|v| v.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|v| v.as_str())
+                    })
+                    .map(|s| s.to_string());
+                if class.is_some() {
+                    marker = class;
+                    break;
+                }
+            }
+        }
+    }
+
+    let haystack = marker.unwrap_or_default().to_lowercase();
+    let name_lower = dir_name.to_lowercase();
+    let kind = if haystack.contains("minimaxh3") || name_lower.contains("minimax-h3")
+        || name_lower.contains("minimax_h3")
+    {
+        "MiniMax-H3"
+    } else if haystack.contains("music3") || name_lower.contains("music3") {
+        "MiniMax-Music3"
+    } else if haystack.contains("bernini") || name_lower.contains("bernini") {
+        "Bernini"
+    } else if haystack.contains("triposplat") || name_lower.contains("triposplat") {
+        "TripoSplat"
+    } else if haystack.contains("qwen") || name_lower.contains("qwen-image") {
+        "Qwen-Image"
+    } else if name_lower.contains("boogu") {
+        "Boogu"
+    } else if !haystack.is_empty() {
+        "diffusers"
+    } else {
+        // No JSON marker: only treat as a model repo if it holds weight files.
+        return None;
+    };
+    Some(kind.to_string())
+}
+
+/// Total size/newest mtime of weight files inside a model repo directory.
+fn dir_weight_stats(dir: &std::path::Path) -> (u64, Option<u64>, u64) {
+    fn walk(path: &std::path::Path, size: &mut u64, mtime: &mut u64, count: &mut u64) {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    walk(&p, size, mtime, count);
+                } else if p.file_name().and_then(|n| n.to_str()).map_or(false, is_weight_file) {
+                    if let Ok(meta) = std::fs::metadata(&p) {
+                        *size += meta.len();
+                        *count += 1;
+                        if let Ok(modified) = meta.modified() {
+                            if let Ok(secs) = modified.duration_since(std::time::UNIX_EPOCH) {
+                                *mtime = (*mtime).max(secs.as_secs());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let (mut size, mut mtime, mut count) = (0u64, 0u64, 0u64);
+    walk(dir, &mut size, &mut mtime, &mut count);
+    (size, if mtime > 0 { Some(mtime) } else { None }, count)
+}
+
+/// Find directory-based model repos directly under the model root that are not
+/// part of the configured category layout (MiniMax-H3, Bernini-R, etc.).
+fn scan_root_model_dirs(
+    models_dir: &std::path::Path,
+    config: &ComfyConfig,
+) -> Vec<Value> {
+    let mut results = Vec::new();
+    let known = known_category_dirs(config);
+
+    let entries = match std::fs::read_dir(models_dir) {
+        Ok(e) => e,
+        Err(_) => return results,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if known.contains(&name) {
+            continue;
+        }
+
+        let kind = match detect_modular_kind(&path, &name) {
+            Some(k) => k,
+            None => continue,
+        };
+
+        // Repos without JSON markers still need at least one weight file;
+        // dir_weight_stats also powers the displayed size.
+        let (size, modified, file_count) = dir_weight_stats(&path);
+        if file_count == 0 {
+            continue;
+        }
+
+        results.push(json!({
+            "name": name,
+            "path": name,
+            "size": size,
+            "modified": modified,
+            "kind": kind,
+            "is_dir": true,
+            "file_count": file_count,
+        }));
+    }
+
+    results.sort_by(|a, b| {
+        a.get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .cmp(b.get("name").and_then(|n| n.as_str()).unwrap_or(""))
+    });
+    results
 }
 
 fn collect_video_filenames(

@@ -17,6 +17,7 @@ import type {
   AgentChatResponse,
   AgentModelsResponse,
   ModelListResponse,
+  ScanModelsResponse,
   DeleteModelRequest,
   DeleteModelResponse,
   UploadModelResponse,
@@ -300,6 +301,12 @@ export const api = {
     if (modelType) params.set('model_type', modelType);
     const qs = params.toString();
     return fetchJson<ModelListResponse>(`/model_manager/list${qs ? `?${qs}` : ''}`);
+  },
+
+  async scanModels(): Promise<ScanModelsResponse> {
+    return fetchJson<ScanModelsResponse>('/model_manager/scan', {
+      method: 'POST',
+    });
   },
 
   async deleteModelFile(request: DeleteModelRequest): Promise<DeleteModelResponse> {

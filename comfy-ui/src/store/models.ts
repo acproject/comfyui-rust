@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ModelFileInfo, ModelTypeMap } from '@/types/api';
+import type { ModelFileInfo, ModelTypeMap, ScanModelsResponse } from '@/types/api';
 import { api } from '@/api/client';
 
 const MODEL_TYPES = [
@@ -22,6 +22,12 @@ const MODEL_TYPES = [
   'classifiers',
   'model_patches',
   'audio_encoders',
+  'llm',
+  'triposplat',
+  'background_removal',
+  // Directory-based model repos directly under the model root
+  // (MiniMax-H3 / MiniMax-Music3 / Bernini-R / Qwen-Image / ...)
+  'modular',
 ] as const;
 
 export type ModelType = (typeof MODEL_TYPES)[number];
@@ -29,11 +35,15 @@ export type ModelType = (typeof MODEL_TYPES)[number];
 interface ModelManagerState {
   models: ModelTypeMap;
   loading: boolean;
+  scanning: boolean;
   error: string | null;
+  modelsDir: string | null;
+  lastScan: { totalFiles: number; totalSize: number; at: number } | null;
   selectedType: ModelType | null;
 
   loadModels: () => Promise<void>;
   loadModelsByType: (modelType: ModelType) => Promise<void>;
+  scanModels: () => Promise<ScanModelsResponse>;
   deleteModel: (modelType: string, path: string) => Promise<void>;
   uploadModel: (file: File, modelType: string) => Promise<void>;
   setSelectedType: (modelType: ModelType | null) => void;
@@ -42,7 +52,10 @@ interface ModelManagerState {
 export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
   models: {},
   loading: false,
+  scanning: false,
   error: null,
+  modelsDir: null,
+  lastScan: null,
   selectedType: null,
 
   loadModels: async () => {
@@ -52,6 +65,27 @@ export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
       set({ models: result, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
+    }
+  },
+
+  scanModels: async () => {
+    set({ scanning: true, error: null });
+    try {
+      const result = await api.scanModels();
+      set({
+        models: result.models,
+        modelsDir: result.models_dir,
+        lastScan: {
+          totalFiles: result.total_files,
+          totalSize: result.total_size,
+          at: Date.now(),
+        },
+        scanning: false,
+      });
+      return result;
+    } catch (err) {
+      set({ error: String(err), scanning: false });
+      throw err;
     }
   },
 

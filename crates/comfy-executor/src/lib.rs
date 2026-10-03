@@ -9,7 +9,9 @@ pub mod registry;
 pub mod controlnet;
 
 pub mod bernini;
+pub mod boogu;
 pub mod minimax;
+pub mod qwen;
 pub mod mask;
 pub mod prompt_relay;
 pub mod triposplat;

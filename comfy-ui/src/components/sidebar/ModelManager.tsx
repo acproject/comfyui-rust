@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, type FC } from 'react';
-import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive, Settings, Save, CheckCircle, AlertCircle, Download, ExternalLink, Filter, X } from 'lucide-react';
+import { Search, ChevronRight, ChevronDown, Trash2, Upload, RefreshCw, FolderOpen, HardDrive, Settings, Save, CheckCircle, AlertCircle, Download, ExternalLink, Filter, X, ScanLine, Package } from 'lucide-react';
 import { useModelManagerStore, MODEL_TYPES } from '@/store/models';
 import { api } from '@/api/client';
 import type { ModelFileInfo, ServerConfig, ModelDownloadEntry, DownloadProgress } from '@/types/api';
@@ -24,6 +24,10 @@ const MODEL_TYPE_ICONS: Record<string, string> = {
   classifiers: '🏷️',
   model_patches: '🩹',
   audio_encoders: '🔊',
+  llm: '💬',
+  triposplat: '🔷',
+  background_removal: '🧽',
+  modular: '📦',
 };
 
 function formatFileSize(bytes: number): string {
@@ -41,10 +45,15 @@ function formatDate(timestamp: number | null): string {
 const ModelManager: FC = () => {
   const models = useModelManagerStore((s) => s.models);
   const loading = useModelManagerStore((s) => s.loading);
+  const scanning = useModelManagerStore((s) => s.scanning);
   const error = useModelManagerStore((s) => s.error);
+  const modelsDir = useModelManagerStore((s) => s.modelsDir);
   const loadModels = useModelManagerStore((s) => s.loadModels);
+  const scanModels = useModelManagerStore((s) => s.scanModels);
   const deleteModel = useModelManagerStore((s) => s.deleteModel);
   const uploadModel = useModelManagerStore((s) => s.uploadModel);
+
+  const [scanNote, setScanNote] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -278,6 +287,21 @@ const ModelManager: FC = () => {
     }
   };
 
+  const handleScan = async () => {
+    setScanNote(null);
+    try {
+      const result = await scanModels();
+      const activeCats = Object.values(result.categories).filter((c) => c.count > 0).length;
+      setScanNote(
+        `扫描完成：${result.total_files} 个模型 / ${activeCats} 个分类（${formatFileSize(result.total_size)}）`,
+      );
+      window.setTimeout(() => setScanNote(null), 8000);
+    } catch {
+      setScanNote('扫描失败，请查看后端日志');
+      window.setTimeout(() => setScanNote(null), 8000);
+    }
+  };
+
   const filteredTypes = MODEL_TYPES.filter((type) => {
     if (!search) return true;
     const q = search.toLowerCase();
@@ -361,12 +385,71 @@ const ModelManager: FC = () => {
               display: 'flex',
               alignItems: 'center',
             }}
-            title="Refresh"
+            title="重新加载列表"
           >
             <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           </button>
         </div>
+        <button
+          onClick={handleScan}
+          disabled={scanning}
+          style={{
+            marginTop: 6,
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 5,
+            background: scanning ? '#23233a' : '#2d3a5f',
+            border: '1px solid #3b4a7a',
+            borderRadius: 6,
+            color: '#c3d0ff',
+            fontSize: 11,
+            fontWeight: 600,
+            padding: '5px 8px',
+            cursor: scanning ? 'wait' : 'pointer',
+            transition: 'background 0.15s, border-color 0.15s',
+          }}
+          onMouseEnter={(e) => {
+            if (!scanning) {
+              (e.currentTarget as HTMLElement).style.background = '#36467a';
+              (e.currentTarget as HTMLElement).style.borderColor = '#5a6abf';
+            }
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.background = scanning ? '#23233a' : '#2d3a5f';
+            (e.currentTarget as HTMLElement).style.borderColor = '#3b4a7a';
+          }}
+          title={modelsDir ? `重新扫描模型目录：${modelsDir}` : '扫描 COMFY_MODELS_DIR 下的全部模型'}
+        >
+          {scanning ? (
+            <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
+          ) : (
+            <ScanLine size={12} />
+          )}
+          {scanning ? '正在扫描模型...' : '扫描模型'}
+        </button>
       </div>
+
+      {scanNote && (
+        <div
+          style={{
+            padding: '5px 10px',
+            background: '#22332a',
+            borderBottom: '1px solid #2f4a3a',
+            fontSize: 10,
+            color: '#9ae6b4',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+          }}
+        >
+          <CheckCircle size={11} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {scanNote}
+          </span>
+        </div>
+      )}
 
       {error && (
         <div
@@ -1029,23 +1112,47 @@ const ModelManager: FC = () => {
                         (e.currentTarget as HTMLElement).style.background = 'transparent';
                       }}
                     >
-                      <HardDrive size={11} style={{ color: '#555', flexShrink: 0 }} />
+                      {type === 'modular' ? (
+                        <Package size={11} style={{ color: '#8a95d8', flexShrink: 0 }} />
+                      ) : (
+                        <HardDrive size={11} style={{ color: '#555', flexShrink: 0 }} />
+                      )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 5,
                           }}
                           title={file.path}
                         >
-                          {file.name}
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{file.name}</span>
+                          {file.kind && (
+                            <span
+                              style={{
+                                flexShrink: 0,
+                                fontSize: 8,
+                                color: '#a3b1e8',
+                                background: '#2a3158',
+                                borderRadius: 3,
+                                padding: '0 4px',
+                                lineHeight: '14px',
+                              }}
+                            >
+                              {file.kind}
+                            </span>
+                          )}
                         </div>
                         <div style={{ fontSize: 9, color: '#555', display: 'flex', gap: 8 }}>
                           <span>{formatFileSize(file.size)}</span>
+                          {file.file_count ? <span>{file.file_count} 个权重文件</span> : null}
                           {file.modified && <span>{formatDate(file.modified)}</span>}
                         </div>
                       </div>
+                      {type !== 'modular' && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1079,6 +1186,7 @@ const ModelManager: FC = () => {
                       >
                         <Trash2 size={12} />
                       </button>
+                      )}
                     </div>
                   ))}
 
@@ -1094,45 +1202,60 @@ const ModelManager: FC = () => {
                       }}
                     >
                       <FolderOpen size={11} />
-                      No models found
+                      {type === 'modular'
+                        ? '未发现目录模型，点击上方“扫描模型”'
+                        : 'No models found'}
                     </div>
                   )}
 
-                  <div
-                    style={{
-                      padding: '2px 10px 4px 28px',
-                    }}
-                  >
-                    <button
-                      onClick={() => handleUploadClick(type)}
+                  {type === 'modular' ? (
+                    <div
                       style={{
-                        background: '#2a2a3e',
-                        border: '1px dashed #444',
-                        borderRadius: 4,
-                        color: '#718096',
-                        fontSize: 10,
-                        padding: '3px 8px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        width: '100%',
-                        justifyContent: 'center',
-                        transition: 'border-color 0.1s, color 0.1s',
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.borderColor = '#5a6abf';
-                        (e.currentTarget as HTMLElement).style.color = '#a0aec0';
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.borderColor = '#444';
-                        (e.currentTarget as HTMLElement).style.color = '#718096';
+                        padding: '2px 10px 4px 28px',
+                        fontSize: 9,
+                        color: '#555',
+                        lineHeight: 1.4,
                       }}
                     >
-                      <Upload size={10} />
-                      Upload
-                    </button>
-                  </div>
+                      扫描模型根目录下的模块化 / diffusers 仓库（如 MiniMax-H3、Bernini-R）
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        padding: '2px 10px 4px 28px',
+                      }}
+                    >
+                      <button
+                        onClick={() => handleUploadClick(type)}
+                        style={{
+                          background: '#2a2a3e',
+                          border: '1px dashed #444',
+                          borderRadius: 4,
+                          color: '#718096',
+                          fontSize: 10,
+                          padding: '3px 8px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          width: '100%',
+                          justifyContent: 'center',
+                          transition: 'border-color 0.1s, color 0.1s',
+                        }}
+                        onMouseEnter={(e) => {
+                          (e.currentTarget as HTMLElement).style.borderColor = '#5a6abf';
+                          (e.currentTarget as HTMLElement).style.color = '#a0aec0';
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLElement).style.borderColor = '#444';
+                          (e.currentTarget as HTMLElement).style.color = '#718096';
+                        }}
+                      >
+                        <Upload size={10} />
+                        Upload
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -1150,11 +1273,29 @@ const ModelManager: FC = () => {
           justifyContent: 'space-between',
         }}
       >
-        <span>{MODEL_TYPES.length} categories</span>
+        <span title={modelsDir || 'COMFY_MODELS_DIR'}>
+          {MODEL_TYPES.length} categories
+        </span>
         <span>
           {Object.values(models).reduce((sum, files) => sum + (files?.length || 0), 0)} models
         </span>
       </div>
+      {modelsDir && (
+        <div
+          style={{
+            padding: '0 10px 5px',
+            marginTop: -3,
+            fontSize: 9,
+            color: '#555',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={modelsDir}
+        >
+          {modelsDir}
+        </div>
+      )}
 
       <style>{`
         @keyframes spin {

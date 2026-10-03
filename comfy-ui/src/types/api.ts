@@ -324,11 +324,29 @@ export interface ModelFileInfo {
   path: string;
   size: number;
   modified: number | null;
+  /** Directory-based model repo under the model root (modular/diffusers). */
+  kind?: string;
+  is_dir?: boolean;
+  file_count?: number;
 }
 
 export type ModelTypeMap = Record<string, ModelFileInfo[]>;
 
-export interface ModelListResponse extends ModelTypeMap {}
+export type ModelListResponse = ModelTypeMap;
+
+export interface ModelScanCategoryStat {
+  count: number;
+  size: number;
+}
+
+export interface ScanModelsResponse {
+  ok: boolean;
+  models_dir: string;
+  total_files: number;
+  total_size: number;
+  categories: Record<string, ModelScanCategoryStat>;
+  models: ModelTypeMap;
+}
 
 export interface DeleteModelRequest {
   model_type: string;
