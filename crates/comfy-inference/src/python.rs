@@ -87,6 +87,91 @@ pub fn resolve_script_dir(explicit: Option<&str>, workspace_root: Option<&Path>)
     None
 }
 
+/// Check that a venv interpreter still resolves into the venv with an
+/// actually usable site-packages directory.
+///
+/// When `/usr/bin/python3` is upgraded (e.g. 3.12 -> 3.14), the venv's
+/// `bin/python3` symlink re-points to the new interpreter. CPython still
+/// honors `pyvenv.cfg` (so `sys.prefix` looks fine) but computes
+/// `lib/python3.14/site-packages` from its own version — a directory the
+/// venv does not have. Probing that the resolved purelib exists catches
+/// this class of breakage.
+fn venv_prefix_ok(venv_py: &Path) -> bool {
+    let Ok(out) = Command::new(venv_py)
+        .args(["-c", "import sysconfig; print(sysconfig.get_path('purelib'))"])
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let purelib = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if purelib.is_empty() {
+        return false;
+    }
+    let p = PathBuf::from(&purelib);
+    // Canonicalize both sides: the venv path may contain unresolved `..`
+    // segments (e.g. CARGO_MANIFEST_DIR/../../py/...).
+    let in_venv = venv_py
+        .ancestors()
+        .nth(2)
+        .and_then(|root| root.canonicalize().ok())
+        .map(|root| {
+            p.canonicalize()
+                .map(|pc| pc.starts_with(&root))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    in_venv && p.is_dir()
+}
+
+/// Re-link a broken venv `bin/python3` to the `/usr/bin/python3.<minor>`
+/// matching the venv's `lib/python3.<minor>` site-packages directory.
+fn heal_venv_python_link(venv_py: &Path) {
+    let Some(bin) = venv_py.parent() else { return };
+    let Some(root) = bin.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(root.join("lib")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("python3.") && entry.path().is_dir() {
+            let sys_py = PathBuf::from("/usr/bin").join(&name);
+            if sys_py.exists() {
+                let bin_py3 = bin.join("python3");
+                let _ = std::fs::remove_file(&bin_py3);
+                if std::os::unix::fs::symlink(&sys_py, &bin_py3).is_ok() {
+                    tracing::warn!(
+                        "Self-healed broken venv interpreter: {} -> {} \
+                         (system python3 was upgraded past the venv version)",
+                        bin_py3.display(),
+                        sys_py.display()
+                    );
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Verify that a venv interpreter is actually usable.
+///
+/// A distro upgrade of `/usr/bin/python3` (e.g. 3.12 -> 3.14) silently breaks
+/// venvs created with the older minor: the venv's `bin/python3` symlink then
+/// resolves to an interpreter whose site-packages path no longer matches
+/// `lib/python3.12/site-packages`, so `import torch` fails even though the
+/// venv directory looks intact. Probe `sys.prefix` and, when it escapes the
+/// venv root, re-link `bin/python3` to the matching `/usr/bin/python3.<minor>`
+/// and retry. Returns `true` when `venv_py` is usable.
+pub fn ensure_venv_python(venv_py: &Path) -> bool {
+    if venv_prefix_ok(venv_py) {
+        return true;
+    }
+    heal_venv_python_link(venv_py);
+    venv_prefix_ok(venv_py)
+}
+
 /// Resolve a Python interpreter:
 /// explicit -> env `COMFY_PYTHON_PATH` -> venvs next to the script dir ->
 /// known venv-cu128 locations -> system python3.
@@ -108,7 +193,7 @@ pub fn resolve_python(explicit: Option<&str>, script_dir: Option<&Path>) -> Stri
         if let Some(project_root) = dir.parent() {
             for venv in &["venv-cu128", ".venv", "venv", "env"] {
                 let py = project_root.join(venv).join("bin").join("python");
-                if py.exists() {
+                if py.exists() && ensure_venv_python(&py) {
                     return py.to_string_lossy().to_string();
                 }
             }
@@ -120,13 +205,13 @@ pub fn resolve_python(explicit: Option<&str>, script_dir: Option<&Path>) -> Stri
         env!("CARGO_MANIFEST_DIR"),
         "/../../py/flash_attn_v100/venv-cu128/bin/python"
     );
-    if Path::new(repo_venv).exists() {
+    if Path::new(repo_venv).exists() && ensure_venv_python(Path::new(repo_venv)) {
         return repo_venv.to_string();
     }
 
     // Secondary machine-local venv (older layout, see flash_attn_backend).
     let known = "/home/acproject/workspace/python_projects/flash_attn_v100/venv-cu128/bin/python";
-    if Path::new(known).exists() {
+    if Path::new(known).exists() && ensure_venv_python(Path::new(known)) {
         return known.to_string();
     }
 
@@ -1640,5 +1725,65 @@ mod minimax_tests {
         assert!(Path::new(&result.output_file).exists(), "wav missing");
         assert_eq!(result.sample_rate, 32000);
         assert!(result.duration_sec >= 3.0);
+    }
+}
+
+#[cfg(test)]
+mod venv_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// The repo venv (healed or intact) must pass the usability probe.
+    #[test]
+    fn ensure_venv_python_accepts_repo_venv() {
+        let venv_py = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../py/flash_attn_v100/venv-cu128/bin/python"
+        ));
+        if !venv_py.exists() {
+            eprintln!("skipping: repo venv-cu128 not found");
+            return;
+        }
+        assert!(ensure_venv_python(&venv_py));
+    }
+
+    /// A venv whose `bin/python3 -> /usr/bin/python3` link was broken by a
+    /// system python upgrade must be self-healed to the versioned interpreter
+    /// matching `lib/python3.<minor>`.
+    #[test]
+    fn heals_broken_venv_python_link() {
+        // Skip unless the system python3 was upgraded past 3.12 (otherwise
+        // the fabricated link below is not actually broken).
+        let sys3 = std::fs::canonicalize("/usr/bin/python3").unwrap();
+        let sys312 = std::fs::canonicalize("/usr/bin/python3.12")
+            .expect("test requires /usr/bin/python3.12");
+        if sys3 == sys312 {
+            eprintln!("skipping: system python3 still resolves to 3.12");
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!("comfy-venv-heal-{}", std::process::id()));
+        let bin = root.join("bin");
+        let site = root.join("lib").join("python3.12").join("site-packages");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(
+            root.join("pyvenv.cfg"),
+            "home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.12.0\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("python3", bin.join("python")).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/python3", bin.join("python3")).unwrap();
+
+        let venv_py = bin.join("python");
+        assert!(ensure_venv_python(&venv_py), "self-heal should succeed");
+
+        // bin/python3 must now point at the versioned interpreter ...
+        let target = std::fs::read_link(bin.join("python3")).unwrap();
+        assert_eq!(target, PathBuf::from("/usr/bin/python3.12"));
+        // ... and the healed interpreter must resolve into the fabricated venv.
+        assert!(venv_prefix_ok(&venv_py));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -90,6 +90,29 @@ fi
 # flash-attn 为纯 Rust bridge feature，不涉及 C++ 子项目编译，默认启用
 CARGO_FEATURES="$BACKEND_FEATURE,$CONTROLNET_FEATURE,flash-attn"
 echo "  Cargo features: $CARGO_FEATURES"
+
+# ---------------------------------------------------------------------------
+# libstdc++ 符号补丁（Ubuntu 24.04 libstdc++-13-dev 13.4.0-10ubuntu1 实测）：
+# GCC 内置路径（/usr/lib/gcc/x86_64-linux-gnu/13/libstdc++.so）在官方包中即为
+# 一份 stripped ELF（非 linker script），缺少 __cxa_call_terminate@
+# CXXABI_1.3.15；而 stable-diffusion.cpp 静态库的 cold-section 代码会引用
+# 该符号，导致链接报 "undefined reference to __cxa_call_terminate"。
+# 绕过：在可写目录创建指向系统 /usr/lib/x86_64-linux-gnu/libstdc++.so.6 的
+# libstdc++.so 软链，并用 gcc 的 -B 前缀把该目录插到 GCC 内置路径之前，使
+# -lstdc++ 优先命中完整版库。LIBRARY_PATH 无效（被 GCC 内置路径前置）。
+# 根治需改系统文件（不在此处理，避免破坏包管理）。
+# ---------------------------------------------------------------------------
+SYS_STDCPP_SO="/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
+GCC_STDCPP="$(cc -print-file-name=libstdc++.so 2>/dev/null || true)"
+if [ -f "$SYS_STDCPP_SO" ] && [ -n "$GCC_STDCPP" ] && [ -f "$GCC_STDCPP" ] \
+        && ! nm -D "$GCC_STDCPP" 2>/dev/null | grep -q __cxa_call_terminate; then
+    FIXDIR="${XDG_CACHE_HOME:-$HOME/.cache}/comfy-build-fixes/libstdcpp"
+    mkdir -p "$FIXDIR"
+    ln -sfn "$SYS_STDCPP_SO" "$FIXDIR/libstdc++.so"
+    echo "  ⚠️  检测到 $GCC_STDCPP 缺少 __cxa_call_terminate 符号（Ubuntu 官方包即如此）"
+    echo "      绕过：-B$FIXDIR/ 让 -lstdc++ 优先命中系统完整版 libstdc++"
+    export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-B${FIXDIR}/"
+fi
 echo ""
 
 # ---------------------------------------------------------------------------

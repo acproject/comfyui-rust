@@ -128,6 +128,26 @@ echo "  MCP HTTP 端点: http://127.0.0.1:8188/mcp (COMFY_MCP_ENABLED=$COMFY_MCP
 # 预先构建 MCP stdio 独立二进制（cargo run -p comfy-api 不会构建其它 workspace 成员的 bin）
 # AI IDE 通过子进程方式接入 MCP 时使用 target/debug/comfy-mcp
 echo "  预构建 MCP stdio 二进制 (comfy-mcp)..."
+
+# ---------------------------------------------------------------------------
+# libstdc++ 符号补丁（与 build.sh 一致）：
+# Ubuntu 24.04 libstdc++-13-dev 官方包中 GCC 内置路径的 libstdc++.so 缺少
+# __cxa_call_terminate@CXXABI_1.3.15，导致链接 stable-diffusion.cpp 静态库
+# 时 undefined reference。用 -B 前缀插入含软链的修复目录，使 -lstdc++ 优先
+# 命中系统完整版 libstdc++.so.6。详见 build.sh 注释。
+# ---------------------------------------------------------------------------
+SYS_STDCPP_SO="/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
+GCC_STDCPP="$(cc -print-file-name=libstdc++.so 2>/dev/null || true)"
+if [ -f "$SYS_STDCPP_SO" ] && [ -n "$GCC_STDCPP" ] && [ -f "$GCC_STDCPP" ] \
+        && ! nm -D "$GCC_STDCPP" 2>/dev/null | grep -q __cxa_call_terminate; then
+    FIXDIR="${XDG_CACHE_HOME:-$HOME/.cache}/comfy-build-fixes/libstdcpp"
+    mkdir -p "$FIXDIR"
+    ln -sfn "$SYS_STDCPP_SO" "$FIXDIR/libstdc++.so"
+    echo "  ⚠️  检测到 $GCC_STDCPP 缺少 __cxa_call_terminate 符号"
+    echo "      绕过：-B$FIXDIR/ 让 -lstdc++ 优先命中系统完整版 libstdc++"
+    export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-B${FIXDIR}/"
+fi
+
 cargo build -p comfy-mcp
 
 cargo run -p comfy-api --features "$CARGO_FEATURES" &

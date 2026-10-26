@@ -377,16 +377,27 @@ impl FlashAttnBackend {
             return PathBuf::from(py);
         }
 
-        // 2. 项目 venv
+        // 2. 项目 venv（需验证可用：系统 python3 升级会悄悄破坏 venv 的
+        //    bin/python3 符号链接，导致 site-packages 版本不匹配、import torch 失败）
         let venv_py = project_root.join("venv-cu128").join("bin").join("python");
-        if venv_py.exists() {
+        if venv_py.exists() && crate::python::ensure_venv_python(&venv_py) {
             return venv_py;
+        }
+
+        // 2b. 本仓库 py/flash_attn_v100/venv-cu128 兜底（project_root 的
+        //     venv 缺失或损坏时）
+        let repo_venv = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../py/flash_attn_v100/venv-cu128/bin/python"
+        ));
+        if repo_venv.exists() && crate::python::ensure_venv_python(&repo_venv) {
+            return repo_venv;
         }
 
         // 3. venv 通用名
         for venv_name in &["venv", ".venv", "env", ".env"] {
             let py = project_root.join(venv_name).join("bin").join("python");
-            if py.exists() {
+            if py.exists() && crate::python::ensure_venv_python(&py) {
                 return py;
             }
         }
@@ -492,8 +503,10 @@ impl FlashAttnBackend {
             }
         }
 
-        // Detect Python venv path to add torch lib to LD_LIBRARY_PATH
-        let venv_python = project_root.join("venv-cu128").join("bin").join("python");
+        // Detect Python venv path to add torch lib to LD_LIBRARY_PATH.
+        // Use the interpreter resolved by find_python (may be a fallback venv
+        // when the project_root one is missing/broken).
+        let venv_python = python.clone();
         let torch_lib_path = if venv_python.exists() {
             // Query Python for torch lib path - need to clear CUDA_VISIBLE_DEVICES
             // and set NVML check before importing torch
@@ -549,12 +562,7 @@ impl FlashAttnBackend {
 
         // Determine transformer_devices and vae_device based on actual GPU count.
         // Query Python to detect GPU count before starting the bridge.
-        let python_for_detect = if venv_python.exists() {
-            venv_python.clone()
-        } else {
-            PathBuf::from("python3")
-        };
-        let gpu_count = std::process::Command::new(&python_for_detect)
+        let gpu_count = std::process::Command::new(&python)
             .env_remove("CUDA_VISIBLE_DEVICES")
             .env("PYTORCH_NVML_BASED_CUDA_CHECK", "0")
             .args(["-c", "import torch;print(torch.cuda.device_count())"])
