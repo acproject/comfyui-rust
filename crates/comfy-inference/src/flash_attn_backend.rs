@@ -24,6 +24,10 @@ pub struct FlashAttnConfig {
     pub bridge_url: String,
     /// 请求超时时间（秒）
     pub timeout_sec: u64,
+    /// 模型加载等待超时（秒）。MiniMax-H3 首次加载需从 USB 读取
+    /// 26GB text_encoder INT8 缓存 + transformer INT8（实测约 5-6 分钟），
+    /// 轮询机制下放宽默认值不影响快速加载场景。
+    pub load_timeout_sec: u64,
     /// 轮询间隔（毫秒）
     pub poll_interval_ms: u64,
     /// 自动启动 Python Bridge 服务（如果未运行）
@@ -47,6 +51,7 @@ impl Default for FlashAttnConfig {
         Self {
             bridge_url: "http://127.0.0.1:8998".to_string(),
             timeout_sec: 900,  // 15 minutes for long video generation
+            load_timeout_sec: 1800,  // 30 minutes: USB int8 cache load ~5-6 min, cold load even longer
             poll_interval_ms: 1000,
             auto_start: true,   // 默认自动启动
             python_path: None,
@@ -61,14 +66,33 @@ impl Default for FlashAttnConfig {
 
 impl FlashAttnConfig {
     pub fn new(bridge_url: impl Into<String>) -> Self {
+        let raw = bridge_url.into();
+        let trimmed = raw.trim();
+        // 空/缺少 scheme 的 URL 会让 reqwest 静默解析失败（健康检查请求根本发不出去，
+        // 表现为 "Bridge did not become ready within 30s"），统一回退到默认地址
+        let bridge_url = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            trimmed.to_string()
+        } else {
+            tracing::warn!(
+                "Invalid FlashAttn bridge_url {:?} (empty or missing http(s):// scheme); \
+                 falling back to http://127.0.0.1:8998",
+                raw
+            );
+            "http://127.0.0.1:8998".to_string()
+        };
         Self {
-            bridge_url: bridge_url.into(),
+            bridge_url,
             ..Default::default()
         }
     }
 
     pub fn with_timeout(mut self, sec: u64) -> Self {
         self.timeout_sec = sec;
+        self
+    }
+
+    pub fn with_load_timeout(mut self, sec: u64) -> Self {
+        self.load_timeout_sec = sec;
         self
     }
 
@@ -538,15 +562,22 @@ impl FlashAttnBackend {
         }
         envs.push(("LD_LIBRARY_PATH".to_string(), ld_path));
 
-        // 自动检测模型路径 - 优先 USB 路径
+        // 自动检测模型路径 - 优先 COMFY_MODELS_DIR（comfyui-rust 的权威模型仓库，
+        // MiniMaxH3Pipeline 节点扫描的就是这里），其次 USB 路径。
         let mut detected_model_path: Option<String> = None;
-        let known_model_paths = [
-            "/home/acproject/usb/hf_models/MiniMax-H3",
-            "/mnt/usb/hf_models/MiniMax-H3",
-        ];
+        let mut known_model_paths: Vec<String> = Vec::new();
+        if let Ok(models_dir) = std::env::var("COMFY_MODELS_DIR") {
+            let dir = models_dir.trim_end_matches('/');
+            if !dir.is_empty() {
+                known_model_paths.push(format!("{}/MiniMax-H3", dir));
+            }
+        }
+        known_model_paths.push("/home/acproject/usb/comfyui/models/MiniMax-H3".to_string());
+        known_model_paths.push("/home/acproject/usb/hf_models/MiniMax-H3".to_string());
+        known_model_paths.push("/mnt/usb/hf_models/MiniMax-H3".to_string());
         for p in &known_model_paths {
             if Path::new(p).join("modular_model_index.json").exists() {
-                detected_model_path = Some(p.to_string());
+                detected_model_path = Some(p.clone());
                 tracing::info!("Auto-detected model path: {}", p);
                 break;
             }
@@ -601,13 +632,29 @@ impl FlashAttnBackend {
         // 先杀掉可能残留的子进程（由本实例启动的）
         self.kill_bridge_child();
 
-        // 如果PID文件存在且对应进程还在运行，先杀掉
+        // 如果PID文件存在且对应进程还在运行，先检查它是否健康
+        // 健康则直接复用（避免误杀正在服务的bridge），不健康才杀掉重启
         let pid_file = project_root.join("flash_attn_bridge").join(".bridge.pid");
         if pid_file.exists() {
             if let Ok(pid_str) = fs::read_to_string(&pid_file) {
                 if let Ok(old_pid) = pid_str.trim().parse::<u32>() {
                     if Path::new(&format!("/proc/{}", old_pid)).exists() {
-                        tracing::warn!("Killing stale Bridge process (PID {})", old_pid);
+                        // 先探活：如果bridge健康，直接复用，不要杀
+                        let probe = reqwest::blocking::Client::builder()
+                            .timeout(Duration::from_secs(3))
+                            .connect_timeout(Duration::from_secs(2))
+                            .build()
+                            .ok()
+                            .and_then(|c| c.get(self.url("/health")).send().ok())
+                            .map(|r| r.status().is_success())
+                            .unwrap_or(false);
+                        if probe {
+                            tracing::info!("Existing Bridge (PID {}) is healthy, reusing it", old_pid);
+                            *self.bridge_pid.lock().unwrap() = Some(old_pid);
+                            self.model_loaded.store(false, std::sync::atomic::Ordering::SeqCst);
+                            return Ok(());
+                        }
+                        tracing::warn!("Killing stale/unhealthy Bridge process (PID {}) from pid file", old_pid);
                         let _ = Command::new("kill").arg("-TERM").arg(old_pid.to_string()).status();
                         std::thread::sleep(Duration::from_secs(2));
                         if Path::new(&format!("/proc/{}", old_pid)).exists() {
@@ -740,14 +787,23 @@ impl FlashAttnBackend {
             }
 
             // 尝试健康检查
-            match health_client.get(self.url("/health")).send() {
+            let health_url = self.url("/health");
+            match health_client.get(&health_url).send() {
                 Ok(resp) if resp.status().is_success() => {
                     tracing::info!("FlashAttn Bridge is ready (took {:.1}s)", start.elapsed().as_secs_f64());
                     // 重置model_loaded标志（新进程需要重新加载模型）
                     self.model_loaded.store(false, std::sync::atomic::Ordering::SeqCst);
                     return Ok(());
                 }
-                _ => {}
+                Ok(resp) => {
+                    tracing::warn!("Bridge health check returned status {} (elapsed {:.1}s)",
+                        resp.status(), start.elapsed().as_secs_f64());
+                }
+                Err(e) => {
+                    tracing::warn!("Bridge health check failed (elapsed {:.1}s, pid={}, alive={}): {}",
+                        start.elapsed().as_secs_f64(), pid,
+                        Path::new(&format!("/proc/{}", pid)).exists(), e);
+                }
             }
 
             std::thread::sleep(poll_interval);
@@ -764,10 +820,10 @@ impl FlashAttnBackend {
                 .connect_timeout(Duration::from_secs(3))
                 .build()
                 .unwrap();
-            if health_client.get(self.url("/health")).send()
-                .and_then(|r| Ok(r.status().is_success())).unwrap_or(false)
-            {
-                return Ok(());
+            match health_client.get(self.url("/health")).send() {
+                Ok(r) if r.status().is_success() => return Ok(()),
+                Ok(r) => tracing::warn!("Bridge port is open but /health returned {}", r.status()),
+                Err(e) => tracing::warn!("Bridge port is open but /health request failed: {}", e),
             }
         }
 
@@ -791,10 +847,10 @@ impl FlashAttnBackend {
                 .connect_timeout(Duration::from_secs(3))
                 .build()
                 .unwrap();
-            if health_client.get(self.url("/health")).send()
-                .and_then(|r| Ok(r.status().is_success())).unwrap_or(false)
-            {
-                return Ok(());
+            match health_client.get(self.url("/health")).send() {
+                Ok(r) if r.status().is_success() => return Ok(()),
+                Ok(r) => tracing::warn!("Bridge port is open but /health returned {}", r.status()),
+                Err(e) => tracing::warn!("Bridge port is open but /health request failed: {}", e),
             }
         }
 
@@ -893,7 +949,9 @@ impl FlashAttnBackend {
 
     /// 等待模型加载完成（轮询）
     fn wait_for_load(&self, job_id: &str) -> InferenceResult<()> {
-        let timeout = Duration::from_secs(300); // 5 minutes for loading
+        // 实测 H3 INT8 缓存加载约 5-6 分钟（text_encoder 132s + transformer 148s + 组件），
+        // 冷加载更久；采用可配置的宽松超时（默认 1800s，轮询到即返回，不影响快加载）
+        let timeout = Duration::from_secs(self.config.load_timeout_sec);
         let start = std::time::Instant::now();
         let poll_interval = Duration::from_millis(500);
 
@@ -940,7 +998,12 @@ impl FlashAttnBackend {
     }
 
     /// 加载模型到 Bridge（如果尚未加载）
-    pub fn ensure_model_loaded(&self) -> InferenceResult<()> {
+    ///
+    /// `model_path`: 调用方（如 MiniMaxH3Pipeline 节点）解析出的模型仓库目录
+    /// （modular_model_index.json 所在目录）。显式传给 Bridge，避免其
+    /// auto-detect 命中 HF cache 里的残缺 snapshot（曾导致
+    /// `text_encoder/config.json` FileNotFoundError）。
+    pub fn ensure_model_loaded(&self, model_path: Option<&str>) -> InferenceResult<()> {
         // 确保Bridge服务正在运行
         self.ensure_bridge_running()?;
 
@@ -951,19 +1014,24 @@ impl FlashAttnBackend {
         // 先检查健康状态
         if let Ok(health) = self.check_health() {
             if health.model_loaded {
-                self.model_loaded.store(true, std::sync::atomic::Ordering::SeqCst);
-                return Ok(());
+                // 显式指定了模型路径且与已加载的不一致时，需重新加载
+                let matches = match model_path {
+                    Some(mp) => health.model_path.as_deref() == Some(mp),
+                    None => true,
+                };
+                if matches {
+                    self.model_loaded.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return Ok(());
+                }
             }
         }
 
-        // 发起加载请求
-        // Don't hardcode model_path - let the Python bridge auto-detect it
-        // (the bridge already has FA_MODEL_PATH env set from spawn_bridge_process,
-        //  and its _auto_detect_model_path() checks USB path, HF cache, etc.)
+        // 发起加载请求：优先使用调用方解析的 model_path；
+        // 为 None 时才回退到 Bridge 的 FA_MODEL_PATH / auto-detect。
         let req = LoadRequest {
             model_id: "MiniMax-H3".to_string(),
             model_type: "t2va".to_string(),
-            model_path: None,
+            model_path: model_path.map(|s| s.to_string()),
             quantization: self.config.quantization.clone(),
             device_id: self.config.device_id,
             dtype: "bf16".to_string(),
@@ -1087,7 +1155,7 @@ impl FlashAttnBackend {
 
     /// 提交 T2VA 任务并等待结果，返回 SdVideo
     fn do_t2va(&self, params: &H3Params) -> InferenceResult<SdVideo> {
-        self.ensure_model_loaded()?;
+        self.ensure_model_loaded(params.model_path.as_deref())?;
 
         let req = T2VARequest {
             prompt: params.prompt.clone(),
@@ -1132,7 +1200,7 @@ impl FlashAttnBackend {
 
     /// 提交 I2VA 任务并等待结果，返回 SdVideo
     fn do_i2va(&self, params: &H3Params) -> InferenceResult<SdVideo> {
-        self.ensure_model_loaded()?;
+        self.ensure_model_loaded(params.model_path.as_deref())?;
 
         let ref_image = params.reference_images.first()
             .ok_or_else(|| InferenceError::InvalidParameter("I2VA requires a reference image".to_string()))?;
@@ -1181,7 +1249,7 @@ impl FlashAttnBackend {
 
     /// 提交 Ref2VA 任务并等待结果，返回 SdVideo
     fn do_ref2va(&self, params: &H3Params) -> InferenceResult<SdVideo> {
-        self.ensure_model_loaded()?;
+        self.ensure_model_loaded(params.model_path.as_deref())?;
 
         let ref_images_b64: InferenceResult<Vec<String>> = params.reference_images.iter()
             .map(|img| self.encode_image_to_b64(img))
@@ -1244,7 +1312,7 @@ impl FlashAttnBackend {
 
     /// 提交 SFX (音效生成) 任务 - 只生成音效，默认短时长
     fn do_sfx(&self, params: &H3Params) -> InferenceResult<SdVideo> {
-        self.ensure_model_loaded()?;
+        self.ensure_model_loaded(params.model_path.as_deref())?;
 
         let req = T2VARequest {
             prompt: params.prompt.clone(),
@@ -1288,7 +1356,7 @@ impl FlashAttnBackend {
 
     /// 提交 BGM/Audio (背景音乐生成) 任务 - 只生成背景音乐
     fn do_audio(&self, params: &H3Params) -> InferenceResult<SdVideo> {
-        self.ensure_model_loaded()?;
+        self.ensure_model_loaded(params.model_path.as_deref())?;
 
         let req = T2VARequest {
             prompt: params.prompt.clone(),
@@ -1332,7 +1400,7 @@ impl FlashAttnBackend {
 
     /// 提交 MR2VA (多参考视频生成) 任务
     fn do_mr2va(&self, params: &H3Params) -> InferenceResult<SdVideo> {
-        self.ensure_model_loaded()?;
+        self.ensure_model_loaded(params.model_path.as_deref())?;
 
         let ref_images_b64: InferenceResult<Vec<String>> = params.reference_images.iter()
             .map(|img| self.encode_image_to_b64(img))
@@ -1546,5 +1614,44 @@ impl Drop for FlashAttnBackend {
         // Use shutdown() explicitly to unload the model and kill the child process.
         // The Bridge process will be reaped by the background wait thread when it exits.
         // Use stop.sh or `kill <pid>` to stop it manually.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flash_attn_config_normalizes_invalid_bridge_urls() {
+        // 空/无 scheme 的 URL 一律回退默认地址（workflow 传空 bridge_url 曾导致
+        // 健康检查静默失败 -> "Bridge did not become ready within 30s"）
+        for bad in ["", "  ", "localhost:8998", "127.0.0.1:8998"] {
+            assert_eq!(
+                FlashAttnConfig::new(bad).bridge_url,
+                "http://127.0.0.1:8998",
+                "input: {bad:?}"
+            );
+        }
+        // 合法 URL 原样保留（仅去首尾空白）
+        assert_eq!(
+            FlashAttnConfig::new(" http://192.168.1.5:9000 ").bridge_url,
+            "http://192.168.1.5:9000"
+        );
+    }
+
+    /// 端到端验证：模拟用户 workflow 传空 bridge_url，走完整
+    /// ensure_bridge_running -> /health -> POST /context-ir 链路。
+    /// 运行方式: cargo test -p comfy-inference --features flash-attn -- --ignored
+    #[test]
+    #[ignore = "requires live bridge on 127.0.0.1:8998 (auto-starts one if absent)"]
+    fn context_ir_with_empty_bridge_url_uses_fallback() {
+        let config = FlashAttnConfig::new("") // 用户 workflow 实际传入的空串
+            .with_auto_start(true)
+            .with_timeout(60);
+        let backend = FlashAttnBackend::new(config);
+        let params = ContextIrParams::from_text("a cat walking on the beach".to_string());
+        let ctx = backend.context_ir(params)
+            .expect("context_ir should succeed via fallback URL");
+        assert!(!ctx.subject.is_empty());
     }
 }

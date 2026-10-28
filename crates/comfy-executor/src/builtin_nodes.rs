@@ -7189,16 +7189,86 @@ fn register_save_video_with_audio(registry: &mut NodeRegistry) {
 
     registry.register(class_def, Arc::new(|ctx, _node, node_id| {
         let video = ctx.resolve_input(node_id, "video").unwrap_or_else(|_| json!({}));
-        let audio = ctx.resolve_input(node_id, "audio").unwrap_or_else(|_| json!({}));
-        let filename_prefix = ctx.resolve_input(node_id, "filename_prefix").unwrap_or_else(|_| json!("ltx_output"));
+        let audio = ctx.resolve_input(node_id, "audio").unwrap_or_else(|_| json!(null));
+        let filename_prefix = ctx.resolve_input(node_id, "filename_prefix").unwrap_or_else(|_| json!("video_with_audio"));
         let format = ctx.resolve_input(node_id, "format").unwrap_or_else(|_| json!("mp4"));
+        let nid = node_id.to_string();
 
         Box::pin(async move {
+            let frames: Vec<comfy_inference::SdImage> = video
+                .get("frames")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|f| serde_json::from_value(f.clone()).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if frames.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: nid,
+                    message: "No video frames to save".to_string(),
+                });
+            }
+            let fps = video.get("fps").and_then(|v| v.as_i64()).unwrap_or(24) as i32;
+
+            // AUDIO 输入是带 path 的 envelope（H3Director / SaveAudio 契约）。
+            // 缺 path 或解析失败时按无声视频处理，不直接报错。
+            let audio_data = audio
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|p| !p.is_empty())
+                .and_then(|p| std::fs::read(p).ok())
+                .and_then(|bytes| comfy_inference::SdAudio::from_wav_bytes(&bytes).ok());
+            let has_audio = audio_data.is_some();
+            let sd_video = comfy_inference::SdVideo::new(frames, fps, audio_data);
+
+            let output_dir = std::env::var("COMFY_OUTPUT_DIR")
+                .unwrap_or_else(|_| "output".to_string());
+            std::fs::create_dir_all(&output_dir).ok();
+
+            let prefix = filename_prefix.as_str().unwrap_or("video_with_audio");
+            let ext = match format.as_str().unwrap_or("mp4") {
+                "webm" => "webm",
+                _ => "mp4",
+            };
+            let filename = format!("{}_{}.{}", prefix, chrono::Utc::now().format("%Y%m%d_%H%M%S"), ext);
+            let filepath = std::path::PathBuf::from(&output_dir).join(&filename);
+
+            let encode_result = if ext == "webm" {
+                sd_video.encode_webm_with_ffmpeg(&filepath, fps, 30)
+            } else {
+                sd_video.encode_with_ffmpeg(&filepath, fps, 18)
+            };
+            encode_result.map_err(|e| ExecutorError::NodeExecutionFailed {
+                node_id: nid,
+                message: format!("Failed to encode video: {}", e),
+            })?;
+
+            tracing::info!(
+                "SaveVideoWithAudio: saved {} frames ({} fps, audio={}) to {}",
+                sd_video.frame_count(),
+                fps,
+                has_audio,
+                filepath.display()
+            );
+
             Ok(vec![json!({
-                "video": video,
-                "audio": audio,
-                "filename_prefix": filename_prefix,
-                "format": format,
+                "type": "video",
+                "filename": filename,
+                "subfolder": "",
+                "format": ext,
+                "frame_count": sd_video.frame_count(),
+                "fps": fps,
+                "has_audio": has_audio,
+                "videos": [{
+                    "filename": filename,
+                    "subfolder": "",
+                    "type": "output",
+                    "frame_count": sd_video.frame_count(),
+                    "fps": fps,
+                    "with_audio": has_audio,
+                }],
             })])
         })
     }));
@@ -9648,12 +9718,48 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                 message: format!("Failed to serialize video: {}", e),
             })?;
 
-            // Serialize audio separately for AUDIO output
+            // Serialize audio separately for AUDIO output.
+            // SdAudio 的默认序列化只有 sample_rate/channels/num_samples,不含 path,
+            // 下游 SaveAudio / SaveVideoWithAudio 会因缺 path 报
+            // "No audio input provided"。因此先落盘 sidecar wav,再输出带 path
+            // 的 envelope(与 MiniMaxH3Pipeline 的 AUDIO 输出保持一致)。
             let audio_val = match &video.audio {
-                Some(audio) => serde_json::to_value(audio).map_err(|e| ExecutorError::NodeExecutionFailed {
-                    node_id: node_id.to_string(),
-                    message: format!("Failed to serialize audio: {}", e),
-                })?,
+                Some(audio) => {
+                    let audio_dir = {
+                        let base = std::env::var("COMFY_OUTPUT_DIR")
+                            .unwrap_or_else(|_| "output".to_string());
+                        let dir = std::path::PathBuf::from(&base).join("audio");
+                        let _ = std::fs::create_dir_all(&dir);
+                        dir
+                    };
+                    let wav_name = format!(
+                        "minimax_h3_{}_{}.wav",
+                        chrono::Utc::now().format("%Y%m%d_%H%M%S"),
+                        seed
+                    );
+                    let wav_path = audio_dir.join(&wav_name);
+                    std::fs::write(&wav_path, audio.to_wav_bytes()).map_err(|e| {
+                        ExecutorError::NodeExecutionFailed {
+                            node_id: node_id.to_string(),
+                            message: format!("Failed to write H3 sidecar wav: {e}"),
+                        }
+                    })?;
+                    json!({
+                        "type": "audio",
+                        "path": wav_path.to_string_lossy().to_string(),
+                        "filename": wav_name.clone(),
+                        "subfolder": "audio",
+                        "format": "wav",
+                        "duration": audio.duration_sec(),
+                        "sample_rate": audio.sample_rate,
+                        "channels": audio.channels,
+                        "audios": [{
+                            "filename": wav_name,
+                            "subfolder": "audio",
+                            "type": "output",
+                        }],
+                    })
+                }
                 None => serde_json::Value::Null,
             };
 

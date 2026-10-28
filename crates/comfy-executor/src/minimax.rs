@@ -290,7 +290,10 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
             .unwrap_or("")
             .to_string();
         let seed = node.inputs.get("seed").and_then(|v| v.as_i64()).unwrap_or(42);
-        let steps = node.inputs.get("steps").and_then(|v| v.as_i64()).unwrap_or(30) as i32;
+        // clamp 与节点 UI 规格 int_input(1, 100) 一致:旧工作流 JSON 可携带
+        // 越界值(如 854),855 个 sigma 网格点会导致数小时级生成且必然超出
+        // 900s 生成超时
+        let steps = node.inputs.get("steps").and_then(|v| v.as_i64()).unwrap_or(30).clamp(1, 100) as i32;
         let num_frames = node.inputs.get("num_frames").and_then(|v| v.as_i64()).unwrap_or(123) as i32;
         let width = node.inputs.get("width").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let height = node.inputs.get("height").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -548,9 +551,10 @@ fn register_music3(registry: &mut NodeRegistry) {
             .and_then(|v| v.as_f64())
             .unwrap_or(60.0);
         let seed = node.inputs.get("seed").and_then(|v| v.as_i64()).unwrap_or(0);
+        // clamp 与 UI 规格 int_input(0, 9000) 一致,防止旧工作流 JSON 越界值
         let max_new_tokens = node.inputs.get("max_new_tokens")
             .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
+            .unwrap_or(0).clamp(0, 9000) as i32;
         let node_id_str = node_id.to_string();
 
         Box::pin(async move {

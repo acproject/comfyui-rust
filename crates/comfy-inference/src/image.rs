@@ -922,18 +922,30 @@ impl SdVideo {
         let ffmpeg_path = Self::resolve_full_or_any_ffmpeg()
             .ok_or_else(|| ImageError::PngEncodeError("No ffmpeg found".to_string()))?;
 
+        // If audio is present, write to a temp WAV file and mux it as Opus.
+        let audio_tmp = if let Some(ref audio) = self.audio {
+            let tmp_path = tmp_dir.join("audio.wav");
+            std::fs::write(&tmp_path, audio.to_wav_bytes())
+                .map_err(|e| ImageError::PngEncodeError(format!("Failed to write temp audio: {}", e)))?;
+            Some(tmp_path)
+        } else {
+            None
+        };
+
         let input_pattern = tmp_dir.join("frame_%06d.png");
-        let status = std::process::Command::new(&ffmpeg_path)
-            .args([
-                "-y",
-                "-framerate", &fps.to_string(),
-                "-i", input_pattern.to_str().unwrap_or(""),
-                "-c:v", "libvpx-vp9",
-                "-pix_fmt", "yuv420p",
-                "-crf", &crf.to_string(),
-                "-b:v", "0",
-                output_path.to_str().unwrap_or(""),
-            ])
+        let fps_str = fps.to_string();
+        let crf_str = crf.to_string();
+        let mut cmd = std::process::Command::new(&ffmpeg_path);
+        cmd.args(["-y", "-framerate", &fps_str, "-i", input_pattern.to_str().unwrap_or("")]);
+        if let Some(ref audio_path) = audio_tmp {
+            cmd.args(["-i", audio_path.to_str().unwrap_or("")]);
+        }
+        cmd.args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-crf", &crf_str, "-b:v", "0"]);
+        if audio_tmp.is_some() {
+            cmd.args(["-c:a", "libopus", "-b:a", "128k", "-shortest"]);
+        }
+        cmd.arg(output_path.to_str().unwrap_or(""));
+        let status = cmd
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
