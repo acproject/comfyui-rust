@@ -4,8 +4,7 @@ use comfy_executor::NodeRegistry;
 use std::net::SocketAddr;
 use std::path::Path;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     tracing_subscriber::fmt::init();
     let config_dir = std::env::var("COMFY_CONFIG_DIR")
         .unwrap_or_else(|_| "config".to_string());
@@ -83,10 +82,17 @@ async fn main() {
     tracing::info!("Starting ComfyUI-Rust server on {}", addr);
     tracing::info!("Config file: {}", config_path.display());
 
-    if let Err(e) = server.start().await {
-        tracing::error!("Server error: {}", e);
-        std::process::exit(1);
-    }
+    // All sync setup (including create_state → WindowsBackend → reqwest::blocking::Client)
+    // must complete BEFORE we enter the tokio runtime. A reqwest::blocking::Client owns an
+    // internal tokio runtime; creating or dropping it inside an async context panics with
+    // "Cannot drop a runtime in a context where blocking is not allowed."
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    rt.block_on(async move {
+        if let Err(e) = server.start().await {
+            tracing::error!("Server error: {}", e);
+            std::process::exit(1);
+        }
+    });
 }
 
 #[cfg(feature = "local-ffi")]

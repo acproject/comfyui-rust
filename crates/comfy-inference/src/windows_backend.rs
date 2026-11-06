@@ -202,14 +202,15 @@ impl WindowsBackend {
         // Point ComfyUI's output/temp dirs at subdirectories of the
         // comfyui-rust workspace so writes succeed under the sandbox (the
         // ComfyUI checkout itself may be read-only).
+        // Note: ComfyUI appends a "temp" subfolder to --temp-directory, so we
+        // pass the workspace root (→ <workspace>/temp) while --output-directory
+        // is used as-is (→ <workspace>/output).
         let output_dir = std::env::current_dir()
             .map(|d| d.join("output"))
             .unwrap_or_else(|_| PathBuf::from("output"));
-        let temp_dir = std::env::current_dir()
-            .map(|d| d.join("temp"))
-            .unwrap_or_else(|_| PathBuf::from("temp"));
+        let temp_base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let _ = std::fs::create_dir_all(&output_dir);
-        let _ = std::fs::create_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(temp_base.join("temp"));
 
         let mut cmd = Command::new(&python);
         cmd.arg(&main_py)
@@ -220,7 +221,7 @@ impl WindowsBackend {
             .arg("--output-directory")
             .arg(&output_dir)
             .arg("--temp-directory")
-            .arg(&temp_dir)
+            .arg(&temp_base)
             .current_dir(&root_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
