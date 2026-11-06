@@ -1,4 +1,4 @@
-import { type FC } from 'react';
+import { type FC, useEffect } from 'react';
 import { useWorkflowStore } from '@/store/workflow';
 
 const PropertyPanel: FC = () => {
@@ -74,12 +74,25 @@ const PropertyField: FC<PropertyFieldProps> = ({ name, spec, value, onChange }) 
   const { type_name, extra } = spec;
   const choices = extra.choices as string[] | undefined;
 
+  // Auto-correct invalid/empty combo values to the first choice so the node
+  // data (and any saved workflow) always carries a valid selection.
+  useEffect(() => {
+    if (choices && choices.length > 0) {
+      const current = String(value ?? '');
+      if (!choices.includes(current)) {
+        onChange(choices[0]);
+      }
+    }
+  }, [choices, value, onChange]);
+
   if (choices && choices.length > 0) {
+    const current = String(value ?? '');
+    const displayValue = choices.includes(current) ? current : choices[0];
     return (
       <div style={fieldStyle}>
         <label style={labelStyle}>{name}</label>
         <select
-          value={String(value || '')}
+          value={displayValue}
           onChange={(e) => onChange(e.target.value)}
           style={selectStyle}
         >

@@ -205,7 +205,7 @@ IDE 配置示例：
     "offload_params_to_cpu": false,
     "enable_mmap": true,
     "sd_cli_path": null,
-    "windows_comfy_url": "http://127.0.0.1:8188",
+    "windows_comfy_url": "http://127.0.0.1:8189",
     "windows_auto_start": true,
     "windows_comfy_root": null
   },
@@ -289,7 +289,7 @@ ControlNet、自定义节点等）。Rust 服务器将内置 pipeline 节点翻�
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `windows_comfy_url` | `http://127.0.0.1:8188` | ComfyUI 服务器 URL |
+| `windows_comfy_url` | `http://127.0.0.1:8189` | ComfyUI 服务器 URL（必须与 Rust 服务器端口 8188 不同） |
 | `windows_auto_start` | `true` | ComfyUI 未运行时自动启动 |
 | `windows_comfy_root` | `M:\Git-ComfyUI`（Win）/ `/opt/ComfyUI`（Unix） | ComfyUI 安装根目录（含 `main.py`） |
 

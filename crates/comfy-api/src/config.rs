@@ -358,7 +358,9 @@ fn default_python_dtype() -> String {
 }
 
 fn default_windows_comfy_url() -> String {
-    "http://127.0.0.1:8188".to_string()
+    // NOTE: must differ from the Rust server's own port (default 8188),
+    // otherwise the bridge talks to itself instead of ComfyUI.
+    "http://127.0.0.1:8189".to_string()
 }
 
 fn default_windows_comfy_root() -> Option<String> {

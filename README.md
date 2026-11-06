@@ -204,7 +204,7 @@ Configuration is loaded from `config/config.json` (auto-created on first run wit
     "offload_params_to_cpu": false,
     "enable_mmap": true,
     "sd_cli_path": null,
-    "windows_comfy_url": "http://127.0.0.1:8188",
+    "windows_comfy_url": "http://127.0.0.1:8189",
     "windows_auto_start": true,
     "windows_comfy_root": null
   },
@@ -293,7 +293,7 @@ Config fields (under `inference`):
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `windows_comfy_url` | `http://127.0.0.1:8188` | ComfyUI server URL |
+| `windows_comfy_url` | `http://127.0.0.1:8189` | ComfyUI server URL (must differ from the Rust server port 8188) |
 | `windows_auto_start` | `true` | Auto-launch ComfyUI if not running |
 | `windows_comfy_root` | `M:\Git-ComfyUI` (Win) / `/opt/ComfyUI` (Unix) | ComfyUI install root (contains `main.py`) |
 

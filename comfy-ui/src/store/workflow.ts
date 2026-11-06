@@ -477,15 +477,33 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   getPrompt: () => {
-    const { nodes, edges } = get();
+    const { nodes, edges, objectInfo } = get();
     const prompt: Record<string, unknown> = {};
 
     for (const node of nodes) {
       if (node.data.isNote) continue;
 
+      const classDef = objectInfo[node.data.classType];
+      const allInputSpecs = {
+        ...(classDef?.input_types?.required || {}),
+        ...(classDef?.input_types?.optional || {}),
+      };
+
       const inputs: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(node.data.inputs)) {
-        inputs[key] = value;
+        let v = value;
+        // Auto-fix empty/invalid COMBO values: fall back to the first choice.
+        // This handles nodes created before model choices loaded, or workflows
+        // loaded with empty combo values.
+        const spec = allInputSpecs[key];
+        if (spec && spec.type_name === 'COMBO') {
+          const choices = (spec.extra?.choices as string[]) || [];
+          const current = String(v ?? '');
+          if (choices.length > 0 && !choices.includes(current)) {
+            v = choices[0];
+          }
+        }
+        inputs[key] = v;
       }
 
       for (const edge of edges) {

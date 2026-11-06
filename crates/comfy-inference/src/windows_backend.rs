@@ -28,7 +28,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// Default ComfyUI server address.
-pub const DEFAULT_COMFY_URL: &str = "http://127.0.0.1:8188";
+/// NOTE: This must NOT collide with the Rust server port (default 8188).
+pub const DEFAULT_COMFY_URL: &str = "http://127.0.0.1:8189";
 
 /// Default ComfyUI installation root (contains `main.py`).
 #[cfg(windows)]
@@ -145,11 +146,13 @@ impl WindowsBackend {
 
     /// Whether the ComfyUI server responds to a health probe.
     fn is_server_up(&self) -> bool {
-        self.client
-            .get(self.url("/"))
-            .send()
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        run_blocking(|| {
+            self.client
+                .get(self.url("/"))
+                .send()
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
+        })
     }
 
     /// Resolve the Python interpreter to use for launching ComfyUI.
@@ -217,6 +220,23 @@ impl WindowsBackend {
         let _ = std::fs::create_dir_all(&output_dir);
         let _ = std::fs::create_dir_all(temp_base.join("temp"));
 
+        // Redirect ComfyUI stdout/stderr to log files so startup failures
+        // (model load errors, missing custom nodes, etc.) are visible instead
+        // of being swallowed by Stdio::null().
+        let log_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let stdout_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("comfyui-stdout.log"))
+            .map(Stdio::from)
+            .unwrap_or(Stdio::null());
+        let stderr_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("comfyui-stderr.log"))
+            .map(Stdio::from)
+            .unwrap_or(Stdio::null());
+
         let mut cmd = Command::new(&python);
         cmd.arg(&main_py)
             .arg("--listen")
@@ -228,8 +248,8 @@ impl WindowsBackend {
             .arg("--temp-directory")
             .arg(&temp_base)
             .current_dir(&root_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(stdout_log)
+            .stderr(stderr_log);
 
         let child = cmd.spawn().map_err(|e| {
             InferenceError::BackendNotAvailable(format!(
@@ -261,7 +281,7 @@ impl WindowsBackend {
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(self.config.poll_interval_ms));
+            run_blocking(|| std::thread::sleep(Duration::from_millis(self.config.poll_interval_ms)));
         }
         Err(InferenceError::BackendNotAvailable(format!(
             "ComfyUI server did not become ready within 180s at {}",
@@ -597,17 +617,19 @@ impl WindowsBackend {
     /// Fetch the list of accepted filenames for a given ComfyUI loader node.
     fn fetch_model_list(&self, class_type: &str, input_name: &str) -> InferenceResult<Vec<String>> {
         let url = self.url(&format!("/object_info/{}", class_type));
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .map_err(|e| InferenceError::NetworkError(e.to_string()))?;
+        let resp = run_blocking(|| {
+            self.client
+                .get(&url)
+                .send()
+                .map_err(|e| InferenceError::NetworkError(e.to_string()))
+        })?;
         if !resp.status().is_success() {
             return Ok(Vec::new());
         }
-        let v: Value = resp
-            .json()
-            .map_err(|e| InferenceError::GenerationFailed(format!("object_info bad JSON: {e}")))?;
+        let v: Value = run_blocking(|| {
+            resp.json()
+                .map_err(|e| InferenceError::GenerationFailed(format!("object_info bad JSON: {e}")))
+        })?;
         let list = v
             .get(class_type)
             .and_then(|x| x.get("input"))
@@ -637,21 +659,23 @@ impl WindowsBackend {
                     .mime_str("image/png")
                     .map_err(|e| InferenceError::ImageEncodeError(e.to_string()))?,
             );
-        let resp = self
-            .client
-            .post(self.url("/upload/image"))
-            .multipart(form)
-            .send()
-            .map_err(|e| InferenceError::NetworkError(e.to_string()))?;
+        let resp = run_blocking(|| {
+            self.client
+                .post(self.url("/upload/image"))
+                .multipart(form)
+                .send()
+                .map_err(|e| InferenceError::NetworkError(e.to_string()))
+        })?;
         if !resp.status().is_success() {
             return Err(InferenceError::GenerationFailed(format!(
                 "upload/image failed: {}",
                 resp.status()
             )));
         }
-        let v: Value = resp
-            .json()
-            .map_err(|e| InferenceError::GenerationFailed(format!("upload/image bad JSON: {e}")))?;
+        let v: Value = run_blocking(|| {
+            resp.json()
+                .map_err(|e| InferenceError::GenerationFailed(format!("upload/image bad JSON: {e}")))
+        })?;
         let name = v
             .get("name")
             .and_then(|x| x.as_str())
@@ -669,22 +693,24 @@ impl WindowsBackend {
         let client_id = format!("comfyui-rust-win-{}", std::process::id());
         let body = json!({ "prompt": workflow, "client_id": client_id });
 
-        let resp = self
-            .client
-            .post(self.url("/prompt"))
-            .json(&body)
-            .send()
-            .map_err(|e| InferenceError::NetworkError(e.to_string()))?;
+        let resp = run_blocking(|| {
+            self.client
+                .post(self.url("/prompt"))
+                .json(&body)
+                .send()
+                .map_err(|e| InferenceError::NetworkError(e.to_string()))
+        })?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let txt = resp.text().unwrap_or_default();
+            let txt = run_blocking(|| resp.text().unwrap_or_default());
             return Err(InferenceError::GenerationFailed(format!(
                 "/prompt rejected ({status}): {txt}"
             )));
         }
-        let v: Value = resp
-            .json()
-            .map_err(|e| InferenceError::GenerationFailed(format!("/prompt bad JSON: {e}")))?;
+        let v: Value = run_blocking(|| {
+            resp.json()
+                .map_err(|e| InferenceError::GenerationFailed(format!("/prompt bad JSON: {e}")))
+        })?;
         let prompt_id = v
             .get("prompt_id")
             .and_then(|x| x.as_str())
@@ -694,15 +720,17 @@ impl WindowsBackend {
         // Poll /history until the prompt appears with outputs or an error.
         let deadline = std::time::Instant::now() + Duration::from_secs(self.config.timeout_sec);
         loop {
-            let hist = self
-                .client
-                .get(self.url(&format!("/history/{}", prompt_id)))
-                .send()
-                .map_err(|e| InferenceError::NetworkError(e.to_string()))?;
+            let hist = run_blocking(|| {
+                self.client
+                    .get(self.url(&format!("/history/{}", prompt_id)))
+                    .send()
+                    .map_err(|e| InferenceError::NetworkError(e.to_string()))
+            })?;
             if hist.status().is_success() {
-                let hv: Value = hist
-                    .json()
-                    .map_err(|e| InferenceError::GenerationFailed(format!("/history bad JSON: {e}")))?;
+                let hv: Value = run_blocking(|| {
+                    hist.json()
+                        .map_err(|e| InferenceError::GenerationFailed(format!("/history bad JSON: {e}")))
+                })?;
                 if let Some(entry) = hv.get(&prompt_id) {
                     if let Some(err) = entry.get("status").and_then(|s| s.get("status_str")) {
                         if err.as_str() == Some("error") {
@@ -735,7 +763,7 @@ impl WindowsBackend {
                     self.config.timeout_sec
                 )));
             }
-            std::thread::sleep(Duration::from_millis(self.config.poll_interval_ms));
+            run_blocking(|| std::thread::sleep(Duration::from_millis(self.config.poll_interval_ms)));
         }
     }
 
@@ -745,13 +773,14 @@ impl WindowsBackend {
             "/view?filename={}&subfolder={}&type=output",
             filename, subfolder
         ));
-        let bytes = self
-            .client
-            .get(&url)
-            .send()
-            .map_err(|e| InferenceError::NetworkError(e.to_string()))?
-            .bytes()
-            .map_err(|e| InferenceError::NetworkError(e.to_string()))?;
+        let bytes = run_blocking(|| {
+            self.client
+                .get(&url)
+                .send()
+                .map_err(|e| InferenceError::NetworkError(e.to_string()))?
+                .bytes()
+                .map_err(|e| InferenceError::NetworkError(e.to_string()))
+        })?;
         SdImage::from_png_bytes(&bytes).map_err(InferenceError::from)
     }
 
@@ -833,6 +862,23 @@ impl InferenceBackend for WindowsBackend {
 }
 
 // ---------- helpers ----------
+
+/// Run a blocking closure on the current thread. When called from inside a
+/// tokio multi-threaded runtime, this uses `block_in_place` to transition
+/// the worker thread to a blocking thread (so the reqwest blocking client's
+/// internal runtime can be created/dropped without panicking with
+/// "Cannot drop a runtime in a context where blocking is not allowed").
+/// When called outside a tokio runtime (e.g. tests), the closure runs
+/// directly.
+fn run_blocking<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => tokio::task::block_in_place(f),
+        Err(_) => f(),
+    }
+}
 
 /// How the model is loaded inside ComfyUI.
 #[derive(Debug, Clone)]
