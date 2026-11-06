@@ -8,3 +8,5 @@ reference
 models
 config
 workflows
+*.log
+
