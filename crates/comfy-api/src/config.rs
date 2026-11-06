@@ -122,6 +122,15 @@ pub struct InferenceConfig {
     pub python_device: String,
     #[serde(default = "default_python_dtype")]
     pub python_dtype: String,
+    /// ComfyUI server URL for the Windows-native backend.
+    #[serde(default = "default_windows_comfy_url")]
+    pub windows_comfy_url: String,
+    /// Auto-start the ComfyUI server if it is not running (Windows backend).
+    #[serde(default = "default_true")]
+    pub windows_auto_start: bool,
+    /// ComfyUI installation root (contains main.py) for the Windows backend.
+    #[serde(default = "default_windows_comfy_root")]
+    pub windows_comfy_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +220,9 @@ impl Default for InferenceConfig {
             python_script_dir: None,
             python_device: default_python_device(),
             python_dtype: default_python_dtype(),
+            windows_comfy_url: default_windows_comfy_url(),
+            windows_auto_start: true,
+            windows_comfy_root: default_windows_comfy_root(),
         }
     }
 }
@@ -343,6 +355,14 @@ fn default_python_device() -> String {
 
 fn default_python_dtype() -> String {
     "auto".to_string()
+}
+
+fn default_windows_comfy_url() -> String {
+    "http://127.0.0.1:8188".to_string()
+}
+
+fn default_windows_comfy_root() -> Option<String> {
+    Some(r"M:\Git-ComfyUI".to_string())
 }
 
 fn default_n_threads() -> u32 {

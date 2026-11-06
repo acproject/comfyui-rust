@@ -20,6 +20,9 @@ use comfy_inference::{
     PythonInferConfig,
 };
 
+#[cfg(windows)]
+use comfy_inference::{WindowsBackend, WindowsBackendConfig};
+
 pub struct AppState {
     pub executor: Arc<Executor>,
     pub queue: Arc<PromptQueue>,
@@ -381,6 +384,30 @@ impl AppState {
         let python = build_python_backend(&config, workspace_root.as_deref());
         let backend = Arc::new(python) as Arc<dyn comfy_inference::InferenceBackend>;
         tracing::info!("Using Python-only inference backend");
+        build_state_with_backend(registry, config, config_path, backend)
+    }
+
+    /// Windows-native backend: delegate inference to a real ComfyUI Python
+    /// server running in the `M:\Git-ComfyUI` venv. This is the
+    /// highest-priority backend on Windows because sd.cpp (the local/CLI
+    /// backends) is often not built on Windows and the one-shot Python
+    /// fallback scripts are not shipped here.
+    #[cfg(windows)]
+    pub fn with_windows_backend(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
+        let win_config = WindowsBackendConfig {
+            server_url: config.inference.windows_comfy_url.clone(),
+            auto_start: config.inference.windows_auto_start,
+            comfy_root: config.inference.windows_comfy_root.clone(),
+            python_path: config.inference.python_path.clone(),
+            timeout_sec: 600,
+            poll_interval_ms: 500,
+        };
+        let backend = Arc::new(WindowsBackend::new(win_config))
+            as Arc<dyn comfy_inference::InferenceBackend>;
+        tracing::info!(
+            "Using Windows-native inference backend (ComfyUI at {})",
+            config.inference.windows_comfy_url
+        );
         build_state_with_backend(registry, config, config_path, backend)
     }
 

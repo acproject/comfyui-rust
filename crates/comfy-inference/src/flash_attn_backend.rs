@@ -403,31 +403,38 @@ impl FlashAttnBackend {
 
         // 2. 项目 venv（需验证可用：系统 python3 升级会悄悄破坏 venv 的
         //    bin/python3 符号链接，导致 site-packages 版本不匹配、import torch 失败）
-        let venv_py = project_root.join("venv-cu128").join("bin").join("python");
+        let venv_py = crate::python::venv_python_path(&project_root.join("venv-cu128"));
         if venv_py.exists() && crate::python::ensure_venv_python(&venv_py) {
             return venv_py;
         }
 
         // 2b. 本仓库 py/flash_attn_v100/venv-cu128 兜底（project_root 的
         //     venv 缺失或损坏时）
-        let repo_venv = PathBuf::from(concat!(
+        let repo_venv = crate::python::venv_python_path(&PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../py/flash_attn_v100/venv-cu128/bin/python"
-        ));
+            "/../../py/flash_attn_v100/venv-cu128"
+        )));
         if repo_venv.exists() && crate::python::ensure_venv_python(&repo_venv) {
             return repo_venv;
         }
 
         // 3. venv 通用名
         for venv_name in &["venv", ".venv", "env", ".env"] {
-            let py = project_root.join(venv_name).join("bin").join("python");
+            let py = crate::python::venv_python_path(&project_root.join(venv_name));
             if py.exists() && crate::python::ensure_venv_python(&py) {
                 return py;
             }
         }
 
-        // 4. 系统 python3
-        PathBuf::from("python3")
+        // 4. 系统 python
+        #[cfg(windows)]
+        {
+            PathBuf::from("python")
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from("python3")
+        }
     }
 
     /// 终止已存在的 Bridge 子进程

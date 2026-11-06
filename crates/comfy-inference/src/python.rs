@@ -126,8 +126,26 @@ fn venv_prefix_ok(venv_py: &Path) -> bool {
     in_venv && p.is_dir()
 }
 
+/// Path to the Python executable inside a venv root.
+///
+/// On Windows venvs use `Scripts/python.exe`; on Unix they use `bin/python`.
+pub fn venv_python_path(venv_root: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        venv_root.join("Scripts").join("python.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        venv_root.join("bin").join("python")
+    }
+}
+
 /// Re-link a broken venv `bin/python3` to the `/usr/bin/python3.<minor>`
 /// matching the venv's `lib/python3.<minor>` site-packages directory.
+///
+/// This is a Unix-only repair: Windows venvs ship a real `python.exe` copy
+/// (not a symlink), so there is nothing to heal there.
+#[cfg(unix)]
 fn heal_venv_python_link(venv_py: &Path) {
     let Some(bin) = venv_py.parent() else { return };
     let Some(root) = bin.parent() else { return };
@@ -155,6 +173,10 @@ fn heal_venv_python_link(venv_py: &Path) {
     }
 }
 
+/// No-op on non-Unix platforms (Windows venvs use a copied python.exe).
+#[cfg(not(unix))]
+fn heal_venv_python_link(_venv_py: &Path) {}
+
 /// Verify that a venv interpreter is actually usable.
 ///
 /// A distro upgrade of `/usr/bin/python3` (e.g. 3.12 -> 3.14) silently breaks
@@ -174,10 +196,10 @@ pub fn ensure_venv_python(venv_py: &Path) -> bool {
 
 /// Resolve a Python interpreter:
 /// explicit -> env `COMFY_PYTHON_PATH` -> venvs next to the script dir ->
-/// known venv-cu128 locations -> system python3.
+/// known venv locations -> system python.
 pub fn resolve_python(explicit: Option<&str>, script_dir: Option<&Path>) -> String {
     if let Some(py) = explicit {
-        if !py.is_empty() && py != "python3" {
+        if !py.is_empty() && py != "python3" && py != "python" {
             return py.to_string();
         }
     }
@@ -192,7 +214,7 @@ pub fn resolve_python(explicit: Option<&str>, script_dir: Option<&Path>) -> Stri
     if let Some(dir) = script_dir {
         if let Some(project_root) = dir.parent() {
             for venv in &["venv-cu128", ".venv", "venv", "env"] {
-                let py = project_root.join(venv).join("bin").join("python");
+                let py = venv_python_path(&project_root.join(venv));
                 if py.exists() && ensure_venv_python(&py) {
                     return py.to_string_lossy().to_string();
                 }
@@ -201,21 +223,46 @@ pub fn resolve_python(explicit: Option<&str>, script_dir: Option<&Path>) -> Stri
     }
 
     // Prefer the venv shipped inside this repository's py project.
-    let repo_venv = concat!(
+    let repo_venv = venv_python_path(&PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../py/flash_attn_v100/venv-cu128/bin/python"
-    );
-    if Path::new(repo_venv).exists() && ensure_venv_python(Path::new(repo_venv)) {
-        return repo_venv.to_string();
+        "/../../py/flash_attn_v100/venv-cu128"
+    )));
+    if repo_venv.exists() && ensure_venv_python(&repo_venv) {
+        return repo_venv.to_string_lossy().to_string();
     }
 
-    // Secondary machine-local venv (older layout, see flash_attn_backend).
-    let known = "/home/acproject/workspace/python_projects/flash_attn_v100/venv-cu128/bin/python";
-    if Path::new(known).exists() && ensure_venv_python(Path::new(known)) {
-        return known.to_string();
+    // Platform-specific known venv locations.
+    #[cfg(unix)]
+    {
+        let known = "/home/acproject/workspace/python_projects/flash_attn_v100/venv-cu128/bin/python";
+        if Path::new(known).exists() && ensure_venv_python(Path::new(known)) {
+            return known.to_string();
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Common Windows-side ComfyUI Python venv (e.g. M:\Git-ComfyUI\venv).
+        for root in &[
+            r"M:\Git-ComfyUI\venv",
+            r"C:\Git-ComfyUI\venv",
+            r"D:\Git-ComfyUI\venv",
+        ] {
+            let py = venv_python_path(Path::new(root));
+            if py.exists() && ensure_venv_python(&py) {
+                return py.to_string_lossy().to_string();
+            }
+        }
     }
 
-    "python3".to_string()
+    // System interpreter.
+    #[cfg(windows)]
+    {
+        "python".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        "python3".to_string()
+    }
 }
 
 /// A directory containing a HuggingFace checkpoint (config.json present).
@@ -1729,6 +1776,7 @@ mod minimax_tests {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod venv_tests {
     use super::*;
     use std::path::PathBuf;

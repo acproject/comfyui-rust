@@ -100,6 +100,11 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
             tracing::info!("Using Python-only inference backend (HF transformers/diffusers)");
             AppState::with_python_backend(registry, config, config_path)
         }
+        #[cfg(windows)]
+        "windows" | "" | "local" => {
+            tracing::info!("Using Windows-native inference backend (ComfyUI HTTP bridge)");
+            AppState::with_windows_backend(registry, config, config_path)
+        }
         _ => {
             tracing::info!("Using local inference backend (stable-diffusion.cpp via FFI)");
             AppState::with_local_backend(registry, config, config_path)
@@ -109,8 +114,16 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
 
 #[cfg(all(feature = "local", not(feature = "local-ffi")))]
 fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
-    tracing::info!("Using CLI inference backend (sd-cli subprocess, FFI not available)");
-    AppState::with_cli_backend(registry, config, config_path)
+    #[cfg(windows)]
+    {
+        tracing::info!("Using Windows-native inference backend (ComfyUI HTTP bridge)");
+        AppState::with_windows_backend(registry, config, config_path)
+    }
+    #[cfg(not(windows))]
+    {
+        tracing::info!("Using CLI inference backend (sd-cli subprocess, FFI not available)");
+        AppState::with_cli_backend(registry, config, config_path)
+    }
 }
 
 #[cfg(not(feature = "local"))]
@@ -123,6 +136,11 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
         "python" => {
             tracing::info!("Using Python-only inference backend (HF transformers/diffusers)");
             AppState::with_python_backend(registry, config, config_path)
+        }
+        #[cfg(windows)]
+        "windows" | "" | "local" => {
+            tracing::info!("Using Windows-native inference backend (ComfyUI HTTP bridge)");
+            AppState::with_windows_backend(registry, config, config_path)
         }
         _ => {
             tracing::info!("Using null inference backend (no local inference support compiled)");
