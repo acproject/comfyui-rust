@@ -106,9 +106,14 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
             tracing::info!("Using Python-only inference backend (HF transformers/diffusers)");
             AppState::with_python_backend(registry, config, config_path)
         }
+        #[cfg(any(windows, feature = "comfyui-bridge"))]
+        "comfyui" | "windows" => {
+            tracing::info!("Using ComfyUI HTTP bridge backend");
+            AppState::with_windows_backend(registry, config, config_path)
+        }
         #[cfg(windows)]
-        "windows" | "" | "local" => {
-            tracing::info!("Using Windows-native inference backend (ComfyUI HTTP bridge)");
+        "" | "local" => {
+            tracing::info!("Using ComfyUI HTTP bridge backend (default on Windows)");
             AppState::with_windows_backend(registry, config, config_path)
         }
         _ => {
@@ -120,15 +125,22 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
 
 #[cfg(all(feature = "local", not(feature = "local-ffi")))]
 fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::path::PathBuf) -> AppState {
-    #[cfg(windows)]
-    {
-        tracing::info!("Using Windows-native inference backend (ComfyUI HTTP bridge)");
-        AppState::with_windows_backend(registry, config, config_path)
-    }
-    #[cfg(not(windows))]
-    {
-        tracing::info!("Using CLI inference backend (sd-cli subprocess, FFI not available)");
-        AppState::with_cli_backend(registry, config, config_path)
+    match config.inference.backend.as_str() {
+        #[cfg(any(windows, feature = "comfyui-bridge"))]
+        "comfyui" | "windows" => {
+            tracing::info!("Using ComfyUI HTTP bridge backend");
+            AppState::with_windows_backend(registry, config, config_path)
+        }
+        #[cfg(windows)]
+        _ => {
+            tracing::info!("Using ComfyUI HTTP bridge backend (default on Windows)");
+            AppState::with_windows_backend(registry, config, config_path)
+        }
+        #[cfg(not(windows))]
+        _ => {
+            tracing::info!("Using CLI inference backend (sd-cli subprocess, FFI not available)");
+            AppState::with_cli_backend(registry, config, config_path)
+        }
     }
 }
 
@@ -143,9 +155,14 @@ fn create_state(registry: NodeRegistry, config: ComfyConfig, config_path: std::p
             tracing::info!("Using Python-only inference backend (HF transformers/diffusers)");
             AppState::with_python_backend(registry, config, config_path)
         }
+        #[cfg(any(windows, feature = "comfyui-bridge"))]
+        "comfyui" | "windows" => {
+            tracing::info!("Using ComfyUI HTTP bridge backend");
+            AppState::with_windows_backend(registry, config, config_path)
+        }
         #[cfg(windows)]
-        "windows" | "" | "local" => {
-            tracing::info!("Using Windows-native inference backend (ComfyUI HTTP bridge)");
+        "" | "local" => {
+            tracing::info!("Using ComfyUI HTTP bridge backend (default on Windows)");
             AppState::with_windows_backend(registry, config, config_path)
         }
         _ => {

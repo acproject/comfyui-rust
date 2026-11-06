@@ -33,6 +33,10 @@ remote = ["comfy-inference/remote", "comfy-executor/remote"]
 controlnet = ["comfy-executor/controlnet"]
 controlnet-opencv = ["comfy-executor/controlnet-opencv"]
 flash-attn = ["comfy-executor/flash-attn", "comfy-inference/flash-attn"]
+# ComfyUI HTTP bridge backend: use a native ComfyUI Python server for
+# inference. Always enabled on Windows; on other platforms opt in with this
+# feature (or set COMFY_BACKEND=comfyui).
+comfyui-bridge = ["comfy-inference/comfyui-bridge"]
 
 [dev-dependencies]
 hyper = "1"

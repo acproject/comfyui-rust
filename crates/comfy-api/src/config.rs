@@ -362,7 +362,14 @@ fn default_windows_comfy_url() -> String {
 }
 
 fn default_windows_comfy_root() -> Option<String> {
-    Some(r"M:\Git-ComfyUI".to_string())
+    #[cfg(windows)]
+    {
+        Some(r"M:\Git-ComfyUI".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Some("/opt/ComfyUI".to_string())
+    }
 }
 
 fn default_n_threads() -> u32 {

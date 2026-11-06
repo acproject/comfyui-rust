@@ -30,8 +30,13 @@ use std::time::Duration;
 /// Default ComfyUI server address.
 pub const DEFAULT_COMFY_URL: &str = "http://127.0.0.1:8188";
 
-/// Default Windows ComfyUI installation root.
+/// Default ComfyUI installation root (contains `main.py`).
+#[cfg(windows)]
 pub const DEFAULT_COMFY_ROOT: &str = r"M:\Git-ComfyUI";
+
+/// Default ComfyUI installation root on Unix (contains `main.py`).
+#[cfg(not(windows))]
+pub const DEFAULT_COMFY_ROOT: &str = "/opt/ComfyUI";
 
 #[derive(Debug, Clone)]
 pub struct WindowsBackendConfig {

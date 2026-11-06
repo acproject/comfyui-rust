@@ -20,7 +20,7 @@ pub mod remote;
 #[cfg(feature = "flash-attn")]
 pub mod flash_attn_backend;
 
-#[cfg(windows)]
+#[cfg(any(windows, feature = "comfyui-bridge"))]
 pub mod windows_backend;
 
 pub use backend::{AsyncInferenceBackend, BackendCapabilities, InferenceBackend, NullBackend};
@@ -48,5 +48,5 @@ pub use remote::{RemoteBackend, RemoteConfig};
 #[cfg(feature = "flash-attn")]
 pub use flash_attn_backend::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, HealthResponse, JobResponse};
 
-#[cfg(windows)]
+#[cfg(any(windows, feature = "comfyui-bridge"))]
 pub use windows_backend::{WindowsBackend, WindowsBackendConfig, DEFAULT_COMFY_ROOT, DEFAULT_COMFY_URL};

@@ -12,7 +12,7 @@ thiserror = "2"
 png = "0.17"
 gif = "0.13"
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
-reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
+reqwest = { version = "0.12", features = ["json", "blocking", "multipart"], optional = true }
 base64 = { version = "0.22", optional = true }
 tempfile = { version = "3", optional = true }
 tracing = "0.1"
@@ -28,9 +28,14 @@ local-ffi = ["local"]
 local-build = ["local-ffi"]
 remote = ["reqwest", "base64"]
 flash-attn = ["reqwest", "base64", "tempfile", "remote"]
+# ComfyUI HTTP bridge backend (cross-platform). On Windows it is always
+# available; on other platforms enable this feature to use a native ComfyUI
+# Python server as the inference backend.
+comfyui-bridge = ["reqwest", "base64"]
 
-# The Windows backend talks to a ComfyUI server over HTTP, so it always
-# needs reqwest on Windows regardless of the `remote` / `flash-attn` features.
+# The ComfyUI bridge backend talks to a ComfyUI server over HTTP. On Windows
+# reqwest is always needed; on other platforms it is pulled in by the
+# `comfyui-bridge` feature.
 [target.'cfg(windows)'.dependencies]
 reqwest = { version = "0.12", features = ["json", "blocking", "multipart"] }
 

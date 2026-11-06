@@ -20,7 +20,7 @@ use comfy_inference::{
     PythonInferConfig,
 };
 
-#[cfg(windows)]
+#[cfg(any(windows, feature = "comfyui-bridge"))]
 use comfy_inference::{WindowsBackend, WindowsBackendConfig};
 
 pub struct AppState {
@@ -387,12 +387,11 @@ impl AppState {
         build_state_with_backend(registry, config, config_path, backend)
     }
 
-    /// Windows-native backend: delegate inference to a real ComfyUI Python
-    /// server running in the `M:\Git-ComfyUI` venv. This is the
-    /// highest-priority backend on Windows because sd.cpp (the local/CLI
-    /// backends) is often not built on Windows and the one-shot Python
-    /// fallback scripts are not shipped here.
-    #[cfg(windows)]
+    /// ComfyUI HTTP bridge backend: delegate inference to a real ComfyUI
+    /// Python server. On Windows this is the highest-priority backend because
+    /// sd.cpp (the local/CLI backends) is often not built; on other platforms
+    /// it is available when the `comfyui-bridge` feature is enabled.
+    #[cfg(any(windows, feature = "comfyui-bridge"))]
     pub fn with_windows_backend(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
         let win_config = WindowsBackendConfig {
             server_url: config.inference.windows_comfy_url.clone(),
