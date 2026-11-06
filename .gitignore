@@ -9,4 +9,9 @@ models
 config
 workflows
 *.log
+*.pid
+temp
+.screenshots
+.qoder
+.dbg
 
