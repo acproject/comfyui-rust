@@ -29,5 +29,10 @@ local-build = ["local-ffi"]
 remote = ["reqwest", "base64"]
 flash-attn = ["reqwest", "base64", "tempfile", "remote"]
 
+# The Windows backend talks to a ComfyUI server over HTTP, so it always
+# needs reqwest on Windows regardless of the `remote` / `flash-attn` features.
+[target.'cfg(windows)'.dependencies]
+reqwest = { version = "0.12", features = ["json", "blocking", "multipart"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }

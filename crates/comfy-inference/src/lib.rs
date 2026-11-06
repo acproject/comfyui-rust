@@ -20,11 +20,14 @@ pub mod remote;
 #[cfg(feature = "flash-attn")]
 pub mod flash_attn_backend;
 
+#[cfg(windows)]
+pub mod windows_backend;
+
 pub use backend::{AsyncInferenceBackend, BackendCapabilities, InferenceBackend, NullBackend};
 pub use cli::{CliBackend, CliBackendConfig, convert_model_cli};
 pub use python::{
     FallbackBackend, PythonBackend, PythonInferConfig, default_script_dir, is_diffusers_pipeline_dir,
-    is_hf_model_dir, resolve_python, resolve_script_dir,
+    is_hf_model_dir, resolve_python, resolve_script_dir, venv_python_path,
 };
 pub use sdcpp_support::{
     RegistrySnapshot, SdCppModelEntry, SdCppModelKind, UPSTREAM_README, init as sdcpp_init,
@@ -44,3 +47,6 @@ pub use remote::{RemoteBackend, RemoteConfig};
 
 #[cfg(feature = "flash-attn")]
 pub use flash_attn_backend::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, HealthResponse, JobResponse};
+
+#[cfg(windows)]
+pub use windows_backend::{WindowsBackend, WindowsBackendConfig, DEFAULT_COMFY_ROOT, DEFAULT_COMFY_URL};
