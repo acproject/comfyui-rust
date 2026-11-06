@@ -9,8 +9,10 @@ ComfyUI 的 Rust 原生重实现：一个基于节点的可视化工作流编辑
 - **节点式工作流编辑器** —— 拖拽式可视化图编辑，内置 100+ 节点
 - **多模态生成** —— 文生图、文生视频、图生视频、音视频联合生成、文生音乐、3D 高斯溅射
 - **本地推理** —— 经典 SD 模型通过 stable-diffusion.cpp FFI 本地运行，无需 Python
+- **ComfyUI HTTP Bridge 后端** —— 通过 HTTP 委托给原生 ComfyUI Python 服务器推理（支持全部 ComfyUI 节点，含 Qwen-Image 2.1、Flux、SD3）。Windows 默认可用；Linux/macOS 需启用 `comfyui-bridge` feature。
 - **Python 兜底后端** —— 新架构（Bernini-R、MiniMax-H3、MiniMax-Music3、TripoSplat）通过
   `py/flash_attn_v100/comfy_fallback` 下的一次性脚本在 `venv-cu128` 中运行
+- **Windows 支持** —— 原生 PowerShell 启停脚本（`start.ps1`/`stop.ps1`）及 `start.cmd`/`stop.cmd` 包装器；Windows 默认使用 ComfyUI bridge 后端
 - **面向 AI IDE 的 MCP 服务** —— 内置 [Model Context Protocol](https://modelcontextprotocol.io)
   端点（`/mcp` Streamable HTTP）及独立 stdio 二进制；可在 Cursor、Trae、Claude Code 等 IDE 中
   发现节点/模型、组装/校验/提交工作流并跟踪执行
@@ -39,9 +41,11 @@ comfyui-rust/
 ├── models/                  # 模型文件（checkpoints、VAE、text encoder 等）
 ├── output/                  # 生成的图片、视频、音频及保存的工作流
 ├── config/                  # 配置（config.json）
-├── start.sh                 # 启动后端 + 前端（开发模式）
+├── start.sh                 # 启动后端 + 前端（开发模式，Linux/macOS）
 ├── stop.sh                  # 停止所有服务（含 comfy-mcp stdio）
-└── build.sh                 # 仅 release 编译 Rust 工作区（绝不编译 C++/前端）
+├── build.sh                 # 仅 release 编译 Rust 工作区（绝不编译 C++/前端）
+├── start.ps1 / start.cmd    # 启动后端 + 前端（开发模式，Windows）
+└── stop.ps1 / stop.cmd      # 停止所有服务（Windows）
 ```
 
 ### Crate 概览
@@ -84,8 +88,17 @@ cmake --build . --config Release -j
 
 ### 启动应用（开发模式）
 
+**Linux / macOS：**
+
 ```bash
 ./start.sh
+```
+
+**Windows（PowerShell）：**
+
+```powershell
+.\start.ps1
+# 或双击 start.cmd 绕过执行策略提示
 ```
 
 脚本会：
@@ -97,9 +110,9 @@ cmake --build . --config Release -j
 
 ### 停止应用
 
-```bash
-./stop.sh
-```
+**Linux / macOS：** `./stop.sh`
+
+**Windows：** `.\stop.ps1`（或 `stop.cmd`）
 
 ### Release 编译（仅 Rust 工作区）
 
@@ -191,7 +204,10 @@ IDE 配置示例：
     "diffusion_flash_attn": false,
     "offload_params_to_cpu": false,
     "enable_mmap": true,
-    "sd_cli_path": null
+    "sd_cli_path": null,
+    "windows_comfy_url": "http://127.0.0.1:8188",
+    "windows_auto_start": true,
+    "windows_comfy_root": null
   },
   "output": {
     "dir": "output",
@@ -207,10 +223,14 @@ IDE 配置示例：
 | **本地 FFI** | `"local"` | 直接 FFI 调用预编译的 stable-diffusion.cpp（推荐，最快） |
 | **CLI** | `"cli"` | 以子进程调用 `sd-cli` 可执行文件 |
 | **Python** | `"python"` | 纯 Python 后端（HF transformers/diffusers 兜底脚本） |
+| **ComfyUI Bridge** | `"comfyui"` | 通过 HTTP 委托给原生 ComfyUI Python 服务器（支持全部 ComfyUI 节点）。Windows 默认；Linux/macOS 需启用 `comfyui-bridge` feature。 |
 
 `FallbackBackend` 还会按模型目录自动路由：自包含 diffusers 仓库（Bernini-R）
 与 MiniMax 模块化仓库（`modular_model_index.json` 中 `_class_name=MiniMaxH3*` /
 `*Music3*`）始终走 Python —— sd.cpp 目前无法加载它们。
+
+可通过环境变量 `COMFY_BACKEND`（如 `COMFY_BACKEND=comfyui`）或
+`config.json` 中的 `inference.backend` 选择后端。
 
 ### Feature Flags
 
@@ -223,6 +243,10 @@ cargo run -p comfy-api --features "local-build,controlnet"
 
 # 仅 CLI 后端（无 FFI，使用 sd-cli 子进程）
 cargo run -p comfy-api --features "local,controlnet"
+
+# Linux/macOS 上启用 ComfyUI HTTP bridge 后端（原生 ComfyUI Python 服务器）
+cargo run -p comfy-api --features "comfyui-bridge"
+# 然后：COMFY_BACKEND=comfyui ./start.sh
 
 # 不编译本地推理（仅 Python/远程）
 cargo run -p comfy-api
@@ -237,6 +261,37 @@ cargo run -p comfy-api
 | `controlnet` | ControlNet 预处理（使用 `image` + `imageproc`） |
 | `controlnet-opencv` | OpenCV 加速的 ControlNet（需要 `libclang-dev`） |
 | `flash-attn` | FlashAttention/H3 HTTP bridge 支持 |
+| `comfyui-bridge` | ComfyUI HTTP bridge 后端（跨平台；Windows 始终启用） |
+
+## ComfyUI HTTP Bridge 后端
+
+Bridge 后端通过 HTTP 将推理委托给真正的 **ComfyUI Python 服务器**，无需在
+Rust 中重新实现即可使用全部 ComfyUI 节点（Qwen-Image 2.1、Flux、SD3、Wan、
+ControlNet、自定义节点等）。Rust 服务器将内置 pipeline 节点翻译成 ComfyUI
+工作流 JSON，提交后轮询完成并返回生成的媒体。
+
+### 适用场景
+
+- **Windows** —— 默认为此后端。Windows 上很少编译 sd.cpp，因此 bridge 是
+  开箱即用能力最强的选项。
+- **Linux / macOS** —— 启用 `comfyui-bridge` feature 并设置
+  `COMFY_BACKEND=comfyui`。当需要完整 ComfyUI 节点覆盖（而非 sd.cpp /
+  Python 兜底子集）时很有用。
+
+### 配置步骤
+
+1. 在磁盘某处安装 ComfyUI（Python 参考发行版）。
+2. 将 `windows_comfy_root` 指向它（包含 `main.py` 的目录），或保持
+   `windows_auto_start=true`，Rust 服务器会在需要时自动启动 ComfyUI。
+3. 确保 ComfyUI 能看到你的模型 —— 共享同一模型目录或建立符号链接。
+
+配置字段（`inference` 下）：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `windows_comfy_url` | `http://127.0.0.1:8188` | ComfyUI 服务器 URL |
+| `windows_auto_start` | `true` | ComfyUI 未运行时自动启动 |
+| `windows_comfy_root` | `M:\Git-ComfyUI`（Win）/ `/opt/ComfyUI`（Unix） | ComfyUI 安装根目录（含 `main.py`） |
 
 ## 模型目录结构
 
@@ -264,7 +319,7 @@ models/
 | 模型 | 类型 | 节点 |
 |------|------|------|
 | **Stable Diffusion 1.5 / SDXL / SD3** | 图像 | CheckpointLoader、KSampler、VAEDecode |
-| **Flux / Qwen-Image / Boogu** | 图像/编辑 | FluxLoader、DualCLIPLoader、KSampler |
+| **Flux / Qwen-Image / Boogu** | 图像/编辑 | FluxLoader、DualCLIPLoader、KSampler、QwenImagePipeline |
 | **Wan 2.1** | 视频 | WanLoader、WanVideoSampler、VideoVAEDecode |
 | **LTX-2.3** | 视频/音频 | LTXLoader、LTXVideoSampler、VideoVAEDecode、SaveVideoWithAudio |
 | **TripoSplat** | 3D | TripoSplatPipeline、Gaussian3DViewer |
@@ -276,6 +331,13 @@ MiniMax-H3 参数要点：24fps / 32kHz 立体声，时长 4–15 秒，帧数�
 （123–362），短边 768；CFG-distilled 模型（negative prompt / guidance 无效）。
 设置 `MINIMAX_API_KEY`（或 `MINIMAX_TOKEN`）可使用托管 H3-Context-IR API；
 未设置时上下文解析降级为本地离线模板。
+
+Qwen-Image 2.1 说明：`QwenImagePipeline` 节点既接受 diffusers pipeline
+**目录**（如 `Qwen-Image-2.1/`，内含 `transformer/` + `vae/`），也接受独立的
+`.safetensors` **文件**（如 `qwen-image-2.1-UC-int8_convrot.safetensors`）。
+使用独立文件时，VAE 与 Qwen3-VL 文本编码器会在 `<models>/vae` 和
+`<models>/text_encoders` 下自动检测（VAE 文件名需含 `qwen_image`，文本编码器
+文件名需含 `qwen3vl`）。2.1 的 VAE 与 1.0 **不兼容**，请勿混用。
 
 ## API 端点
 
@@ -362,6 +424,7 @@ npm run build    # 生产构建到 dist/
 | `COMFY_MODELS_DIR` | `models`（或 USB 模型库） | 模型根目录 |
 | `COMFY_OUTPUT_DIR` | `output` | 输出目录 |
 | `COMFY_INPUT_DIR` | `input` | 输入素材目录 |
+| `COMFY_BACKEND` | — | 覆盖 `inference.backend`（`local`、`cli`、`python`、`comfyui`） |
 | `COMFY_MCP_ENABLED` | `1` | 启用/关闭 `/mcp` HTTP 端点 |
 | `COMFY_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | MCP HTTP 允许的 Host 头 |
 | `COMFY_SERVER_URL` | 本机自调地址 | MCP 工具 / stdio 服务调用的 REST 上游 URL |

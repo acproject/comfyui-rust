@@ -9,7 +9,9 @@ A Rust-native reimplementation of ComfyUI, providing a node-based visual workflo
 - **Node-based Workflow Editor** — Drag-and-drop visual graph editor with 100+ built-in nodes
 - **Multi-Modal Generation** — Text-to-image, text-to-video, image-to-video, image+audio video, text-to-music, 3D Gaussian splatting
 - **Local Inference** — Runs models locally via stable-diffusion.cpp FFI (no Python required for classic SD models)
+- **ComfyUI HTTP Bridge Backend** — Delegate inference to a native ComfyUI Python server over HTTP (supports all ComfyUI nodes including Qwen-Image 2.1, Flux, SD3). Always available on Windows; enable the `comfyui-bridge` feature on Linux/macOS.
 - **Python Fallback Backend** — Newer architectures (Bernini-R, MiniMax-H3, MiniMax-Music3, TripoSplat) run through one-shot `py/flash_attn_v100/comfy_fallback` scripts inside `venv-cu128`
+- **Windows Support** — Native PowerShell start/stop scripts (`start.ps1`/`stop.ps1`) and `start.cmd`/`stop.cmd` wrappers; Windows defaults to the ComfyUI bridge backend
 - **MCP Server for AI IDEs** — Built-in [Model Context Protocol](https://modelcontextprotocol.io) endpoint (Streamable HTTP at `/mcp`) and a standalone stdio binary; discover nodes/models, assemble/validate/submit workflows, and track execution from Cursor, Trae, Claude Code, etc.
 - **Multi-Model Support** — SD1.5, SDXL, SD3, Flux, Wan2.1, LTX-2.3, TripoSplat, Bernini-R, MiniMax-H3, MiniMax-Music3
 - **WebSocket Real-time** — Live execution progress, queue management, and streaming output
@@ -36,9 +38,11 @@ comfyui-rust/
 ├── models/                  # Model files (checkpoints, VAE, text encoders, etc.)
 ├── output/                  # Generated images, videos, audio, and saved workflows
 ├── config/                  # Configuration (config.json)
-├── start.sh                 # Start backend + frontend (dev)
+├── start.sh                 # Start backend + frontend (dev, Linux/macOS)
 ├── stop.sh                  # Stop all services (incl. comfy-mcp stdio)
-└── build.sh                 # Release build of the Rust workspace only (never builds C++/frontend)
+├── build.sh                 # Release build of the Rust workspace only (never builds C++/frontend)
+├── start.ps1 / start.cmd    # Start backend + frontend (dev, Windows)
+├── stop.ps1 / stop.cmd      # Stop all services (Windows)
 ```
 
 ### Crate Overview
@@ -82,8 +86,17 @@ This produces:
 
 ### Start the Application (dev)
 
+**Linux / macOS:**
+
 ```bash
 ./start.sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.\start.ps1
+# or double-click start.cmd to bypass the execution-policy prompt
 ```
 
 This will:
@@ -95,9 +108,9 @@ Open http://localhost:3022 in your browser.
 
 ### Stop the Application
 
-```bash
-./stop.sh
-```
+**Linux / macOS:** `./stop.sh`
+
+**Windows:** `.\stop.ps1` (or `stop.cmd`)
 
 ### Release build (Rust workspace only)
 
@@ -190,7 +203,10 @@ Configuration is loaded from `config/config.json` (auto-created on first run wit
     "diffusion_flash_attn": false,
     "offload_params_to_cpu": false,
     "enable_mmap": true,
-    "sd_cli_path": null
+    "sd_cli_path": null,
+    "windows_comfy_url": "http://127.0.0.1:8188",
+    "windows_auto_start": true,
+    "windows_comfy_root": null
   },
   "output": {
     "dir": "output",
@@ -206,11 +222,16 @@ Configuration is loaded from `config/config.json` (auto-created on first run wit
 | **Local FFI** | `"local"` | Direct FFI calls to prebuilt stable-diffusion.cpp (recommended, fastest) |
 | **CLI** | `"cli"` | Subprocess calls to `sd-cli` executable |
 | **Python** | `"python"` | Python-only backend (HF transformers/diffusers fallback scripts) |
+| **ComfyUI Bridge** | `"comfyui"` | Delegate to a native ComfyUI Python server over HTTP (supports all ComfyUI nodes). Default on Windows; on Linux/macOS requires the `comfyui-bridge` feature. |
 
 The `FallbackBackend` additionally routes automatically by model directory:
 self-contained diffusers repos (Bernini-R) and MiniMax modular repos
 (`modular_model_index.json` with `_class_name=MiniMaxH3*` / `*Music3*`) always go
 to Python, which sd.cpp cannot load.
+
+Select the backend at runtime with the `COMFY_BACKEND` environment variable
+(e.g. `COMFY_BACKEND=comfyui`) or via `config/inference.backend` in
+`config.json`.
 
 ### Feature Flags
 
@@ -223,6 +244,10 @@ cargo run -p comfy-api --features "local-build,controlnet"
 
 # CLI backend only (no FFI, uses sd-cli subprocess)
 cargo run -p comfy-api --features "local,controlnet"
+
+# ComfyUI HTTP bridge backend on Linux/macOS (native ComfyUI Python server)
+cargo run -p comfy-api --features "comfyui-bridge"
+# then: COMFY_BACKEND=comfyui ./start.sh
 
 # No local inference (Python/remote only)
 cargo run -p comfy-api
@@ -237,6 +262,40 @@ cargo run -p comfy-api
 | `controlnet` | ControlNet preprocessing (uses `image` + `imageproc`) |
 | `controlnet-opencv` | ControlNet with OpenCV acceleration (requires `libclang-dev`) |
 | `flash-attn` | FlashAttention/H3 HTTP bridge support |
+| `comfyui-bridge` | ComfyUI HTTP bridge backend (cross-platform; always enabled on Windows) |
+
+## ComfyUI HTTP Bridge Backend
+
+The bridge backend delegates inference to a real **ComfyUI Python server** over
+HTTP, giving access to every ComfyUI node (Qwen-Image 2.1, Flux, SD3, Wan,
+ControlNet, custom nodes, etc.) without reimplementing them in Rust. The Rust
+server translates built-in pipeline nodes into ComfyUI workflow JSON, submits
+it, polls for completion, and returns the generated media.
+
+### When to use it
+
+- **Windows** — it is the default backend. sd.cpp is rarely built on Windows,
+  so the bridge is the most capable option out of the box.
+- **Linux / macOS** — enable the `comfyui-bridge` feature and set
+  `COMFY_BACKEND=comfyui`. Useful when you want full ComfyUI node coverage
+  instead of the sd.cpp / Python-fallback subset.
+
+### Setup
+
+1. Install ComfyUI (the Python reference distribution) somewhere on disk.
+2. Point `windows_comfy_root` at it (the directory that contains `main.py`),
+   or leave `windows_auto_start=true` and the Rust server will launch ComfyUI
+   automatically when needed.
+3. Make sure your models are visible to ComfyUI — either share the same model
+   directory or symlink it.
+
+Config fields (under `inference`):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `windows_comfy_url` | `http://127.0.0.1:8188` | ComfyUI server URL |
+| `windows_auto_start` | `true` | Auto-launch ComfyUI if not running |
+| `windows_comfy_root` | `M:\Git-ComfyUI` (Win) / `/opt/ComfyUI` (Unix) | ComfyUI install root (contains `main.py`) |
 
 ## Model Directory Structure
 
@@ -265,7 +324,7 @@ directly).
 | Model | Type | Nodes |
 |-------|------|-------|
 | **Stable Diffusion 1.5 / SDXL / SD3** | Image | CheckpointLoader, KSampler, VAEDecode |
-| **Flux / Qwen-Image / Boogu** | Image/Edit | FluxLoader, DualCLIPLoader, KSampler |
+| **Flux / Qwen-Image / Boogu** | Image/Edit | FluxLoader, DualCLIPLoader, KSampler, QwenImagePipeline |
 | **Wan 2.1** | Video | WanLoader, WanVideoSampler, VideoVAEDecode |
 | **LTX-2.3** | Video/Audio | LTXLoader, LTXVideoSampler, VideoVAEDecode, SaveVideoWithAudio |
 | **TripoSplat** | 3D | TripoSplatPipeline, Gaussian3DViewer |
@@ -277,6 +336,15 @@ MiniMax-H3 notes: 24 fps / 32 kHz stereo, 4–15 s clips, frame counts aligned t
 `17n+5` (123–362), short edge 768, CFG-distilled (no negative prompt / guidance).
 Set `MINIMAX_API_KEY` (or `MINIMAX_TOKEN`) to use the hosted H3-Context-IR API;
 without a key the context parser falls back to a local offline template.
+
+Qwen-Image 2.1 notes: the `QwenImagePipeline` node accepts either a diffusers
+pipeline **directory** (e.g. `Qwen-Image-2.1/` with `transformer/` + `vae/`)
+or a standalone `.safetensors` **file** (e.g.
+`qwen-image-2.1-UC-int8_convrot.safetensors`). For a standalone file the VAE
+and Qwen3-VL text encoder are auto-detected under `<models>/vae` and
+`<models>/text_encoders` (the VAE filename should contain `qwen_image` and the
+text-encoder filename should contain `qwen3vl`). The 2.1 VAE is **not**
+interchangeable with the 1.0 VAE.
 
 ## API Endpoints
 
@@ -364,6 +432,7 @@ npm run build   # Production build to dist/
 | `COMFY_MODELS_DIR` | `models` (or USB model library) | Model root directory |
 | `COMFY_OUTPUT_DIR` | `output` | Output directory path |
 | `COMFY_INPUT_DIR` | `input` | Input directory path |
+| `COMFY_BACKEND` | — | Override `inference.backend` (`local`, `cli`, `python`, `comfyui`) |
 | `COMFY_MCP_ENABLED` | `1` | Enable/disable the `/mcp` HTTP endpoint |
 | `COMFY_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Allowed Host headers for MCP HTTP |
 | `COMFY_SERVER_URL` | self URL | REST upstream URL used by MCP tools / stdio server |
