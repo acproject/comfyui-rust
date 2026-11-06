@@ -66,9 +66,28 @@ fn is_qwen_image_dir(dir: &Path) -> bool {
     }
 }
 
-/// Scan the model roots (root + diffusion_models/) for Qwen-Image pipelines.
-/// Returns `(label, path)` pairs sorted by label.
-fn scan_qwen_dirs() -> Vec<(String, PathBuf)> {
+/// Whether a standalone safetensors/gguf file looks like a Qwen-Image
+/// diffusion model (single-file transformer, not a diffusers directory).
+fn is_qwen_image_file(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !path.is_file() {
+        return false;
+    }
+    let is_model_ext = name.ends_with(".safetensors") || name.ends_with(".gguf");
+    if !is_model_ext {
+        return false;
+    }
+    let normalized = name.replace('_', "-");
+    normalized.contains("qwen-image") || normalized.contains("qwenimage")
+}
+
+/// Scan the model roots (root + diffusion_models/) for Qwen-Image models.
+/// Supports both diffusers pipeline directories and standalone safetensors/gguf
+/// diffusion-model files. Returns `(label, path)` pairs sorted by label.
+fn scan_qwen_models() -> Vec<(String, PathBuf)> {
     let base = PathBuf::from(get_models_dir());
     let mut roots = vec![base.clone(), base.join("diffusion_models")];
     if let Ok(cwd) = std::env::current_dir() {
@@ -80,7 +99,7 @@ fn scan_qwen_dirs() -> Vec<(String, PathBuf)> {
         let Ok(entries) = fs::read_dir(&root) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
-            if is_qwen_image_dir(&path) {
+            if is_qwen_image_dir(&path) || is_qwen_image_file(&path) {
                 let key = path.to_string_lossy().to_string();
                 if seen.insert(key) {
                     found.push((path.file_name().unwrap().to_string_lossy().to_string(), path));
@@ -92,11 +111,58 @@ fn scan_qwen_dirs() -> Vec<(String, PathBuf)> {
     found
 }
 
-fn resolve_qwen_dir(label: &str) -> Option<PathBuf> {
-    scan_qwen_dirs()
+fn resolve_qwen_model(label: &str) -> Option<PathBuf> {
+    scan_qwen_models()
         .into_iter()
         .find(|(name, _)| name == label)
         .map(|(_, path)| path)
+}
+
+/// Auto-detect the Qwen-Image VAE (prefer 2.1 over 1.0) under <models>/vae/.
+fn find_qwen_vae() -> Option<String> {
+    let vae_dir = PathBuf::from(get_models_dir()).join("vae");
+    let Ok(entries) = fs::read_dir(&vae_dir) else { return None };
+    let mut candidates: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            let n = n.to_lowercase();
+            (n.contains("qwen_image") || n.contains("qwen-image"))
+                && (n.ends_with(".safetensors") || n.ends_with(".gguf"))
+        })
+        .collect();
+    // Prefer 2.1 VAE (it is NOT interchangeable with the 1.0 VAE).
+    candidates.sort_by_key(|n| {
+        let lower = n.to_lowercase();
+        if lower.contains("2.1") || lower.contains("2_1") {
+            0
+        } else {
+            1
+        }
+    });
+    candidates
+        .first()
+        .map(|n| vae_dir.join(n).to_string_lossy().to_string())
+}
+
+/// Auto-detect the Qwen3-VL LLM text encoder under <models>/text_encoders/.
+fn find_qwen3vl_llm() -> Option<String> {
+    let te_dir = PathBuf::from(get_models_dir()).join("text_encoders");
+    let Ok(entries) = fs::read_dir(&te_dir) else { return None };
+    let mut files: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            let n = n.to_lowercase();
+            n.contains("qwen3vl") && (n.ends_with(".safetensors") || n.ends_with(".gguf"))
+        })
+        .collect();
+    files.sort();
+    // Exclude vision-only extracts when picking the full LLM.
+    files
+        .iter()
+        .find(|n| !n.to_lowercase().contains("visual"))
+        .map(|n| te_dir.join(n).to_string_lossy().to_string())
 }
 
 /// Whether the pipeline class declares image-editing support.
@@ -172,7 +238,7 @@ fn quantize_dim(v: i64) -> i32 {
 fn register_qwen_image_pipeline(registry: &mut NodeRegistry) {
     // The closure is Fn and must rescan on every invocation (captured Vec
     // would be moved); see bernini/minimax nodes for the same pattern.
-    let model_choices: Vec<String> = scan_qwen_dirs().into_iter().map(|(n, _)| n).collect();
+    let model_choices: Vec<String> = scan_qwen_models().into_iter().map(|(n, _)| n).collect();
     let default_model = model_choices.first().cloned().unwrap_or_default();
 
     let class_def = NodeClassDef {
@@ -332,20 +398,21 @@ fn register_qwen_image_pipeline(registry: &mut NodeRegistry) {
                 });
             }
 
-            let model_dir = resolve_qwen_dir(&model_label).ok_or_else(|| {
+            let model_path = resolve_qwen_model(&model_label).ok_or_else(|| {
                 ExecutorError::NodeExecutionFailed {
                     node_id: node_id_str.clone(),
                     message: format!(
-                        "Qwen-Image model directory '{}' not found under COMFY_MODELS_DIR \
-                         (need a self-contained Qwen-Image-* diffusers directory with \
-                         transformer/ and vae/)",
+                        "Qwen-Image model '{}' not found under COMFY_MODELS_DIR \
+                         (expected a Qwen-Image-* diffusers directory or a standalone \
+                         qwen-image-*.safetensors diffusion file)",
                         model_label
                     ),
                 }
             })?;
 
             let ref_images = resolve_input_images(&image_in, &node_id_str)?;
-            if !ref_images.is_empty() && !dir_supports_edit(&model_dir) {
+            let is_dir = model_path.is_dir();
+            if !ref_images.is_empty() && is_dir && !dir_supports_edit(&model_path) {
                 tracing::warn!(
                     "QwenImagePipeline: reference images provided but pipeline '{}' is not \
                      an Edit pipeline; the backend will ignore them",
@@ -353,15 +420,42 @@ fn register_qwen_image_pipeline(registry: &mut NodeRegistry) {
                 );
             }
 
+            // Build model config: directory layout uses model_path (sd.cpp
+            // rewrite extracts components), standalone file uses
+            // diffusion_model_path + auto-detected VAE/LLM.
+            let model_config = if is_dir {
+                ModelConfig::new().with_model(model_path.to_string_lossy().to_string())
+            } else {
+                let mut mc = ModelConfig::new()
+                    .with_diffusion_model(model_path.to_string_lossy().to_string());
+                if let Some(vae) = find_qwen_vae() {
+                    tracing::info!("QwenImagePipeline: auto-detected VAE '{}'", vae);
+                    mc = mc.with_vae(vae);
+                } else {
+                    tracing::warn!(
+                        "QwenImagePipeline: no Qwen-Image VAE found under {}/vae",
+                        get_models_dir()
+                    );
+                }
+                if let Some(llm) = find_qwen3vl_llm() {
+                    tracing::info!("QwenImagePipeline: auto-detected Qwen3-VL LLM '{}'", llm);
+                    mc = mc.with_llm(llm);
+                } else {
+                    tracing::warn!(
+                        "QwenImagePipeline: no Qwen3-VL text encoder found under {}/text_encoders",
+                        get_models_dir()
+                    );
+                }
+                mc
+            };
+
             let mut params = ImageGenParams::new(prompt)
                 .with_seed(seed)
                 .with_sample_steps(steps)
                 .with_cfg_scale(cfg)
                 .with_sample_method(SampleMethod::Euler)
                 .with_dimensions(width, height)
-                .with_model_config(
-                    ModelConfig::new().with_model(model_dir.to_string_lossy().to_string()),
-                );
+                .with_model_config(model_config);
             if !negative_prompt.is_empty() {
                 params = params.with_negative_prompt(negative_prompt);
             }
@@ -451,7 +545,7 @@ mod tests {
         write_index(&bare, "QwenImage21Pipeline");
 
         unsafe { std::env::set_var("COMFY_MODELS_DIR", &root); }
-        let found: Vec<String> = scan_qwen_dirs().into_iter().map(|(n, _)| n).collect();
+        let found: Vec<String> = scan_qwen_models().into_iter().map(|(n, _)| n).collect();
         assert_eq!(
             found,
             vec![
@@ -461,11 +555,11 @@ mod tests {
             ]
         );
 
-        let dir = resolve_qwen_dir("Qwen-Image-Edit").unwrap();
+        let dir = resolve_qwen_model("Qwen-Image-Edit").unwrap();
         assert!(dir_supports_edit(&dir));
-        let dir21 = resolve_qwen_dir("Qwen-Image-2.1").unwrap();
+        let dir21 = resolve_qwen_model("Qwen-Image-2.1").unwrap();
         assert!(!dir_supports_edit(&dir21));
-        assert!(resolve_qwen_dir("Qwen-Image-Weird").is_none());
+        assert!(resolve_qwen_model("Qwen-Image-Weird").is_none());
 
         let _ = fs::remove_dir_all(&root);
     }

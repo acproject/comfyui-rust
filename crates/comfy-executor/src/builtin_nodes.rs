@@ -239,7 +239,9 @@ fn auto_detect_vae(model_type: ModelType) -> Option<String> {
         ModelType::SD3 => find_file_in_dir(&vae_dir, &["sd3_vae", "ae"]),
         ModelType::Flux => find_file_in_dir(&vae_dir, &["flux_vae", "ae"]),
         ModelType::Flux2 => find_file_in_dir_contains(&vae_dir, &["flux2"]),
-        ModelType::QwenImage => find_file_in_dir_contains(&vae_dir, &["qwen_image_vae", "qwen-image"]),
+        // Match both 1.0 (qwen_image_vae) and 2.1 (qwen_image_2.1_vae) VAEs;
+        // alphabetical ordering picks the 2.1 file first when both exist.
+        ModelType::QwenImage => find_file_in_dir_contains(&vae_dir, &["qwen_image_vae", "qwen_image_2", "qwen-image"]),
         ModelType::SDXL | ModelType::SD15 | ModelType::SD2 => {
             find_file_in_dir(&vae_dir, &["sdxl_vae", "vae"])
         }
