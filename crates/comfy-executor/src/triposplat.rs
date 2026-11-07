@@ -272,7 +272,7 @@ fn register_triposplat_pipeline(registry: &mut NodeRegistry) {
                             node_id: node_id_str.clone(),
                             message: format!("Failed to read image file '{}': {}", resolved_path, e),
                         })?;
-                        SdImage::from_png_bytes(&img_bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
+                        SdImage::from_image_bytes(&img_bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
                             node_id: node_id_str.clone(),
                             message: format!("Failed to decode image '{}': {}", resolved_path, e),
                         })?

@@ -398,7 +398,10 @@ impl AppState {
             auto_start: config.inference.windows_auto_start,
             comfy_root: config.inference.windows_comfy_root.clone(),
             python_path: config.inference.python_path.clone(),
-            timeout_sec: 600,
+            // 2048x2048 @ 40 steps takes ~16 min on this GPU (int8 model,
+            // ~24s/step) — must exceed that or the UI reports failure while
+            // ComfyUI core is still generating.
+            timeout_sec: 1800,
             poll_interval_ms: 500,
         };
         let backend = Arc::new(WindowsBackend::new(win_config))

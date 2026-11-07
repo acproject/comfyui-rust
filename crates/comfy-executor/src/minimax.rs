@@ -94,7 +94,7 @@ fn resolve_input_images(value: &Value, node_id: &str) -> Result<Vec<SdImage>, Ex
             node_id: node_id.to_string(),
             message: format!("Failed to read image '{}': {}", resolved, e),
         })?;
-        SdImage::from_png_bytes(&bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
+        SdImage::from_image_bytes(&bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
             node_id: node_id.to_string(),
             message: format!("Failed to decode image '{}': {}", resolved, e),
         })

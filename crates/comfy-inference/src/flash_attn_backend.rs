@@ -1,6 +1,7 @@
 use crate::backend::InferenceBackend;
 use crate::error::{InferenceError, InferenceResult};
 use crate::image::{SdAudio, SdImage, SdVideo};
+use crate::windows_backend::run_blocking;
 use crate::params::{
     H3Context, H3Mode, H3Params, ContextIrParams,
     ImageGenParams, UpscaleParams, VideoGenParams,
@@ -324,7 +325,7 @@ impl FlashAttnBackend {
             .connect_timeout(Duration::from_secs(2))
             .build();
         if let Ok(client) = unload_client {
-            let _ = client.post(self.url("/unload")).send();
+            let _ = run_blocking(|| client.post(self.url("/unload")).send());
         }
         // Kill our child process
         self.kill_bridge_child();
@@ -647,14 +648,16 @@ impl FlashAttnBackend {
                 if let Ok(old_pid) = pid_str.trim().parse::<u32>() {
                     if Path::new(&format!("/proc/{}", old_pid)).exists() {
                         // 先探活：如果bridge健康，直接复用，不要杀
-                        let probe = reqwest::blocking::Client::builder()
-                            .timeout(Duration::from_secs(3))
-                            .connect_timeout(Duration::from_secs(2))
-                            .build()
-                            .ok()
-                            .and_then(|c| c.get(self.url("/health")).send().ok())
-                            .map(|r| r.status().is_success())
-                            .unwrap_or(false);
+                        let probe = run_blocking(|| {
+                            reqwest::blocking::Client::builder()
+                                .timeout(Duration::from_secs(3))
+                                .connect_timeout(Duration::from_secs(2))
+                                .build()
+                                .ok()
+                                .and_then(|c| c.get(self.url("/health")).send().ok())
+                                .map(|r| r.status().is_success())
+                                .unwrap_or(false)
+                        });
                         if probe {
                             tracing::info!("Existing Bridge (PID {}) is healthy, reusing it", old_pid);
                             *self.bridge_pid.lock().unwrap() = Some(old_pid);
@@ -795,7 +798,7 @@ impl FlashAttnBackend {
 
             // 尝试健康检查
             let health_url = self.url("/health");
-            match health_client.get(&health_url).send() {
+            match run_blocking(|| health_client.get(&health_url).send()) {
                 Ok(resp) if resp.status().is_success() => {
                     tracing::info!("FlashAttn Bridge is ready (took {:.1}s)", start.elapsed().as_secs_f64());
                     // 重置model_loaded标志（新进程需要重新加载模型）
@@ -813,7 +816,7 @@ impl FlashAttnBackend {
                 }
             }
 
-            std::thread::sleep(poll_interval);
+            run_blocking(|| std::thread::sleep(poll_interval));
         }
     }
 
@@ -827,7 +830,7 @@ impl FlashAttnBackend {
                 .connect_timeout(Duration::from_secs(3))
                 .build()
                 .unwrap();
-            match health_client.get(self.url("/health")).send() {
+            match run_blocking(|| health_client.get(self.url("/health")).send()) {
                 Ok(r) if r.status().is_success() => return Ok(()),
                 Ok(r) => tracing::warn!("Bridge port is open but /health returned {}", r.status()),
                 Err(e) => tracing::warn!("Bridge port is open but /health request failed: {}", e),
@@ -854,7 +857,7 @@ impl FlashAttnBackend {
                 .connect_timeout(Duration::from_secs(3))
                 .build()
                 .unwrap();
-            match health_client.get(self.url("/health")).send() {
+            match run_blocking(|| health_client.get(self.url("/health")).send()) {
                 Ok(r) if r.status().is_success() => return Ok(()),
                 Ok(r) => tracing::warn!("Bridge port is open but /health returned {}", r.status()),
                 Err(e) => tracing::warn!("Bridge port is open but /health request failed: {}", e),
@@ -933,10 +936,12 @@ impl FlashAttnBackend {
 
     /// 检查 Bridge 服务健康状态
     pub fn check_health(&self) -> InferenceResult<HealthResponse> {
-        let resp = self.client
-            .get(self.url("/health"))
-            .send()
-            .map_err(|e| InferenceError::ModelNotLoaded(format!("Bridge health check failed: {}", e)))?;
+        let resp = run_blocking(|| {
+            self.client
+                .get(self.url("/health"))
+                .send()
+        })
+        .map_err(|e| InferenceError::ModelNotLoaded(format!("Bridge health check failed: {}", e)))?;
 
         if !resp.status().is_success() {
             return Err(InferenceError::ModelNotLoaded(
@@ -944,7 +949,7 @@ impl FlashAttnBackend {
             ));
         }
 
-        let health: HealthResponse = resp.json()
+        let health: HealthResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::ModelNotLoaded(format!("Failed to parse health response: {}", e)))?;
 
         if health.model_loaded {
@@ -969,13 +974,15 @@ impl FlashAttnBackend {
                 ));
             }
 
-            let resp = self.client
-                .get(self.url(&format!("/load/status/{}", job_id)))
-                .send()
-                .map_err(|e| InferenceError::ModelNotLoaded(format!("Load status check failed: {}", e)))?;
+            let resp = run_blocking(|| {
+                self.client
+                    .get(self.url(&format!("/load/status/{}", job_id)))
+                    .send()
+            })
+            .map_err(|e| InferenceError::ModelNotLoaded(format!("Load status check failed: {}", e)))?;
 
             if resp.status().is_success() {
-                let status: LoadStatusResponse = resp.json()
+                let status: LoadStatusResponse = run_blocking(|| resp.json())
                     .map_err(|e| InferenceError::ModelNotLoaded(format!("Failed to parse load status: {}", e)))?;
 
                 // Report loading progress
@@ -1046,21 +1053,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/load"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::ModelNotLoaded(format!("Failed to send load request: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/load"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::ModelNotLoaded(format!("Failed to send load request: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::ModelNotLoaded(
                 format!("Failed to start model loading: {}", err_text)
             ));
         }
 
-        let job_resp: JobResponse = resp.json()
+        let job_resp: JobResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::ModelNotLoaded(format!("Failed to parse load response: {}", e)))?;
 
         // 等待加载完成
@@ -1089,19 +1098,21 @@ impl FlashAttnBackend {
                 ));
             }
 
-            let resp = self.client
-                .get(self.url(&format!("/generate/result/{}", job_id)))
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("Result poll failed: {}", e)))?;
+            let resp = run_blocking(|| {
+                self.client
+                    .get(self.url(&format!("/generate/result/{}", job_id)))
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("Result poll failed: {}", e)))?;
 
             if !resp.status().is_success() {
-                let err_text = resp.text().unwrap_or_default();
+                let err_text = run_blocking(|| resp.text()).unwrap_or_default();
                 return Err(InferenceError::GenerationFailed(
                     format!("Generation status check failed: {}", err_text)
                 ));
             }
 
-            let result: GenerationResultResponse = resp.json()
+            let result: GenerationResultResponse = run_blocking(|| resp.json())
                 .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse result: {}", e)))?;
 
             // Report progress if callback is set and step changed
@@ -1128,17 +1139,19 @@ impl FlashAttnBackend {
                 }
             }
 
-            std::thread::sleep(poll_interval);
+            run_blocking(|| std::thread::sleep(poll_interval));
         }
     }
 
     /// 下载媒体文件（视频或音频）到临时目录
     fn download_media(&self, job_id: &str, media_type: &str, tmp_dir: &TempDir) -> InferenceResult<Option<std::path::PathBuf>> {
         let url = self.url(&format!("/media/{}/{}", media_type, job_id));
-        let resp = self.client
-            .get(&url)
-            .send()
-            .map_err(|e| InferenceError::GenerationFailed(format!("Failed to download {}: {}", media_type, e)))?;
+        let resp = run_blocking(|| {
+            self.client
+                .get(&url)
+                .send()
+        })
+        .map_err(|e| InferenceError::GenerationFailed(format!("Failed to download {}: {}", media_type, e)))?;
 
         if !resp.status().is_success() {
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -1149,7 +1162,7 @@ impl FlashAttnBackend {
             ));
         }
 
-        let bytes = resp.bytes()
+        let bytes = run_blocking(|| resp.bytes())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to read {} bytes: {}", media_type, e)))?;
 
         let ext = if media_type == "video" { "mp4" } else { "wav" };
@@ -1181,21 +1194,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/generate/t2va"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("T2VA request failed: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/generate/t2va"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("T2VA request failed: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::GenerationFailed(
                 format!("T2VA generation failed to start: {}", err_text)
             ));
         }
 
-        let job_resp: JobResponse = resp.json()
+        let job_resp: JobResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse T2VA response: {}", e)))?;
 
         let result = self.poll_generation_result(&job_resp.job_id)?;
@@ -1231,21 +1246,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/generate/i2va"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("I2VA request failed: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/generate/i2va"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("I2VA request failed: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::GenerationFailed(
                 format!("I2VA generation failed to start: {}", err_text)
             ));
         }
 
-        let job_resp: JobResponse = resp.json()
+        let job_resp: JobResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse I2VA response: {}", e)))?;
 
         let result = self.poll_generation_result(&job_resp.job_id)?;
@@ -1294,21 +1311,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/generate/ref2va"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("Ref2VA request failed: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/generate/ref2va"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("Ref2VA request failed: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::GenerationFailed(
                 format!("Ref2VA generation failed to start: {}", err_text)
             ));
         }
 
-        let job_resp: JobResponse = resp.json()
+        let job_resp: JobResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse Ref2VA response: {}", e)))?;
 
         let result = self.poll_generation_result(&job_resp.job_id)?;
@@ -1338,21 +1357,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/generate/sfx"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("SFX request failed: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/generate/sfx"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("SFX request failed: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::GenerationFailed(
                 format!("SFX generation failed to start: {}", err_text)
             ));
         }
 
-        let job_resp: JobResponse = resp.json()
+        let job_resp: JobResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse SFX response: {}", e)))?;
 
         let result = self.poll_generation_result(&job_resp.job_id)?;
@@ -1382,21 +1403,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/generate/audio"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("Audio/BGM request failed: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/generate/audio"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("Audio/BGM request failed: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::GenerationFailed(
                 format!("Audio/BGM generation failed to start: {}", err_text)
             ));
         }
 
-        let job_resp: JobResponse = resp.json()
+        let job_resp: JobResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse Audio response: {}", e)))?;
 
         let result = self.poll_generation_result(&job_resp.job_id)?;
@@ -1445,21 +1468,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/generate/mr2va"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("MR2VA request failed: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/generate/mr2va"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("MR2VA request failed: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::GenerationFailed(
                 format!("MR2VA generation failed to start: {}", err_text)
             ));
         }
 
-        let job_resp: JobResponse = resp.json()
+        let job_resp: JobResponse = run_blocking(|| resp.json())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse MR2VA response: {}", e)))?;
 
         let result = self.poll_generation_result(&job_resp.job_id)?;
@@ -1499,21 +1524,23 @@ impl FlashAttnBackend {
         };
 
         let resp = self.with_auto_restart(|| {
-            self.client
-                .post(self.url("/context-ir"))
-                .json(&req)
-                .send()
-                .map_err(|e| InferenceError::GenerationFailed(format!("Context-IR request failed: {}", e)))
+            run_blocking(|| {
+                self.client
+                    .post(self.url("/context-ir"))
+                    .json(&req)
+                    .send()
+            })
+            .map_err(|e| InferenceError::GenerationFailed(format!("Context-IR request failed: {}", e)))
         })?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().unwrap_or_default();
+            let err_text = run_blocking(|| resp.text()).unwrap_or_default();
             return Err(InferenceError::GenerationFailed(
                 format!("Context-IR failed: {}", err_text)
             ));
         }
 
-        resp.json::<ContextIrResponse>()
+        run_blocking(|| resp.json::<ContextIrResponse>())
             .map_err(|e| InferenceError::GenerationFailed(format!("Failed to parse Context-IR response: {}", e)))
     }
 

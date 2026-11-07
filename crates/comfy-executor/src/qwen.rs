@@ -191,7 +191,7 @@ fn resolve_input_images(value: &Value, node_id: &str) -> Result<Vec<SdImage>, Ex
             node_id: node_id.to_string(),
             message: format!("Failed to read image '{}': {}", resolved, e),
         })?;
-        SdImage::from_png_bytes(&bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
+        SdImage::from_image_bytes(&bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
             node_id: node_id.to_string(),
             message: format!("Failed to decode image '{}': {}", resolved, e),
         })
@@ -487,8 +487,387 @@ fn register_qwen_image_pipeline(registry: &mut NodeRegistry) {
     }));
 }
 
+/// One-click multi-view pose generation for Qwen-Image 2.1.
+///
+/// Two pose-input modes are supported:
+/// - **text**: `pose_texts` holds one pose description per line (e.g.
+///   `front view`, `side view`, `back view`). Each line is appended to the
+///   base prompt and a separate image is generated.
+/// - **image**: `pose_images` holds one or more OpenPose-style skeleton /
+///   reference images. Each image becomes the sole `reference_latent` for a
+///   generation pass, so the model reproduces that pose.
+///
+/// All generated views are returned as a single IMAGE batch.
+fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
+    let model_choices: Vec<String> = scan_qwen_models().into_iter().map(|(n, _)| n).collect();
+    let default_model = model_choices.first().cloned().unwrap_or_default();
+
+    let class_def = NodeClassDef {
+        class_type: "QwenImageMultiViewPose".to_string(),
+        display_name: "Qwen-Image 多视图 Pose (2.1)".to_string(),
+        category: "image/qwen".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("multiline".to_string(), json!(true));
+                        e.insert("default".to_string(), json!(""));
+                        e
+                    },
+                });
+                m.insert("qwen_model".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert(
+                            "choices".to_string(),
+                            Value::Array(model_choices.iter().map(|s| json!(s)).collect()),
+                        );
+                        e
+                    },
+                });
+                m.insert("pose_mode".to_string(), InputTypeSpec {
+                    type_name: "COMBO".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("choices".to_string(), json!(["text", "image"]));
+                        e.insert("default".to_string(), json!("text"));
+                        e
+                    },
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("pose_texts".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("multiline".to_string(), json!(true));
+                        e.insert(
+                            "default".to_string(),
+                            json!("front view\nside view\nback view"),
+                        );
+                        e
+                    },
+                });
+                m.insert("pose_images".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("pose_dir".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("multiline".to_string(), json!(false));
+                        e.insert("default".to_string(), json!(""));
+                        e.insert("tooltip".to_string(), json!("pose_mode=image 时可填写骨架图目录（如 asset/pose1），节点将按文件名排序加载目录内全部 PNG/JPG 作为姿态参考；pose_images 连接的图片会追加在目录图片之后"));
+                        e
+                    },
+                });
+                m.insert("negative_prompt".to_string(), InputTypeSpec {
+                    type_name: "STRING".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("multiline".to_string(), json!(true));
+                        e.insert("default".to_string(), json!(""));
+                        e
+                    },
+                });
+                m.insert("seed".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("min".to_string(), json!(0));
+                        e.insert("max".to_string(), json!(u32::MAX as i64));
+                        e.insert("step".to_string(), json!(1));
+                        e.insert("default".to_string(), json!(42));
+                        e
+                    },
+                });
+                m.insert("steps".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("min".to_string(), json!(1));
+                        e.insert("max".to_string(), json!(100));
+                        e.insert("step".to_string(), json!(1));
+                        e.insert("default".to_string(), json!(30));
+                        e
+                    },
+                });
+                m.insert("cfg".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("max".to_string(), json!(20.0));
+                        e.insert("step".to_string(), json!(0.1));
+                        e.insert("default".to_string(), json!(6.0));
+                        e
+                    },
+                });
+                m.insert("width".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("min".to_string(), json!(256));
+                        e.insert("max".to_string(), json!(2048));
+                        e.insert("step".to_string(), json!(32));
+                        e.insert("default".to_string(), json!(1024));
+                        e
+                    },
+                });
+                m.insert("height".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("min".to_string(), json!(256));
+                        e.insert("max".to_string(), json!(2048));
+                        e.insert("step".to_string(), json!(32));
+                        e.insert("default".to_string(), json!(1024));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: true,
+        function_name: "run".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(move |ctx, node, node_id| {
+        let pose_images_in = ctx
+            .resolve_input(node_id, "pose_images")
+            .unwrap_or_else(|_| json!(null));
+        let model_label = node
+            .inputs
+            .get("qwen_model")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| default_model.clone());
+        let base_prompt = node
+            .inputs
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let pose_mode = node
+            .inputs
+            .get("pose_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text")
+            .to_string();
+        let pose_texts = node
+            .inputs
+            .get("pose_texts")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let negative_prompt = node
+            .inputs
+            .get("negative_prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let seed = node.inputs.get("seed").and_then(|v| v.as_i64()).unwrap_or(42);
+        let steps = node.inputs.get("steps").and_then(|v| v.as_i64()).unwrap_or(30) as i32;
+        let cfg = node
+            .inputs
+            .get("cfg")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(6.0) as f32;
+        let width = quantize_dim(node.inputs.get("width").and_then(|v| v.as_i64()).unwrap_or(1024));
+        let height = quantize_dim(
+            node.inputs.get("height").and_then(|v| v.as_i64()).unwrap_or(1024),
+        );
+        let node_id_str = node_id.to_string();
+        let pose_dir = node
+            .inputs
+            .get("pose_dir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        Box::pin(async move {
+            if base_prompt.trim().is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id_str.clone(),
+                    message: "prompt 不能为空：请填写人物/场景描述，例如 \"a young woman in a red dress, studio lighting\"".to_string(),
+                });
+            }
+
+            let model_path = resolve_qwen_model(&model_label).ok_or_else(|| {
+                ExecutorError::NodeExecutionFailed {
+                    node_id: node_id_str.clone(),
+                    message: format!(
+                        "Qwen-Image model '{}' not found under COMFY_MODELS_DIR",
+                        model_label
+                    ),
+                }
+            })?;
+
+            // Resolve the list of poses according to the selected mode.
+            enum Pose {
+                Text(String),
+                Image(SdImage),
+            }
+            let poses: Vec<Pose> = match pose_mode.as_str() {
+                "image" => {
+                    // Skeletons from `pose_dir` (sorted by filename) come
+                    // first, then any images wired into `pose_images`.
+                    let mut imgs: Vec<SdImage> = Vec::new();
+                    if !pose_dir.is_empty() {
+                        let dir = Path::new(&pose_dir);
+                        if !dir.exists() {
+                            return Err(ExecutorError::NodeExecutionFailed {
+                                node_id: node_id_str.clone(),
+                                message: format!("pose_dir '{}' 不存在（服务端工作目录内）", pose_dir),
+                            });
+                        }
+                        let mut files: Vec<std::path::PathBuf> = fs::read_dir(dir)
+                            .map_err(|e| ExecutorError::NodeExecutionFailed {
+                                node_id: node_id_str.clone(),
+                                message: format!("读取 pose_dir '{}' 失败: {}", pose_dir, e),
+                            })?
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.path())
+                            .filter(|p| {
+                                p.extension()
+                                    .and_then(|x| x.to_str())
+                                    .map(|x| {
+                                        let x = x.to_ascii_lowercase();
+                                        x == "png" || x == "jpg" || x == "jpeg"
+                                    })
+                                    .unwrap_or(false)
+                            })
+                            .collect();
+                        files.sort();
+                        for f in files {
+                            let bytes = fs::read(&f).map_err(|e| ExecutorError::NodeExecutionFailed {
+                                node_id: node_id_str.clone(),
+                                message: format!("读取骨架图 '{}' 失败: {}", f.display(), e),
+                            })?;
+                            let img = SdImage::from_image_bytes(&bytes).map_err(|e| {
+                                ExecutorError::NodeExecutionFailed {
+                                    node_id: node_id_str.clone(),
+                                    message: format!("解码骨架图 '{}' 失败: {}", f.display(), e),
+                                }
+                            })?;
+                            imgs.push(img);
+                        }
+                    }
+                    imgs.extend(resolve_input_images(&pose_images_in, &node_id_str)?);
+                    if imgs.is_empty() {
+                        return Err(ExecutorError::NodeExecutionFailed {
+                            node_id: node_id_str.clone(),
+                            message: "pose_mode=image：请填写 pose_dir（如 asset/pose1）或将 LoadImage 节点连接到 pose_images，提供至少一张姿态骨架图".to_string(),
+                        });
+                    }
+                    imgs.into_iter().map(Pose::Image).collect()
+                }
+                _ => {
+                    let lines: Vec<String> = pose_texts
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    if lines.is_empty() {
+                        return Err(ExecutorError::NodeExecutionFailed {
+                            node_id: node_id_str.clone(),
+                            message: "pose_mode=text：请在 pose_texts 中每行填写一个视图/姿态描述，例如 \"front view\\nside view\\nback view\"".to_string(),
+                        });
+                    }
+                    lines.into_iter().map(Pose::Text).collect()
+                }
+            };
+
+            // Build the shared model config once.
+            let is_dir = model_path.is_dir();
+            let model_config = if is_dir {
+                ModelConfig::new().with_model(model_path.to_string_lossy().to_string())
+            } else {
+                let mut mc = ModelConfig::new()
+                    .with_diffusion_model(model_path.to_string_lossy().to_string());
+                if let Some(vae) = find_qwen_vae() {
+                    mc = mc.with_vae(vae);
+                }
+                if let Some(llm) = find_qwen3vl_llm() {
+                    mc = mc.with_llm(llm);
+                }
+                mc
+            };
+
+            let backend = ctx.backend();
+            let mut all_images: Vec<SdImage> = Vec::new();
+
+            for (i, pose) in poses.iter().enumerate() {
+                // Qwen-Image is instruction-driven: with a skeleton reference
+                // the prompt must explicitly tell the model to follow the pose,
+                // otherwise the skeleton is only weakly honoured.
+                let prompt = match pose {
+                    Pose::Text(t) => format!("{}, {}", base_prompt.trim(), t),
+                    Pose::Image(_) => format!(
+                        "{}, replicating the exact same body pose as the figure shown in the reference skeleton image, full body visible",
+                        base_prompt.trim()
+                    ),
+                };
+
+                let mut params = ImageGenParams::new(prompt)
+                    .with_seed(seed.wrapping_add(i as i64))
+                    .with_sample_steps(steps)
+                    .with_cfg_scale(cfg)
+                    .with_sample_method(SampleMethod::Euler)
+                    .with_dimensions(width, height)
+                    .with_model_config(model_config.clone());
+                if !negative_prompt.is_empty() {
+                    params = params.with_negative_prompt(negative_prompt.clone());
+                }
+                if let Pose::Image(img) = pose {
+                    params.ref_images = vec![img.clone()];
+                }
+
+                let images = backend
+                    .generate_image(params)
+                    .map_err(ExecutorError::Inference)?;
+                all_images.extend(images);
+            }
+
+            let image_data: Vec<Value> = all_images
+                .iter()
+                .map(|img| {
+                    serde_json::to_value(img).unwrap_or_else(|_| {
+                        json!({
+                            "type": "image",
+                            "width": img.width,
+                            "height": img.height,
+                            "channel": img.channel,
+                        })
+                    })
+                })
+                .collect();
+            Ok(vec![json!({
+                "type": "image",
+                "images": image_data,
+            })])
+        })
+    }));
+}
+
 pub fn register_qwen_nodes(registry: &mut NodeRegistry) {
     register_qwen_image_pipeline(registry);
+    register_qwen_multiview_pose(registry);
 }
 
 #[cfg(test)]
@@ -607,5 +986,38 @@ mod tests {
                 "Qwen-Image-2.1 dir should appear in combo: {labels:?}"
             );
         }
+    }
+
+    #[test]
+    fn qwen_multiview_pose_node_is_registered() {
+        let _env = crate::TEST_ENV_LOCK.lock().unwrap();
+        let real_models = Path::new("/home/acproject/usb/comfyui/models");
+        if real_models.exists() {
+            unsafe { std::env::set_var("COMFY_MODELS_DIR", real_models); }
+        }
+        let mut registry = NodeRegistry::new();
+        crate::builtin_nodes::register_builtin_nodes(&mut registry);
+
+        let def = registry
+            .get_class_def("QwenImageMultiViewPose")
+            .expect("QwenImageMultiViewPose must be registered");
+        assert_eq!(def.category, "image/qwen");
+        assert_eq!(def.output_types, vec![IoType::Image]);
+        assert!(def.input_types.required.contains_key("prompt"));
+        assert!(def.input_types.required.contains_key("qwen_model"));
+        assert!(def.input_types.required.contains_key("pose_mode"));
+        assert!(def.input_types.optional.contains_key("pose_texts"));
+        assert!(def.input_types.optional.contains_key("pose_images"));
+        assert!(def.input_types.optional.contains_key("pose_dir"));
+
+        let pose_mode_choices = def
+            .input_types
+            .required
+            .get("pose_mode")
+            .and_then(|s| s.extra.get("choices"))
+            .and_then(|v| v.as_array())
+            .expect("pose_mode choices");
+        let modes: Vec<&str> = pose_mode_choices.iter().filter_map(|c| c.as_str()).collect();
+        assert_eq!(modes, vec!["text", "image"]);
     }
 }

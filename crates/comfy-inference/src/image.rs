@@ -94,6 +94,17 @@ impl SdImage {
         decode_png(bytes)
     }
 
+    /// Decode a PNG or JPEG image by sniffing the magic bytes. Use this for
+    /// arbitrary user-supplied image files (e.g. UI uploads), which may be
+    /// either format regardless of extension.
+    pub fn from_image_bytes(bytes: &[u8]) -> Result<Self, ImageError> {
+        if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+            decode_jpeg(bytes)
+        } else {
+            decode_png(bytes)
+        }
+    }
+
     pub fn to_base64_png(&self) -> Result<String, ImageError> {
         let png_bytes = self.to_png_bytes()?;
         Ok(base64_encode(&png_bytes))
@@ -1198,6 +1209,8 @@ pub enum ImageError {
     PngEncodeError(String),
     #[error("PNG decode error: {0}")]
     PngDecodeError(String),
+    #[error("JPEG decode error: {0}")]
+    JpegDecodeError(String),
     #[error("Base64 error: {0}")]
     Base64Error(String),
 }
@@ -1234,6 +1247,18 @@ fn encode_png(image: &SdImage) -> Result<Vec<u8>, ImageError> {
         writer.finish().map_err(|e| ImageError::PngEncodeError(e.to_string()))?;
     }
     Ok(buf)
+}
+
+fn decode_jpeg(bytes: &[u8]) -> Result<SdImage, ImageError> {
+    let cursor = zune_jpeg::zune_core::bytestream::ZCursor::new(bytes);
+    let mut decoder = zune_jpeg::JpegDecoder::new(cursor);
+    let data = decoder
+        .decode()
+        .map_err(|e| ImageError::JpegDecodeError(e.to_string()))?;
+    let (width, height) = decoder
+        .dimensions()
+        .ok_or_else(|| ImageError::JpegDecodeError("missing dimensions".to_string()))?;
+    SdImage::from_raw(width as u32, height as u32, 3, data)
 }
 
 fn decode_png(bytes: &[u8]) -> Result<SdImage, ImageError> {
@@ -1318,6 +1343,38 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, ImageError> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod image_bytes_tests {
+    use super::*;
+
+    // 8x6 solid-color baseline JPEG produced with .NET System.Drawing.
+    const JPEG_B64: &str = "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAGAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDk6KKK4z9KP//Z";
+
+    #[test]
+    fn decodes_jpeg_by_magic_bytes() {
+        let bytes = base64_decode(JPEG_B64).unwrap();
+        let img = SdImage::from_image_bytes(&bytes)
+            .unwrap_or_else(|e| panic!("JPEG decode failed: {e}"));
+        assert_eq!((img.width, img.height), (8, 6));
+        assert_eq!(img.channel, 3);
+        assert_eq!(img.data.len(), 8 * 6 * 3);
+    }
+
+    #[test]
+    fn decodes_png_by_magic_bytes() {
+        let img = SdImage::rgb(2, 2, vec![255u8; 12]).unwrap();
+        let png = img.to_png_bytes().unwrap();
+        let decoded = SdImage::from_image_bytes(&png).unwrap();
+        assert_eq!((decoded.width, decoded.height, decoded.channel), (2, 2, 3));
+    }
+
+    #[test]
+    fn garbage_input_still_reports_png_error() {
+        let err = SdImage::from_image_bytes(b"not an image").unwrap_err();
+        assert!(err.to_string().contains("PNG decode error"));
+    }
 }
 
 #[cfg(test)]

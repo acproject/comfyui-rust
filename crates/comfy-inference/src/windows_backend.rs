@@ -62,7 +62,7 @@ impl Default for WindowsBackendConfig {
             auto_start: true,
             comfy_root: Some(DEFAULT_COMFY_ROOT.to_string()),
             python_path: None,
-            timeout_sec: 600,
+            timeout_sec: 1800,
             poll_interval_ms: 500,
         }
     }
@@ -377,7 +377,7 @@ impl WindowsBackend {
         // Latent source: EmptyLatentImage (t2i) or VAEEncode (i2i).
         let denoise;
         if let Some(ref init) = params.init_image {
-            let uploaded = self.upload_image(init)?;
+            let uploaded = self.upload_image(init, "init")?;
             wf.insert(
                 "10".into(),
                 json!({
@@ -494,18 +494,47 @@ impl WindowsBackend {
                 "inputs": { "model": ["41", 0], "device": "auto", "dtype": "default" }
             }),
         );
+
+        // Upload reference images (pose / edit sources) and wire them into
+        // TextEncodeQwenImage21's autogrow `image_1..image_16` inputs.  In the
+        // API prompt format the group's inputs are named `images.image_N` —
+        // `build_nested_inputs` collects them into the `images` dict kwarg.
+        // The VAE is also passed so the node can build `reference_latents`.
+        let mut text_inputs = serde_json::Map::new();
+        text_inputs.insert("clip".into(), json!(["42", 0]));
+        text_inputs.insert("prompt".into(), json!(params.prompt));
+        text_inputs.insert("negative_prompt".into(), json!(params.negative_prompt));
+        text_inputs.insert(
+            "resolution".into(),
+            json!(params.width.max(params.height).max(512)),
+        );
+        if !params.ref_images.is_empty() {
+            text_inputs.insert("vae".into(), json!(["43", 0]));
+            for (i, img) in params.ref_images.iter().take(16).enumerate() {
+                let slot = i + 1;
+                let uploaded = self.upload_image(img, &format!("qwen-ref-{slot}"))?;
+                let load_id = format!("50{slot}");
+                wf.insert(
+                    load_id.clone(),
+                    json!({
+                        "class_type": "LoadImage",
+                        "inputs": { "image": uploaded }
+                    }),
+                );
+                text_inputs.insert(
+                    format!("images.image_{slot}"),
+                    json!([load_id, 0]),
+                );
+            }
+        }
+
         // TextEncodeQwenImage21 returns (positive, negative, latent) — the
         // latent at output index 2 is the correctly-shaped 4D latent.
         wf.insert(
             "6".into(),
             json!({
                 "class_type": "TextEncodeQwenImage21",
-                "inputs": {
-                    "clip": ["42", 0],
-                    "prompt": params.prompt,
-                    "negative_prompt": params.negative_prompt,
-                    "resolution": params.width.max(params.height).max(512)
-                }
+                "inputs": Value::Object(text_inputs)
             }),
         );
         // KSampler uses the cached model and the latent from TextEncodeQwenImage21.
@@ -647,9 +676,10 @@ impl WindowsBackend {
     }
 
     /// Upload an image to ComfyUI's input folder via POST /upload/image.
-    fn upload_image(&self, image: &SdImage) -> InferenceResult<String> {
+    /// `name_suffix` disambiguates multiple uploads within the same prompt.
+    fn upload_image(&self, image: &SdImage, name_suffix: &str) -> InferenceResult<String> {
         let png = image.to_png_bytes()?;
-        let filename = format!("comfyui-rust-win-init-{}.png", std::process::id());
+        let filename = format!("comfyui-rust-{}-{}.png", name_suffix, std::process::id());
         let form = reqwest::blocking::multipart::Form::new()
             .text("overwrite", "true")
             .part(
@@ -781,7 +811,7 @@ impl WindowsBackend {
                 .bytes()
                 .map_err(|e| InferenceError::NetworkError(e.to_string()))
         })?;
-        SdImage::from_png_bytes(&bytes).map_err(InferenceError::from)
+        SdImage::from_image_bytes(&bytes).map_err(InferenceError::from)
     }
 
     /// Extract image outputs from a history entry and download each one.
@@ -870,7 +900,7 @@ impl InferenceBackend for WindowsBackend {
 /// "Cannot drop a runtime in a context where blocking is not allowed").
 /// When called outside a tokio runtime (e.g. tests), the closure runs
 /// directly.
-fn run_blocking<F, R>(f: F) -> R
+pub fn run_blocking<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {

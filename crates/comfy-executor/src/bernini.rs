@@ -230,7 +230,7 @@ fn register_bernini_pipeline(registry: &mut NodeRegistry) {
                         node_id: node_id_str.clone(),
                         message: format!("Failed to read image file '{}': {}", resolved, e),
                     })?;
-                    Some(SdImage::from_png_bytes(&bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
+                    Some(SdImage::from_image_bytes(&bytes).map_err(|e| ExecutorError::NodeExecutionFailed {
                         node_id: node_id_str.clone(),
                         message: format!("Failed to decode image '{}': {}", resolved, e),
                     })?)

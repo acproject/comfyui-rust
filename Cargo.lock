@@ -476,6 +476,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "zune-jpeg",
 ]
 
 [[package]]
