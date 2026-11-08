@@ -1,7 +1,7 @@
 use crate::backend::InferenceBackend;
 use crate::error::{InferenceError, InferenceResult};
 use crate::image::{SdAudio, SdImage, SdVideo};
-use crate::windows_backend::run_blocking;
+use crate::cross_platform_blocking::run_blocking;
 use crate::params::{
     H3Context, H3Mode, H3Params, ContextIrParams,
     ImageGenParams, UpscaleParams, VideoGenParams,

@@ -23,6 +23,20 @@ pub mod flash_attn_backend;
 #[cfg(any(windows, feature = "comfyui-bridge"))]
 pub mod windows_backend;
 
+/// Cross-platform blocking helper shared by the HTTP-backed inference backends
+/// (`flash_attn_backend` on all platforms, `windows_backend` on Windows).
+///
+/// On Windows (or when `comfyui-bridge` is enabled on Unix) this re-exports
+/// [`windows_backend::run_blocking`]. Everywhere else it is the standalone
+/// [`cross_platform_blocking`] module, so both backends compile and call one
+/// helper without cfg-gating each call site.
+#[cfg(not(any(windows, feature = "comfyui-bridge")))]
+pub mod cross_platform_blocking;
+#[cfg(any(windows, feature = "comfyui-bridge"))]
+pub mod cross_platform_blocking {
+    pub use super::windows_backend::run_blocking;
+}
+
 pub use backend::{AsyncInferenceBackend, BackendCapabilities, InferenceBackend, NullBackend};
 pub use cli::{CliBackend, CliBackendConfig, convert_model_cli};
 pub use python::{
