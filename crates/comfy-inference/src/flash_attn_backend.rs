@@ -70,7 +70,7 @@ impl Default for FlashAttnConfig {
 
 /// Parse a positive timeout override (seconds) from an environment variable,
 /// falling back to `default` when unset, empty or unparseable.
-fn env_timeout_secs(name: &str, default: u64) -> u64 {
+pub fn env_timeout_secs(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())

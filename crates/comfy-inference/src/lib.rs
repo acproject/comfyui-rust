@@ -60,7 +60,7 @@ pub use local::{LocalBackend, convert_model, get_system_info, get_version, get_c
 pub use remote::{RemoteBackend, RemoteConfig};
 
 #[cfg(feature = "flash-attn")]
-pub use flash_attn_backend::{FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, HealthResponse, JobResponse};
+pub use flash_attn_backend::{env_timeout_secs, FlashAttnBackend, FlashAttnConfig, FlashProgressCallback, HealthResponse, JobResponse};
 
 #[cfg(any(windows, feature = "comfyui-bridge"))]
 pub use windows_backend::{WindowsBackend, WindowsBackendConfig, DEFAULT_COMFY_ROOT, DEFAULT_COMFY_URL};

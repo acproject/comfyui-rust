@@ -9685,7 +9685,12 @@ fn register_h3_director(registry: &mut NodeRegistry) {
                     .with_device(config_device)
                     .with_quantization(&config_quant)
                     .with_auto_start(config_auto_start)
-                    .with_timeout(900);
+                    // 长视频扩散实测 20–50 分钟，15 分钟会在 bridge 已完成时
+                    // 仍误判超时；默认放宽到 3 小时，可用 FLASH_ATTN_TIMEOUT_SEC 覆盖。
+                    .with_timeout(comfy_inference::env_timeout_secs(
+                        "FLASH_ATTN_TIMEOUT_SEC",
+                        10800,
+                    ));
                 let mut backend = FlashAttnBackend::new(config);
 
                 if let Some(cb) = progress_cb_for_blocking {
