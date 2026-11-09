@@ -6,7 +6,9 @@ use std::sync::Mutex;
 use tracing;
 
 pub struct Database {
-    conn: Mutex<Connection>,
+    /// Crate-visible so sibling store modules (e.g. `agent_store`) can share
+    /// the single pooled connection; not exposed outside `comfy-api`.
+    pub(crate) conn: Mutex<Connection>,
 }
 
 impl Database {
@@ -16,6 +18,10 @@ impl Database {
         }
 
         let conn = Connection::open(path).map_err(DatabaseError::Sqlite)?;
+        // SQLite keeps foreign-key enforcement OFF by default; enable it so
+        // ON DELETE CASCADE (e.g. agent_messages -> agent_sessions) actually fires.
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(DatabaseError::Sqlite)?;
 
         Self::init_tables(&conn)?;
 
@@ -28,6 +34,8 @@ impl Database {
 
     pub fn open_in_memory() -> Result<Self, DatabaseError> {
         let conn = Connection::open_in_memory().map_err(DatabaseError::Sqlite)?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(DatabaseError::Sqlite)?;
 
         Self::init_tables(&conn)?;
 
@@ -72,6 +80,29 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_assets_type   ON assets(asset_type);
             CREATE INDEX IF NOT EXISTS idx_assets_folder ON assets(custom_folder_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_rel_path ON assets(relative_path);
+
+            -- AI Agent conversation persistence (SQLite)
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+                id          TEXT PRIMARY KEY,
+                title       TEXT NOT NULL DEFAULT '',
+                meta        TEXT NOT NULL DEFAULT '{}',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS agent_messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id  TEXT NOT NULL,
+                role        TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                actions     TEXT NOT NULL DEFAULT '[]',
+                created_at  TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+            );
+            -- Incremental per-session history loads are always ordered by id.
+            CREATE INDEX IF NOT EXISTS idx_agent_messages_session
+                ON agent_messages(session_id, id);
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated
+                ON agent_sessions(updated_at);
             "
         ).map_err(DatabaseError::Sqlite)?;
         Ok(())

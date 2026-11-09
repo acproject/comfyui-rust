@@ -39,6 +39,10 @@ import type {
   CreateFolderRequest,
   UpdateAssetRequest,
   ScanAssetsResponse,
+  AgentSessionsResponse,
+  AgentSessionResponse,
+  AgentMessagesResponse,
+  AgentAppendMessageRequest,
 } from '@/types/api';
 
 const API_BASE = '';
@@ -283,6 +287,47 @@ export const api = {
 
   async getAgentModels(): Promise<AgentModelsResponse> {
     return fetchJson<AgentModelsResponse>('/agent/models');
+  },
+
+  // ---- AI Agent conversation persistence (SQLite) ----
+
+  async listAgentSessions(limit?: number): Promise<AgentSessionsResponse> {
+    const qs = limit ? `?limit=${limit}` : '';
+    return fetchJson<AgentSessionsResponse>(`/agent/sessions${qs}`);
+  },
+
+  async createAgentSession(title?: string): Promise<AgentSessionResponse> {
+    return fetchJson<AgentSessionResponse>('/agent/sessions', {
+      method: 'POST',
+      body: JSON.stringify(title ? { title } : {}),
+    });
+  },
+
+  async getAgentSessionMessages(sessionId: string): Promise<AgentMessagesResponse> {
+    return fetchJson<AgentMessagesResponse>(`/agent/sessions/${sessionId}/messages`);
+  },
+
+  async renameAgentSession(sessionId: string, title: string): Promise<AgentSessionResponse> {
+    return fetchJson<AgentSessionResponse>(`/agent/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    });
+  },
+
+  async deleteAgentSession(sessionId: string): Promise<{ deleted: string }> {
+    return fetchJson<{ deleted: string }>(`/agent/sessions/${sessionId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async appendAgentMessage(
+    sessionId: string,
+    body: AgentAppendMessageRequest,
+  ): Promise<{ message: import('@/types/api').AgentMessageRecord }> {
+    return fetchJson(`/agent/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
   async getLlmConfig(): Promise<LlmConfig> {

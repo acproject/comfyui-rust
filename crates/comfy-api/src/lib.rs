@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_store;
 pub mod assets;
 pub mod config;
 pub mod database;

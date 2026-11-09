@@ -355,6 +355,11 @@ pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub context: Option<ChatContext>,
+    /// When set, the conversation is persisted to (and replayed from) the
+    /// SQLite session with this id. When absent, the call stays stateless
+    /// (legacy behaviour) and nothing is written to the database.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,6 +405,9 @@ pub struct WorkflowEdgeInfo {
 pub struct ChatResponse {
     pub message: ChatMessage,
     pub actions: Vec<AgentAction>,
+    /// Echoes the persisted session id when the request carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,6 +526,7 @@ impl AgentService {
                 content,
             },
             actions,
+            session_id: None,
         })
     }
 

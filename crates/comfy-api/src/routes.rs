@@ -1,4 +1,5 @@
-use crate::agent::{AgentConfig, ChatRequest};
+use crate::agent::{AgentAction, AgentConfig, ChatMessage, ChatRequest};
+use crate::agent_store::AgentMessageRecord;
 use crate::assets::AssetFilters;
 use crate::config::ComfyConfig;
 use crate::error::ApiError;
@@ -1643,10 +1644,264 @@ pub async fn post_agent_chat(
     State(state): State<AppState>,
     Json(body): Json<ChatRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    match state.agent.chat(body).await {
-        Ok(response) => Ok(Json(serde_json::to_value(response).unwrap_or(Value::Null))),
-        Err(e) => Err(ApiError::Internal(e.to_string())),
+    let Some(session_id) = body.session_id.clone() else {
+        // Legacy stateless path: nothing is persisted.
+        let response = state
+            .agent
+            .chat(body)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        return Ok(Json(serde_json::to_value(response).unwrap_or(Value::Null)));
+    };
+
+    // Persisted path: the database is the source of truth for history.
+    if state
+        .db
+        .get_agent_session(&session_id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(format!(
+            "Agent session not found: {session_id}"
+        )));
     }
+
+    // The frontend always appends the new user turn to `messages`; take the
+    // last one and rebuild the LLM input from stored history instead of
+    // trusting the client-provided array.
+    let latest_user = body
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .cloned()
+        .ok_or_else(|| ApiError::BadRequest("No user message in request".to_string()))?;
+
+    let history = state
+        .db
+        .list_agent_messages(&session_id, None)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let mut replayed: Vec<ChatMessage> = history
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .map(|m| ChatMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        })
+        .collect();
+    replayed.push(latest_user.clone());
+
+    let replay_request = ChatRequest {
+        messages: replayed,
+        context: body.context,
+        session_id: Some(session_id.clone()),
+    };
+    let mut response = state
+        .agent
+        .chat(replay_request)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // Idempotency guard for client retries: skip the user row when the last
+    // persisted message is already the identical user turn.
+    let already_stored = history
+        .last()
+        .map(|m| m.role == "user" && m.content == latest_user.content)
+        .unwrap_or(false);
+    if !already_stored {
+        state
+            .db
+            .add_agent_message(&session_id, "user", &latest_user.content, "[]")
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
+    let actions_json = serde_json::to_string(&response.actions)?;
+    state
+        .db
+        .add_agent_message(
+            &session_id,
+            "assistant",
+            &response.message.content,
+            &actions_json,
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // Derive a title from the first user message when none was given.
+    if let Some(session) = state
+        .db
+        .get_agent_session(&session_id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        if session.title.is_empty() {
+            let title = build_session_title(&latest_user.content);
+            let _ = state.db.rename_agent_session(&session_id, &title);
+        }
+    }
+
+    response.session_id = Some(session_id);
+    Ok(Json(serde_json::to_value(response).unwrap_or(Value::Null)))
+}
+
+/// Truncate the first user message into a short session title.
+fn build_session_title(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let max_chars = 40;
+    if collapsed.chars().count() <= max_chars {
+        collapsed
+    } else {
+        let mut truncated: String = collapsed.chars().take(max_chars).collect();
+        truncated.push('…');
+        truncated
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSessionRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub meta: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameSessionRequest {
+    pub title: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppendMessageRequest {
+    pub role: String,
+    pub content: String,
+    /// Structured agent actions; serialized into the message's `actions` JSON.
+    #[serde(default)]
+    pub actions: Vec<AgentAction>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SessionListQuery {
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+pub async fn post_agent_session(
+    State(state): State<AppState>,
+    Json(body): Json<CreateSessionRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let meta = match &body.meta {
+        Some(v) => serde_json::to_string(v)?,
+        None => "{}".to_string(),
+    };
+    let session = state
+        .db
+        .create_agent_session(body.title.as_deref(), Some(&meta))
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "session": session })))
+}
+
+pub async fn get_agent_sessions(
+    State(state): State<AppState>,
+    Query(query): Query<SessionListQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let sessions = state
+        .db
+        .list_agent_sessions(query.limit)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "sessions": sessions })))
+}
+
+pub async fn get_agent_session_messages(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Query(query): Query<SessionListQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if state
+        .db
+        .get_agent_session(&session_id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(format!(
+            "Agent session not found: {session_id}"
+        )));
+    }
+    let messages = state
+        .db
+        .list_agent_messages(&session_id, query.limit)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({
+        "session_id": session_id,
+        "messages": messages.iter().map(serialize_message).collect::<Vec<_>>()
+    })))
+}
+
+pub async fn patch_agent_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<RenameSessionRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let updated = state
+        .db
+        .rename_agent_session(&session_id, body.title.trim())
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if !updated {
+        return Err(ApiError::NotFound(format!(
+            "Agent session not found: {session_id}"
+        )));
+    }
+    let session = state
+        .db
+        .get_agent_session(&session_id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound(format!("Agent session not found: {session_id}")))?;
+    Ok(Json(json!({ "session": session })))
+}
+
+pub async fn delete_agent_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    // DELETE is idempotent: a missing session still returns 200.
+    state
+        .db
+        .delete_agent_session(&session_id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "deleted": session_id })))
+}
+
+pub async fn post_agent_session_message(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<AppendMessageRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !matches!(body.role.as_str(), "user" | "assistant" | "system") {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid message role: {}",
+            body.role
+        )));
+    }
+    if body.content.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "Message content must not be empty".to_string(),
+        ));
+    }
+    let actions_json = serde_json::to_string(&body.actions)?;
+    let record = state
+        .db
+        .add_agent_message(&session_id, &body.role, &body.content, &actions_json)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "message": serialize_message(&record) })))
+}
+
+/// Render a stored message with its `actions` JSON parsed back into an array.
+fn serialize_message(record: &AgentMessageRecord) -> Value {
+    let actions: Value = serde_json::from_str(&record.actions).unwrap_or(json!([]));
+    json!({
+        "id": record.id,
+        "session_id": record.session_id,
+        "role": record.role,
+        "content": record.content,
+        "actions": actions,
+        "created_at": record.created_at,
+    })
 }
 
 pub async fn get_agent_models(

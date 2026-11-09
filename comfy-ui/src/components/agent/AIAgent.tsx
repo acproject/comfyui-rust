@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type FC } from 'react';
-import { Send, Bot, User, Settings, Trash2, CheckCircle, XCircle, Loader2, Workflow, Sparkles, BookOpen } from 'lucide-react';
+import { Send, Bot, User, Settings, Trash2, CheckCircle, XCircle, Loader2, Workflow, Sparkles, BookOpen, Plus, MessageSquare } from 'lucide-react';
 import { useWorkflowStore } from '@/store/workflow';
 import { useCustomNodesStore } from '@/store/customNodes';
 import { api } from '@/api/client';
@@ -10,6 +10,7 @@ import type {
   AgentChatResponse,
   AgentChatContext,
   AgentModelInfo,
+  AgentSession,
   WorkflowTemplate,
   ModelKnowledgeEntry,
 } from '@/types/api';
@@ -46,6 +47,10 @@ const AIAgent: FC = () => {
   const [modelRecommendations, setModelRecommendations] = useState<ModelKnowledgeEntry[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showRecommendations, setShowRecommendations] = useState(false);
+  // SQLite-backed conversation persistence
+  const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const addNode = useWorkflowStore((s) => s.addNode);
@@ -79,6 +84,97 @@ const AIAgent: FC = () => {
       setModelRecommendations(res.models);
     }).catch(() => {});
   }, []);
+
+  // ---- SQLite conversation persistence ----
+
+  const mapRecordToDisplay = useCallback((record: {
+    id: number;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    actions?: AgentAction[];
+    created_at: string;
+  }): DisplayMessage => ({
+    id: String(record.id),
+    role: record.role,
+    content: record.content,
+    timestamp: new Date(record.created_at).getTime() || Date.now(),
+    actions: record.actions ?? [],
+  }), []);
+
+  const refreshSessions = useCallback(async (): Promise<AgentSession[]> => {
+    const res = await api.listAgentSessions();
+    setSessions(res.sessions);
+    return res.sessions;
+  }, []);
+
+  const loadSessionMessages = useCallback(async (id: string) => {
+    setSessionsLoading(true);
+    try {
+      const res = await api.getAgentSessionMessages(id);
+      setMessages(res.messages.map(mapRecordToDisplay));
+      setSessionId(id);
+    } catch (err) {
+      console.error('Failed to load session messages:', err);
+      setMessages([]);
+      setSessionId(null);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [mapRecordToDisplay]);
+
+  // On mount: restore the most recently active conversation, if any.
+  useEffect(() => {
+    refreshSessions()
+      .then((list) => {
+        if (list.length > 0) {
+          return loadSessionMessages(list[0].id);
+        }
+      })
+      .catch(() => {});
+  }, [refreshSessions, loadSessionMessages]);
+
+  const handleNewSession = useCallback(() => {
+    // Lazy creation: no empty row is written until the first message is sent.
+    setSessionId(null);
+    setMessages([]);
+  }, []);
+
+  const handleSelectSession = useCallback((id: string) => {
+    if (!id) {
+      handleNewSession();
+      return;
+    }
+    if (id === sessionId) return;
+    loadSessionMessages(id);
+  }, [sessionId, handleNewSession, loadSessionMessages]);
+
+  const handleDeleteSession = useCallback(async () => {
+    if (!sessionId) {
+      setMessages([]);
+      return;
+    }
+    const deletedId = sessionId;
+    try {
+      await api.deleteAgentSession(deletedId);
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+    }
+    const remaining = await refreshSessions();
+    if (remaining.length > 0) {
+      await loadSessionMessages(remaining[0].id);
+    } else {
+      setSessionId(null);
+      setMessages([]);
+    }
+  }, [sessionId, refreshSessions, loadSessionMessages]);
+
+  /** Create the backing session on the first message of a fresh chat. */
+  const ensureSessionId = useCallback(async (): Promise<string> => {
+    if (sessionId) return sessionId;
+    const res = await api.createAgentSession();
+    setSessionId(res.session.id);
+    return res.session.id;
+  }, [sessionId]);
 
   const buildContext = useCallback((): AgentChatContext => {
     const availableNodes = Object.keys(objectInfo);
@@ -221,6 +317,13 @@ const AIAgent: FC = () => {
     if (!text || isProcessing) return;
 
     setInput('');
+    const createdFresh = !sessionId;
+    let sid = '';
+    try {
+      sid = await ensureSessionId();
+    } catch (err) {
+      console.error('Failed to create agent session:', err);
+    }
     const userMsg: DisplayMessage = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -241,6 +344,8 @@ const AIAgent: FC = () => {
         const response: AgentChatResponse = await api.agentChat({
           messages: chatMessages,
           context,
+          // The server replays history from SQLite and persists both turns.
+          ...(sid ? { session_id: sid } : {}),
         });
 
         const displayContent = stripActionBlocks(response.message.content);
@@ -258,6 +363,7 @@ const AIAgent: FC = () => {
           actionResults,
         };
         setMessages((prev) => [...prev, assistantMsg]);
+        void refreshSessions();
       } else {
         const response = await processLocalMessage(text);
         const actions = parseActions(response);
@@ -275,8 +381,31 @@ const AIAgent: FC = () => {
           actionResults,
         };
         setMessages((prev) => [...prev, assistantMsg]);
+        // Local mode never hits /agent/chat, so persist both turns explicitly.
+        if (sid) {
+          try {
+            await api.appendAgentMessage(sid, { role: 'user', content: text });
+            await api.appendAgentMessage(sid, {
+              role: 'assistant',
+              content: displayContent,
+              actions,
+            });
+            void refreshSessions();
+          } catch (err) {
+            console.error('Failed to persist local-mode messages:', err);
+          }
+        }
       }
     } catch (err) {
+      // Keep the conversation list clean: drop an empty session created for
+      // a turn that never produced a reply.
+      if (createdFresh && sid) {
+        try {
+          await api.deleteAgentSession(sid);
+          setSessionId(null);
+          void refreshSessions();
+        } catch { /* best effort */ }
+      }
       const assistantMsg: DisplayMessage = {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -329,8 +458,9 @@ const AIAgent: FC = () => {
     }
   };
 
-  const handleClearChat = () => {
-    setMessages([]);
+  const sessionTitle = (s: AgentSession): string => {
+    if (s.title.trim()) return s.title;
+    return s.message_count > 0 ? 'Untitled chat' : 'New chat';
   };
 
   const renderMessageContent = (content: string) => {
@@ -679,6 +809,21 @@ const AIAgent: FC = () => {
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
           <button
+            onClick={handleNewSession}
+            title="New chat"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#718096',
+              cursor: 'pointer',
+              padding: 2,
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <Plus size={14} />
+          </button>
+          <button
             onClick={() => setShowTemplates(!showTemplates)}
             title="Workflow templates"
             style={{
@@ -709,8 +854,8 @@ const AIAgent: FC = () => {
             <Sparkles size={14} />
           </button>
           <button
-            onClick={handleClearChat}
-            title="Clear chat"
+            onClick={handleDeleteSession}
+            title={sessionId ? 'Delete current chat' : 'Clear chat'}
             style={{
               background: 'transparent',
               border: 'none',
@@ -739,6 +884,45 @@ const AIAgent: FC = () => {
             <Settings size={14} />
           </button>
         </div>
+      </div>
+
+      {/* SQLite-backed conversation switcher */}
+      <div
+        style={{
+          padding: '6px 10px',
+          borderBottom: '1px solid #2d3748',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          background: '#171d28',
+        }}
+      >
+        <MessageSquare size={13} style={{ color: '#5a6abf', flexShrink: 0 }} />
+        <select
+          value={sessionId ?? ''}
+          onChange={(e) => handleSelectSession(e.target.value)}
+          title="Switch conversation"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: '#1a202c',
+            color: '#cbd5e0',
+            border: '1px solid #2d3748',
+            borderRadius: 4,
+            fontSize: 11,
+            padding: '3px 4px',
+            outline: 'none',
+            cursor: 'pointer',
+          }}
+        >
+          <option value="">New chat (not saved yet)</option>
+          {sessions.map((s) => (
+            <option key={s.id} value={s.id}>
+              {sessionTitle(s)}{s.message_count > 0 ? ` (${s.message_count})` : ''}
+            </option>
+          ))}
+        </select>
+        {sessionsLoading && <Loader2 size={13} style={{ color: '#718096', flexShrink: 0, animation: 'spin 1s linear infinite' }} />}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>

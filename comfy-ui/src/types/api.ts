@@ -298,6 +298,8 @@ export interface AgentChatContext {
 export interface AgentChatRequest {
   messages: AgentChatMessage[];
   context?: AgentChatContext;
+  /** Persist the turn under this SQLite session; omit for stateless calls. */
+  session_id?: string;
 }
 
 export interface AgentAction {
@@ -308,6 +310,47 @@ export interface AgentAction {
 export interface AgentChatResponse {
   message: AgentChatMessage;
   actions: AgentAction[];
+  /** Echoed when the request carried a session_id. */
+  session_id?: string;
+}
+
+/** One persisted AI Agent conversation (SQLite row). */
+export interface AgentSession {
+  id: string;
+  title: string;
+  meta: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+/** One persisted chat turn inside an AgentSession. */
+export interface AgentMessageRecord {
+  id: number;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  actions: AgentAction[];
+  created_at: string;
+}
+
+export interface AgentSessionsResponse {
+  sessions: AgentSession[];
+}
+
+export interface AgentSessionResponse {
+  session: AgentSession;
+}
+
+export interface AgentMessagesResponse {
+  session_id: string;
+  messages: AgentMessageRecord[];
+}
+
+export interface AgentAppendMessageRequest {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  actions?: AgentAction[];
 }
 
 export interface AgentModelInfo {
