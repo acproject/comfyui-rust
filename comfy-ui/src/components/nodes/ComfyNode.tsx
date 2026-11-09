@@ -37,6 +37,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
   const [collapsed, setCollapsed] = useState(false);
 
   const objectInfo = useWorkflowStore((s) => s.objectInfo[data.classType]);
+  const allObjectInfo = useWorkflowStore((s) => s.objectInfo);
   const executingNodeId = useWorkflowStore((s) => s.executingNodeId);
   const executedNodeIds = useWorkflowStore((s) => s.executedNodeIds);
   const cachedNodeIds = useWorkflowStore((s) => s.cachedNodeIds);
@@ -141,6 +142,51 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
 
   const nonPrimitiveInputs = allInputSpecs.filter((s) => !isPrimitive(s.typeName));
 
+  // Primitive widgets (STRING/INT/...) can also be driven by a link — e.g.
+  // H3ContextIR.formatted_prompt -> H3Director.prompt. Detect that state from
+  // either the live edge set or a persisted [nodeId, slot] link value, so the
+  // row renders a connection anchor instead of an editable widget.
+  const edges = useWorkflowStore((s) => s.edges);
+  const nodes = useWorkflowStore((s) => s.nodes);
+  const disconnectNode = useWorkflowStore((s) => s.disconnectNode);
+  const updateNodeInput = useWorkflowStore((s) => s.updateNodeInput);
+  const incomingEdges = edges.filter((e) => e.target === id);
+  const isLinkValue = (v: unknown): v is [string, number] =>
+    Array.isArray(v) && v.length === 2 && typeof v[0] === 'string' && typeof v[1] === 'number';
+  const edgeByTarget = new Map(incomingEdges.map((e) => [e.targetHandle, e]));
+  const isInputConnected = (name: string, value: unknown) =>
+    edgeByTarget.has(name) || isLinkValue(value);
+  const connectedPrimitiveSpecs = allInputSpecs.filter(
+    (s) => isPrimitive(s.typeName) && isInputConnected(s.name, data.inputs[s.name]),
+  );
+  // Render a target Handle for non-primitive inputs AND linked primitives.
+  const handleSpecs = [...nonPrimitiveInputs, ...connectedPrimitiveSpecs];
+  const nodeClassById = new Map(nodes.map((n) => [n.id, n.data.classType]));
+
+  const handleDisconnectInput = useCallback(
+    (inputName: string) => {
+      const edge = edgeByTarget.get(inputName);
+      if (edge) disconnectNode(edge.id);
+      // A persisted link value ([id, slot]) survives edge deletion; reset a
+      // linked primitive back to a usable widget default.
+      const v = data.inputs[inputName];
+      if (isLinkValue(v)) {
+        const spec = allInputSpecs.find((s) => s.name === inputName);
+        const fallback =
+          spec?.typeName === 'BOOLEAN'
+            ? false
+            : spec?.typeName === 'INT' || spec?.typeName === 'FLOAT'
+              ? 0
+              : spec?.typeName === 'COMBO'
+                ? (spec.choices?.[0] ?? '')
+                : '';
+        updateNodeInput(id, inputName, fallback);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [edgeByTarget, data.inputs, id, disconnectNode, updateNodeInput, allInputSpecs],
+  );
+
   let y = HEADER_H;
   if (!collapsed) {
     if (isImageNode) y += 80;
@@ -199,12 +245,13 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
         position: 'relative',
       }}
     >
-      {nonPrimitiveInputs.map((spec) => (
+      {handleSpecs.map((spec) => (
         <Handle
           key={`in-${spec.name}`}
           type="target"
           position={Position.Left}
           id={spec.name}
+          isConnectable
           style={{
             background: getTypeColor(spec.typeName),
             width: 12,
@@ -345,7 +392,27 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
               const { name, typeName, choices, multiline } = spec;
               const value = data.inputs[name];
               const typeColor = getTypeColor(typeName);
-              const showHandle = !isPrimitive(typeName);
+              const linkedPrimitive = isPrimitive(typeName) && isInputConnected(name, value);
+              const showHandle = !isPrimitive(typeName) || linkedPrimitive;
+
+              // Resolve a human-readable source label for a linked primitive.
+              let linkLabel = '';
+              if (linkedPrimitive) {
+                const edge = edgeByTarget.get(name);
+                let sourceId: string | undefined;
+                let sourceHandle: string | undefined;
+                if (edge) {
+                  sourceId = edge.source ?? undefined;
+                  sourceHandle = edge.sourceHandle ?? undefined;
+                } else if (isLinkValue(value)) {
+                  sourceId = value[0];
+                  const srcClass = sourceId ? nodeClassById.get(sourceId) : undefined;
+                  const outNames = srcClass ? allObjectInfo[srcClass]?.output_names : undefined;
+                  sourceHandle = outNames?.[value[1]] ?? `slot ${value[1]}`;
+                }
+                const srcClass = sourceId ? nodeClassById.get(sourceId) : undefined;
+                linkLabel = srcClass ? `${srcClass}.${sourceHandle ?? '?'}` : (sourceHandle ?? 'linked');
+              }
 
               return (
                 <div
@@ -383,7 +450,52 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
                   }}>
                     {name}
                   </span>
-                  {isPrimitive(typeName) && (
+                  {linkedPrimitive ? (
+                    // Link-driven primitive: show the source instead of an
+                    // editable widget (an editable box would render the
+                    // [nodeId, slot] array as garbled text).
+                    <span
+                      title={`Connected to ${linkLabel}`}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 10,
+                        color: typeColor,
+                        background: `${typeColor}1a`,
+                        border: `1px solid ${typeColor}55`,
+                        borderRadius: 3,
+                        padding: '1px 4px',
+                        marginTop: multiline ? 3 : 0,
+                      }}
+                    >
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {linkLabel}
+                      </span>
+                      <button
+                        title="Disconnect"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDisconnectInput(name);
+                        }}
+                        style={{
+                          marginLeft: 'auto',
+                          flexShrink: 0,
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#a0aec0',
+                          cursor: 'pointer',
+                          fontSize: 11,
+                          lineHeight: 1,
+                          padding: 0,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ) : isPrimitive(typeName) ? (
                     <NodeInputField
                       nodeId={id}
                       name={name}
@@ -393,7 +505,7 @@ const ComfyNodeComponent: FC<ComfyNodeProps> = memo(({ id, data, selected }) => 
                       classType={classType}
                       multiline={multiline}
                     />
-                  )}
+                  ) : null}
                 </div>
               );
             })}
