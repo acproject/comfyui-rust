@@ -451,6 +451,21 @@ impl InferenceBackend for LocalBackend {
             c_params.ref_images_count = ref_c_images.len() as c_int;
         }
 
+        // LoRA weights (path + multiplier) mapped to the C API CLora array.
+        let lora_c: Vec<CLora> = params
+            .loras
+            .iter()
+            .map(|l| CLora {
+                is_high_noise: l.is_high_noise,
+                multiplier: l.multiplier,
+                path: strings.cstr(&l.path),
+            })
+            .collect();
+        if !lora_c.is_empty() {
+            c_params.loras = lora_c.as_ptr();
+            c_params.lora_count = lora_c.len() as u32;
+        }
+
         let mut result: *mut CSdImage = ptr::null_mut();
         let mut num_images: c_int = 0;
         let ok = unsafe { generate_image(ctx, &c_params, &mut result, &mut num_images) };

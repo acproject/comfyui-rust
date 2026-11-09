@@ -165,6 +165,95 @@ fn find_qwen3vl_llm() -> Option<String> {
         .map(|n| te_dir.join(n).to_string_lossy().to_string())
 }
 
+/// Qwen-Image-Edit (2509/2511) uses Qwen2.5-VL-7B as the text encoder
+/// (Qwen-Image-2.1 uses Qwen3-VL-8B instead). Detect the full LLM encoder,
+/// excluding the mmproj/vision extract.
+fn find_qwen25vl_llm() -> Option<String> {
+    let te_dir = PathBuf::from(get_models_dir()).join("text_encoders");
+    let Ok(entries) = fs::read_dir(&te_dir) else { return None };
+    let mut files: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            let n = n.to_lowercase();
+            (n.contains("qwen2.5-vl") || n.contains("qwen2_5_vl") || n.contains("qwen2.5vl")
+                || n.contains("qwen2-vl") || n.contains("qwen2_5"))
+                && (n.ends_with(".safetensors") || n.ends_with(".gguf"))
+                && !n.contains("mmproj")
+                && !n.contains("visual")
+                && !n.contains("vit")
+        })
+        .collect();
+    files.sort();
+    files.first().map(|n| te_dir.join(n).to_string_lossy().to_string())
+}
+
+/// Vision tower / mmproj for the Qwen2.5-VL encoder. Required by Qwen-Image
+/// image editing (reference-image input) and passed as `--llm_vision`.
+fn find_qwen25vl_vision() -> Option<String> {
+    let te_dir = PathBuf::from(get_models_dir()).join("text_encoders");
+    let Ok(entries) = fs::read_dir(&te_dir) else { return None };
+    let mut files: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            let n = n.to_lowercase();
+            (n.contains("qwen2.5-vl") || n.contains("qwen2_5_vl") || n.contains("qwen2.5vl")
+                || n.contains("qwen2-vl") || n.contains("qwen2_5"))
+                && (n.contains("mmproj") || n.contains("visual") || n.contains("vit"))
+                && (n.ends_with(".safetensors") || n.ends_with(".gguf"))
+        })
+        .collect();
+    files.sort();
+    files.first().map(|n| te_dir.join(n).to_string_lossy().to_string())
+}
+
+/// Build a standalone (non-diffusers-directory) model config, auto-selecting
+/// the correct text-encoder family: Qwen-Image-Edit (2509/2511) uses
+/// Qwen2.5-VL-7B (+ vision/mmproj), Qwen-Image-2.1 uses Qwen3-VL-8B.
+fn standalone_qwen_config(model_path: &Path, label: &str) -> ModelConfig {
+    let mut mc = ModelConfig::new()
+        .with_diffusion_model(model_path.to_string_lossy().to_string());
+    if let Some(vae) = find_qwen_vae() {
+        tracing::info!("QwenImagePipeline: auto-detected VAE '{}'", vae);
+        mc = mc.with_vae(vae);
+    } else {
+        tracing::warn!("QwenImagePipeline: no Qwen-Image VAE found under {}/vae", get_models_dir());
+    }
+
+    let lower = label.to_lowercase();
+    if lower.contains("edit") {
+        if let Some(llm) = find_qwen25vl_llm() {
+            tracing::info!("Qwen-Image-Edit: auto-detected Qwen2.5-VL LLM '{}'", llm);
+            mc = mc.with_llm(llm);
+        } else {
+            tracing::warn!(
+                "Qwen-Image-Edit: no Qwen2.5-VL text encoder found under {}/text_encoders",
+                get_models_dir()
+            );
+        }
+        if let Some(vision) = find_qwen25vl_vision() {
+            tracing::info!("Qwen-Image-Edit: auto-detected Qwen2.5-VL vision '{}'", vision);
+            mc = mc.with_llm_vision(vision);
+        } else {
+            tracing::warn!(
+                "Qwen-Image-Edit: no Qwen2.5-VL mmproj/vision found under {}/text_encoders; \
+                 image editing (reference input) will fail",
+                get_models_dir()
+            );
+        }
+    } else if let Some(llm) = find_qwen3vl_llm() {
+        tracing::info!("QwenImagePipeline: auto-detected Qwen3-VL LLM '{}'", llm);
+        mc = mc.with_llm(llm);
+    } else {
+        tracing::warn!(
+            "QwenImagePipeline: no Qwen3-VL text encoder found under {}/text_encoders",
+            get_models_dir()
+        );
+    }
+    mc
+}
+
 /// Whether the pipeline class declares image-editing support.
 fn dir_supports_edit(dir: &Path) -> bool {
     pipeline_class(dir)
@@ -426,27 +515,7 @@ fn register_qwen_image_pipeline(registry: &mut NodeRegistry) {
             let model_config = if is_dir {
                 ModelConfig::new().with_model(model_path.to_string_lossy().to_string())
             } else {
-                let mut mc = ModelConfig::new()
-                    .with_diffusion_model(model_path.to_string_lossy().to_string());
-                if let Some(vae) = find_qwen_vae() {
-                    tracing::info!("QwenImagePipeline: auto-detected VAE '{}'", vae);
-                    mc = mc.with_vae(vae);
-                } else {
-                    tracing::warn!(
-                        "QwenImagePipeline: no Qwen-Image VAE found under {}/vae",
-                        get_models_dir()
-                    );
-                }
-                if let Some(llm) = find_qwen3vl_llm() {
-                    tracing::info!("QwenImagePipeline: auto-detected Qwen3-VL LLM '{}'", llm);
-                    mc = mc.with_llm(llm);
-                } else {
-                    tracing::warn!(
-                        "QwenImagePipeline: no Qwen3-VL text encoder found under {}/text_encoders",
-                        get_models_dir()
-                    );
-                }
-                mc
+                standalone_qwen_config(&model_path, &model_label)
             };
 
             let mut params = ImageGenParams::new(prompt)
@@ -487,34 +556,42 @@ fn register_qwen_image_pipeline(registry: &mut NodeRegistry) {
     }));
 }
 
-/// One-click multi-view pose generation for Qwen-Image 2.1.
+/// Reference-image driven multi-angle view generation for Qwen-Image 2.1.
 ///
-/// Two pose-input modes are supported:
-/// - **text**: `pose_texts` holds one pose description per line (e.g.
-///   `front view`, `side view`, `back view`). Each line is appended to the
-///   base prompt and a separate image is generated.
-/// - **image**: `pose_images` holds one or more OpenPose-style skeleton /
-///   reference images. Each image becomes the sole `reference_latent` for a
-///   generation pass, so the model reproduces that pose.
-///
-/// All generated views are returned as a single IMAGE batch.
+/// Mirrors the "Qwen Edit 2509 MultipleAngles" workflow: feed a single
+/// subject reference image (character / product), then emit one image per
+/// camera/angle instruction while keeping identity & style. Qwen Image 2.1
+/// performs this as image editing (`-r <reference>` + instruction prompt +
+/// `--llm_vision`), not as skeleton pose control — which is why the previous
+/// skeleton / pose-text approach produced weak, inconsistent results.
 fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
     let model_choices: Vec<String> = scan_qwen_models().into_iter().map(|(n, _)| n).collect();
     let default_model = model_choices.first().cloned().unwrap_or_default();
 
     let class_def = NodeClassDef {
         class_type: "QwenImageMultiViewPose".to_string(),
-        display_name: "Qwen-Image 多视图 Pose (2.1)".to_string(),
+        display_name: "Qwen-Image 多视图 (2.1)".to_string(),
         category: "image/qwen".to_string(),
         input_types: NodeInputTypes {
             required: {
                 let mut m = HashMap::new();
-                m.insert("prompt".to_string(), InputTypeSpec {
+                m.insert("image".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m.insert("instructions".to_string(), InputTypeSpec {
                     type_name: "STRING".to_string(),
                     extra: {
                         let mut e = HashMap::new();
                         e.insert("multiline".to_string(), json!(true));
-                        e.insert("default".to_string(), json!(""));
+                        e.insert(
+                            "default".to_string(),
+                            json!("front view\nside view\nback view\nthree-quarter view"),
+                        );
+                        e.insert(
+                            "tooltip".to_string(),
+                            json!("每行一个相机/角度指令，保持简短、以相机视角为主（如 front view / side view / top-down view / rotate the camera 45° left）"),
+                        );
                         e
                     },
                 });
@@ -529,42 +606,44 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
                         e
                     },
                 });
-                m.insert("pose_mode".to_string(), InputTypeSpec {
-                    type_name: "COMBO".to_string(),
-                    extra: {
-                        let mut e = HashMap::new();
-                        e.insert("choices".to_string(), json!(["text", "image"]));
-                        e.insert("default".to_string(), json!("text"));
-                        e
-                    },
-                });
                 m
             },
             optional: {
                 let mut m = HashMap::new();
-                m.insert("pose_texts".to_string(), InputTypeSpec {
+                m.insert("subject_guidance".to_string(), InputTypeSpec {
                     type_name: "STRING".to_string(),
                     extra: {
                         let mut e = HashMap::new();
                         e.insert("multiline".to_string(), json!(true));
+                        e.insert("default".to_string(), json!(""));
                         e.insert(
-                            "default".to_string(),
-                            json!("front view\nside view\nback view"),
+                            "tooltip".to_string(),
+                            json!("可选：身份/风格约束，追加到每条指令之后（如 \"keep the same hairstyle, eye color and clothing\"）"),
                         );
                         e
                     },
                 });
-                m.insert("pose_images".to_string(), InputTypeSpec {
-                    type_name: "IMAGE".to_string(),
-                    extra: HashMap::new(),
-                });
-                m.insert("pose_dir".to_string(), InputTypeSpec {
+                m.insert("lora".to_string(), InputTypeSpec {
                     type_name: "STRING".to_string(),
                     extra: {
                         let mut e = HashMap::new();
                         e.insert("multiline".to_string(), json!(false));
                         e.insert("default".to_string(), json!(""));
-                        e.insert("tooltip".to_string(), json!("pose_mode=image 时可填写骨架图目录（如 asset/pose1），节点将按文件名排序加载目录内全部 PNG/JPG 作为姿态参考；pose_images 连接的图片会追加在目录图片之后"));
+                        e.insert(
+                            "tooltip".to_string(),
+                            json!("可选：多角度 LoRA 文件（绝对路径，或相对 <models>/lora/ 的文件名，如 multi_angle.safetensors）。留空则不加载"),
+                        );
+                        e
+                    },
+                });
+                m.insert("lora_strength".to_string(), InputTypeSpec {
+                    type_name: "FLOAT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("min".to_string(), json!(0.0));
+                        e.insert("max".to_string(), json!(2.0));
+                        e.insert("step".to_string(), json!(0.05));
+                        e.insert("default".to_string(), json!(1.0));
                         e
                     },
                 });
@@ -647,8 +726,8 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
     };
 
     registry.register(class_def, Arc::new(move |ctx, node, node_id| {
-        let pose_images_in = ctx
-            .resolve_input(node_id, "pose_images")
+        let image_in = ctx
+            .resolve_input(node_id, "image")
             .unwrap_or_else(|_| json!(null));
         let model_label = node
             .inputs
@@ -656,24 +735,30 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| default_model.clone());
-        let base_prompt = node
+        let instructions = node
             .inputs
-            .get("prompt")
+            .get("instructions")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let pose_mode = node
+        let subject_guidance = node
             .inputs
-            .get("pose_mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("text")
-            .to_string();
-        let pose_texts = node
-            .inputs
-            .get("pose_texts")
+            .get("subject_guidance")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let lora_raw = node
+            .inputs
+            .get("lora")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let lora_strength = node
+            .inputs
+            .get("lora_strength")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
         let negative_prompt = node
             .inputs
             .get("negative_prompt")
@@ -692,19 +777,28 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
             node.inputs.get("height").and_then(|v| v.as_i64()).unwrap_or(1024),
         );
         let node_id_str = node_id.to_string();
-        let pose_dir = node
-            .inputs
-            .get("pose_dir")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
 
         Box::pin(async move {
-            if base_prompt.trim().is_empty() {
+            // Decode the subject reference image (character / product). Only
+            // the first image is used as the identity anchor.
+            let ref_images = resolve_input_images(&image_in, &node_id_str)?;
+            if ref_images.is_empty() {
                 return Err(ExecutorError::NodeExecutionFailed {
                     node_id: node_id_str.clone(),
-                    message: "prompt 不能为空：请填写人物/场景描述，例如 \"a young woman in a red dress, studio lighting\"".to_string(),
+                    message: "请提供一张主体参考图（人物/产品）：将 LoadImage 节点连接到 image 输入".to_string(),
+                });
+            }
+            let reference = ref_images[0].clone();
+
+            let lines: Vec<String> = instructions
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            if lines.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id_str.clone(),
+                    message: "请在 instructions 中每行填写一个相机/角度指令，例如 \"front view\\nside view\\nback view\"".to_string(),
                 });
             }
 
@@ -718,110 +812,48 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
                 }
             })?;
 
-            // Resolve the list of poses according to the selected mode.
-            enum Pose {
-                Text(String),
-                Image(SdImage),
-            }
-            let poses: Vec<Pose> = match pose_mode.as_str() {
-                "image" => {
-                    // Skeletons from `pose_dir` (sorted by filename) come
-                    // first, then any images wired into `pose_images`.
-                    let mut imgs: Vec<SdImage> = Vec::new();
-                    if !pose_dir.is_empty() {
-                        let dir = Path::new(&pose_dir);
-                        if !dir.exists() {
-                            return Err(ExecutorError::NodeExecutionFailed {
-                                node_id: node_id_str.clone(),
-                                message: format!("pose_dir '{}' 不存在（服务端工作目录内）", pose_dir),
-                            });
-                        }
-                        let mut files: Vec<std::path::PathBuf> = fs::read_dir(dir)
-                            .map_err(|e| ExecutorError::NodeExecutionFailed {
-                                node_id: node_id_str.clone(),
-                                message: format!("读取 pose_dir '{}' 失败: {}", pose_dir, e),
-                            })?
-                            .filter_map(|e| e.ok())
-                            .map(|e| e.path())
-                            .filter(|p| {
-                                p.extension()
-                                    .and_then(|x| x.to_str())
-                                    .map(|x| {
-                                        let x = x.to_ascii_lowercase();
-                                        x == "png" || x == "jpg" || x == "jpeg"
-                                    })
-                                    .unwrap_or(false)
-                            })
-                            .collect();
-                        files.sort();
-                        for f in files {
-                            let bytes = fs::read(&f).map_err(|e| ExecutorError::NodeExecutionFailed {
-                                node_id: node_id_str.clone(),
-                                message: format!("读取骨架图 '{}' 失败: {}", f.display(), e),
-                            })?;
-                            let img = SdImage::from_image_bytes(&bytes).map_err(|e| {
-                                ExecutorError::NodeExecutionFailed {
-                                    node_id: node_id_str.clone(),
-                                    message: format!("解码骨架图 '{}' 失败: {}", f.display(), e),
-                                }
-                            })?;
-                            imgs.push(img);
-                        }
-                    }
-                    imgs.extend(resolve_input_images(&pose_images_in, &node_id_str)?);
-                    if imgs.is_empty() {
-                        return Err(ExecutorError::NodeExecutionFailed {
-                            node_id: node_id_str.clone(),
-                            message: "pose_mode=image：请填写 pose_dir（如 asset/pose1）或将 LoadImage 节点连接到 pose_images，提供至少一张姿态骨架图".to_string(),
-                        });
-                    }
-                    imgs.into_iter().map(Pose::Image).collect()
-                }
-                _ => {
-                    let lines: Vec<String> = pose_texts
-                        .lines()
-                        .map(|l| l.trim().to_string())
-                        .filter(|l| !l.is_empty())
-                        .collect();
-                    if lines.is_empty() {
-                        return Err(ExecutorError::NodeExecutionFailed {
-                            node_id: node_id_str.clone(),
-                            message: "pose_mode=text：请在 pose_texts 中每行填写一个视图/姿态描述，例如 \"front view\\nside view\\nback view\"".to_string(),
-                        });
-                    }
-                    lines.into_iter().map(Pose::Text).collect()
-                }
-            };
-
             // Build the shared model config once.
             let is_dir = model_path.is_dir();
             let model_config = if is_dir {
                 ModelConfig::new().with_model(model_path.to_string_lossy().to_string())
             } else {
-                let mut mc = ModelConfig::new()
-                    .with_diffusion_model(model_path.to_string_lossy().to_string());
-                if let Some(vae) = find_qwen_vae() {
-                    mc = mc.with_vae(vae);
-                }
-                if let Some(llm) = find_qwen3vl_llm() {
-                    mc = mc.with_llm(llm);
-                }
-                mc
+                standalone_qwen_config(&model_path, &model_label)
             };
 
             let backend = ctx.backend();
             let mut all_images: Vec<SdImage> = Vec::new();
 
-            for (i, pose) in poses.iter().enumerate() {
-                // Qwen-Image is instruction-driven: with a skeleton reference
-                // the prompt must explicitly tell the model to follow the pose,
-                // otherwise the skeleton is only weakly honoured.
-                let prompt = match pose {
-                    Pose::Text(t) => format!("{}, {}", base_prompt.trim(), t),
-                    Pose::Image(_) => format!(
-                        "{}, replicating the exact same body pose as the figure shown in the reference skeleton image, full body visible",
-                        base_prompt.trim()
-                    ),
+            // Resolve the optional multi-angle LoRA to a concrete path once.
+            let lora_path: Option<String> = if lora_raw.is_empty() {
+                None
+            } else {
+                let p = Path::new(&lora_raw);
+                if p.is_absolute() || p.exists() {
+                    Some(lora_raw.clone())
+                } else {
+                    let under = PathBuf::from(get_models_dir()).join("lora").join(&lora_raw);
+                    if under.exists() {
+                        Some(under.to_string_lossy().to_string())
+                    } else {
+                        return Err(ExecutorError::NodeExecutionFailed {
+                            node_id: node_id_str.clone(),
+                            message: format!(
+                                "LoRA 文件未找到：'{}'（也尝试了 {}）",
+                                lora_raw,
+                                under.display()
+                            ),
+                        });
+                    }
+                }
+            };
+
+            for (i, line) in lines.iter().enumerate() {
+                // Qwen-Image (2.1 / Edit-2509) edits the reference image
+                // according to a camera-focused instruction, preserving
+                // identity across views.
+                let prompt = match subject_guidance.trim() {
+                    "" => line.clone(),
+                    g => format!("{}, {}", line, g),
                 };
 
                 let mut params = ImageGenParams::new(prompt)
@@ -834,9 +866,15 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
                 if !negative_prompt.is_empty() {
                     params = params.with_negative_prompt(negative_prompt.clone());
                 }
-                if let Pose::Image(img) = pose {
-                    params.ref_images = vec![img.clone()];
+                if let Some(lp) = &lora_path {
+                    params = params.with_lora(lp.clone(), lora_strength);
                 }
+                // Qwen-Image-Edit (2509/2511) requires an explicit flow shift
+                // of 3.0; Qwen-Image-2.1 auto-selects its own schedule.
+                if model_label.to_lowercase().contains("edit") {
+                    params.sample_params.flow_shift = Some(3.0);
+                }
+                params.ref_images = vec![reference.clone()];
 
                 let images = backend
                     .generate_image(params)
@@ -1003,21 +1041,10 @@ mod tests {
             .expect("QwenImageMultiViewPose must be registered");
         assert_eq!(def.category, "image/qwen");
         assert_eq!(def.output_types, vec![IoType::Image]);
-        assert!(def.input_types.required.contains_key("prompt"));
+        assert!(def.input_types.required.contains_key("image"));
+        assert!(def.input_types.required.contains_key("instructions"));
         assert!(def.input_types.required.contains_key("qwen_model"));
-        assert!(def.input_types.required.contains_key("pose_mode"));
-        assert!(def.input_types.optional.contains_key("pose_texts"));
-        assert!(def.input_types.optional.contains_key("pose_images"));
-        assert!(def.input_types.optional.contains_key("pose_dir"));
-
-        let pose_mode_choices = def
-            .input_types
-            .required
-            .get("pose_mode")
-            .and_then(|s| s.extra.get("choices"))
-            .and_then(|v| v.as_array())
-            .expect("pose_mode choices");
-        let modes: Vec<&str> = pose_mode_choices.iter().filter_map(|c| c.as_str()).collect();
-        assert_eq!(modes, vec!["text", "image"]);
+        assert!(def.input_types.optional.contains_key("subject_guidance"));
+        assert!(def.input_types.optional.contains_key("negative_prompt"));
     }
 }
