@@ -612,6 +612,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const widgetsValues = Array.isArray(wn.widgets_values)
         ? (wn.widgets_values as unknown[])
         : [];
+      // Named widget map written by current versions; absent in legacy or
+      // stock-ComfyUI graphs, in which case we fall back to positional order.
+      const widgetsNamed = (wn.widgets_values_named ?? {}) as Record<string, unknown>;
 
       if (!classDef) {
         console.warn(`[loadWorkflowFromJson] No classDef for classType "${classType}" (node id=${oldId}). Available types:`, Object.keys(objectInfo).slice(0, 10));
@@ -663,9 +666,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
             inputs[name] = null;
           }
         } else {
-          if (widgetIdx < widgetsValues.length) {
-            const wv = widgetsValues[widgetIdx];
-            inputs[name] = wv;
+          const named = widgetsNamed[name];
+          if (named !== undefined) {
+            // Preferred: restore by field name, independent of HashMap order.
+            inputs[name] = named;
+          } else if (widgetIdx < widgetsValues.length) {
+            // Legacy / stock-ComfyUI graph: positional array fallback.
+            inputs[name] = widgetsValues[widgetIdx];
           } else if (typeName === 'INT') {
             inputs[name] = 0;
           } else if (typeName === 'FLOAT') {
@@ -846,6 +853,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
       const nodeInputs: Array<{ name: string; type: string; link: number | null }> = [];
       const widgetsValues: unknown[] = [];
+      // Named mirror of every primitive widget value. The positional
+      // widgets_values array is ordered by /object_info, whose field order
+      // comes from a Rust HashMap and changes across server restarts; saving
+      // values by name makes reload immune to that reordering.
+      const widgetsNamed: Record<string, unknown> = {};
       let widgetCount = 0;
 
       for (let i = 0; i < allInputNames.length; i++) {
@@ -876,6 +888,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           } else {
             if (value !== undefined && !Array.isArray(value)) {
               widgetsValues.push(value);
+              widgetsNamed[inputName] = value;
             } else {
               widgetsValues.push(null);
             }
@@ -891,6 +904,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           } else {
             if (value !== undefined && !Array.isArray(value)) {
               widgetsValues.push(value);
+              widgetsNamed[inputName] = value;
             } else {
               widgetsValues.push(null);
             }
@@ -929,6 +943,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           ? { isNote: true, noteText: n.data.noteText || '', noteColor: n.data.noteColor || '#5b8c5a' }
           : {},
         widgets_values: widgetsValues,
+        widgets_values_named: widgetsNamed,
         title: n.data.title !== n.data.classType ? n.data.title : undefined,
       };
     });

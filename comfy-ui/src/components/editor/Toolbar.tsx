@@ -44,6 +44,8 @@ function convertApiFormatToWorkflow(apiFormat: Record<string, unknown>): Record<
 
     const nodeInputs: Record<string, unknown>[] = [];
     const widgetsValues: unknown[] = [];
+    // Named mirror so re-saving/reloading is immune to /object_info field reordering.
+    const widgetsNamed: Record<string, unknown> = {};
     const linkInputSlots: Record<string, number> = {};
 
     for (let i = 0; i < allInputNames.length; i++) {
@@ -62,6 +64,7 @@ function convertApiFormatToWorkflow(apiFormat: Record<string, unknown>): Record<
           linkInputSlots[inputName] = i;
         } else if (value !== undefined) {
           widgetsValues.push(value);
+          widgetsNamed[inputName] = value;
         } else {
           widgetsValues.push(null);
         }
@@ -82,6 +85,7 @@ function convertApiFormatToWorkflow(apiFormat: Record<string, unknown>): Record<
       outputs: [],
       properties: {},
       widgets_values: widgetsValues,
+      widgets_values_named: widgetsNamed,
     });
   }
 

@@ -291,6 +291,12 @@ pub async fn get_object_info(
 
                                     if let Some(extra_obj) = extra {
                                         if !extra_obj.contains_key("choices") {
+                                            // 兼容：节点定义用 extra.options 声明 COMBO 选项（如
+                                            // H3Director.mode），前端只认 extra.choices，直接透传，
+                                            // 避免下拉选项为空、保存后值丢失。
+                                            if let Some(opts) = extra_obj.get("options").cloned() {
+                                                extra_obj.insert("choices".to_string(), opts);
+                                            } else {
                                             let choices: Vec<String> = if input_name == "sampler_name" {
                                                 sampler_choices.clone()
                                             } else if input_name == "scheduler" {
@@ -348,6 +354,7 @@ pub async fn get_object_info(
                                                 "choices".to_string(),
                                                 Value::Array(choices.into_iter().map(Value::String).collect()),
                                             );
+                                            }
                                         }
                                     }
                                 }

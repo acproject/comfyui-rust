@@ -51,8 +51,11 @@ impl Default for FlashAttnConfig {
     fn default() -> Self {
         Self {
             bridge_url: "http://127.0.0.1:8998".to_string(),
-            timeout_sec: 900,  // 15 minutes for long video generation
-            load_timeout_sec: 1800,  // 30 minutes: USB int8 cache load ~5-6 min, cold load even longer
+            // H3 长视频生成实测可达 50 分钟以上（1024x768/120 帧更久），默认
+            // 900s 只够短任务；可用 FLASH_ATTN_TIMEOUT_SEC 覆盖轮询总超时，
+            // FLASH_ATTN_LOAD_TIMEOUT_SEC 覆盖加载超时，无需改代码重新编译。
+            timeout_sec: env_timeout_secs("FLASH_ATTN_TIMEOUT_SEC", 900),
+            load_timeout_sec: env_timeout_secs("FLASH_ATTN_LOAD_TIMEOUT_SEC", 1800),
             poll_interval_ms: 1000,
             auto_start: true,   // 默认自动启动
             python_path: None,
@@ -63,6 +66,16 @@ impl Default for FlashAttnConfig {
             quantization: "int8".to_string(),
         }
     }
+}
+
+/// Parse a positive timeout override (seconds) from an environment variable,
+/// falling back to `default` when unset, empty or unparseable.
+fn env_timeout_secs(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(default)
 }
 
 impl FlashAttnConfig {
@@ -1671,6 +1684,23 @@ mod tests {
             FlashAttnConfig::new(" http://192.168.1.5:9000 ").bridge_url,
             "http://192.168.1.5:9000"
         );
+    }
+
+    #[test]
+    fn timeout_env_override_parses_or_falls_back() {
+        // Dedicated var name: no other code path touches it.
+        let key = "FLASH_ATTN_TEST_TIMEOUT_SEC";
+        // SAFETY: single-threaded access to this test-only key within this fn;
+        // no other test reads/writes it.
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(env_timeout_secs(key, 900), 900);
+        unsafe { std::env::set_var(key, "10800") };
+        assert_eq!(env_timeout_secs(key, 900), 10800);
+        unsafe { std::env::set_var(key, "  not-a-number ") };
+        assert_eq!(env_timeout_secs(key, 900), 900);
+        unsafe { std::env::set_var(key, "0") };
+        assert_eq!(env_timeout_secs(key, 900), 900);
+        unsafe { std::env::remove_var(key) };
     }
 
     /// 端到端验证：模拟用户 workflow 传空 bridge_url，走完整
