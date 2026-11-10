@@ -62,6 +62,14 @@ async fn run_llama_cli(cfg: &serde_json::Value, req: &LlmRunRequest<'_>) -> Resu
         .arg("--temp").arg(req.temperature.to_string())
         .arg("--no-display-prompt")
         .arg("--log-disable")
+        // llama-cli 0.5.x defaults to an interactive chat session and never
+        // exits when a prompt is predefined; single-turn makes it exit after
+        // one generation.
+        .arg("--single-turn")
+        // Keep thinking models from spending the whole budget on <think>.
+        .arg("--reasoning").arg("off")
+        // Never wait on stdin, even if the build still enters chat mode.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -96,7 +104,7 @@ async fn run_llama_cli(cfg: &serde_json::Value, req: &LlmRunRequest<'_>) -> Resu
 
     match cmd.output().await {
         Ok(output) if output.status.success() => {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            Ok(extract_llama_text(&String::from_utf8_lossy(&output.stdout)))
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -109,6 +117,34 @@ async fn run_llama_cli(cfg: &serde_json::Value, req: &LlmRunRequest<'_>) -> Resu
         }
         Err(e) => Err(format!("Failed to execute llama-cli ({}): {}", cli_path, e)),
     }
+}
+
+/// Extract the generated text from llama-cli stdout.
+///
+/// llama-cli 0.5.x prints a banner, a chat-UI command listing and a
+/// `> <prompt>` echo to stdout even with `--log-disable`; the generated
+/// text sits after that echo, followed by a perf-stats line and
+/// "Exiting...". Older builds that print only the bare completion pass
+/// through unchanged (no `> ` echo is found).
+fn extract_llama_text(stdout: &str) -> String {
+    let start = stdout
+        .lines()
+        .position(|l| l.starts_with("> "))
+        .map(|i| i + 1);
+    let body: Vec<&str> = match start {
+        Some(s) => stdout.lines().skip(s).collect(),
+        None => stdout.lines().collect(),
+    };
+    let cleaned: Vec<&str> = body
+        .into_iter()
+        .filter(|l| {
+            let t = l.trim();
+            !t.starts_with("[ Prompt:")
+                && !t.starts_with("[Prompt:")
+                && t != "Exiting..."
+        })
+        .collect();
+    cleaned.join("\n").trim().to_string()
 }
 
 /// Whether the Python fallback scripts + interpreter are available.
@@ -241,5 +277,29 @@ pub async fn run_local_or_python(
                 )),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_llama_text;
+
+    #[test]
+    fn strips_banner_and_chrome() {
+        let raw = "\n\n▄▄ ▄▄\n██ ██\nbuild      : b11227\nmodel      : x.gguf\n\navailable commands:\n  /exit or Ctrl+C     stop or exit\n\n\n> Say hello\nHello!\n\n[ Prompt: 152.4 t/s | Generation: 85.4 t/s ]\n\nExiting...\n";
+        assert_eq!(extract_llama_text(raw), "Hello!");
+    }
+
+    #[test]
+    fn keeps_multiline_generation() {
+        let raw = "> prompt\nline one\nline two\n[ Prompt: 1 t/s ]\nExiting...\n";
+        assert_eq!(extract_llama_text(raw), "line one\nline two");
+    }
+
+    #[test]
+    fn passthrough_without_echo() {
+        // Older llama-cli builds print only the bare completion.
+        assert_eq!(extract_llama_text("plain output\n"), "plain output");
+        assert_eq!(extract_llama_text(""), "");
     }
 }

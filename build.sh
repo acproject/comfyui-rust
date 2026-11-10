@@ -14,6 +14,7 @@
 # 产物：
 #   target/release/comfy-server   REST/WebSocket 服务（内含 /mcp HTTP 端点）
 #   target/release/comfy-mcp      MCP stdio 独立二进制（供 AI IDE 以子进程方式启动）
+#   target/release/comfy          多媒体 CLI（图片/音乐/视频/音视频/3D，stdout 输出 JSON）
 
 set -e
 
@@ -127,8 +128,10 @@ echo "  编译完成（未编译任何子项目）"
 echo "========================================="
 echo "  服务端 : $PROJECT_DIR/target/release/comfy-server"
 echo "  MCP    : $PROJECT_DIR/target/release/comfy-mcp"
+echo "  CLI    : $PROJECT_DIR/target/release/comfy"
 echo ""
 echo "  运行服务端 : ./target/release/comfy-server"
 echo "  MCP HTTP  : http://127.0.0.1:8188/mcp（随服务端自动挂载）"
 echo "  MCP stdio : ./target/release/comfy-mcp --server-url http://127.0.0.1:8188"
+echo "  多媒体 CLI: ./target/release/comfy --help"
 echo "========================================="

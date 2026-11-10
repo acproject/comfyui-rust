@@ -429,6 +429,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "comfy-cli"
+version = "0.1.0"
+dependencies = [
+ "comfy-inference",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "comfy-core"
 version = "0.1.0"
 dependencies = [

@@ -2553,9 +2553,9 @@ fn register_save_image(registry: &mut NodeRegistry) {
             },
             hidden: HashMap::new(),
         },
-        output_types: vec![IoType::Image],
-        output_names: vec!["IMAGES".to_string()],
-        output_is_list: vec![false],
+        output_types: vec![IoType::Image, IoType::Custom("UI".to_string())],
+        output_names: vec!["IMAGES".to_string(), "UI".to_string()],
+        output_is_list: vec![false, false],
         is_output_node: true,
         has_intermediate_output: false,
         is_changed: None,
@@ -2616,7 +2616,10 @@ fn register_save_image(registry: &mut NodeRegistry) {
                 }
             }
 
-            Ok(vec![json!({ "images": saved_images })])
+            // Output 0 passes the input images through unchanged so the node
+            // can be chained (e.g. multi-view results -> SaveImage -> more
+            // edits); output 1 carries the saved-file metadata for the UI.
+            Ok(vec![images.clone(), json!({ "images": saved_images })])
         })
     }));
 }

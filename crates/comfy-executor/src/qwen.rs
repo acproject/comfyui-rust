@@ -754,6 +754,10 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
             .unwrap_or("")
             .trim()
             .to_string();
+        // The UI uses "none" as the "no LoRA" placeholder in the combo box.
+        let lora_selected = !lora_raw.is_empty()
+            && !lora_raw.eq_ignore_ascii_case("none")
+            && !lora_raw.eq_ignore_ascii_case("null");
         let lora_strength = node
             .inputs
             .get("lora_strength")
@@ -824,7 +828,7 @@ fn register_qwen_multiview_pose(registry: &mut NodeRegistry) {
             let mut all_images: Vec<SdImage> = Vec::new();
 
             // Resolve the optional multi-angle LoRA to a concrete path once.
-            let lora_path: Option<String> = if lora_raw.is_empty() {
+            let lora_path: Option<String> = if !lora_selected {
                 None
             } else {
                 let p = Path::new(&lora_raw);

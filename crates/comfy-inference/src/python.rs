@@ -334,13 +334,24 @@ impl PythonBackend {
     }
 
     /// Best model path for HF routing: standalone checkpoint first,
-    /// then a diffusion-model component dir.
+    /// then a diffusion-model component dir. A component file inside a
+    /// diffusers pipeline dir (e.g. `transformer/*.safetensors.index.json`)
+    /// is resolved back up to the pipeline dir so from_pretrained works.
     fn pick_model_path(params: &ImageGenParams) -> Option<String> {
-        params
+        let raw = params
             .model_config
             .model_path
             .clone()
-            .or_else(|| params.model_config.diffusion_model_path.clone())
+            .or_else(|| params.model_config.diffusion_model_path.clone())?;
+        let path = Path::new(&raw);
+        if !path.is_dir() {
+            for ancestor in path.ancestors().skip(1) {
+                if ancestor.join("model_index.json").is_file() {
+                    return Some(ancestor.to_string_lossy().to_string());
+                }
+            }
+        }
+        Some(raw)
     }
 
     fn temp_dir() -> PathBuf {
@@ -362,11 +373,20 @@ impl PythonBackend {
         let script = self.script_path("img_generate.py")?;
 
         let output_path = Self::temp_dir().join(format!("py_img_{}.png", params.seed));
-        let init_path = params
-            .init_image
-            .as_ref()
-            .map(|img| Self::write_temp_png(img, "py_init"))
-            .transpose()?;
+        // Image-edit routing: when the caller supplied reference images
+        // (edit input, e.g. Qwen-Image-Edit) rather than an explicit init
+        // image, treat the first reference as the image to edit.
+        // Instruction-edit pipelines expect a full denoise, so use
+        // strength 1.0 instead of the img2img default.
+        let init_from_ref = params.init_image.is_none() && !params.ref_images.is_empty();
+        let init_path = match params.init_image.as_ref() {
+            Some(img) => Some(Self::write_temp_png(img, "py_init")?),
+            None if init_from_ref => {
+                Some(Self::write_temp_png(&params.ref_images[0], "py_ref")?)
+            }
+            None => None,
+        };
+        let init_strength = if init_from_ref { 1.0 } else { params.strength };
 
         let mut args: Vec<String> = vec![
             script.to_string_lossy().to_string(),
@@ -397,7 +417,14 @@ impl PythonBackend {
             args.push("--init-image".to_string());
             args.push(init.to_string_lossy().to_string());
             args.push("--strength".to_string());
-            args.push(format!("{}", params.strength));
+            args.push(format!("{}", init_strength));
+        }
+        // LoRA weights: one --lora / --lora-scale pair per entry.
+        for lora in &params.loras {
+            args.push("--lora".to_string());
+            args.push(lora.path.clone());
+            args.push("--lora-scale".to_string());
+            args.push(format!("{}", lora.multiplier));
         }
 
         tracing::info!(
@@ -1278,6 +1305,20 @@ impl FallbackBackend {
         };
         if !Self::SDCPP_PIPELINE_FAMILIES.contains(&family.id.as_str()) {
             return params;
+        }
+        // sd.cpp cannot run QwenImageEditPlusPipeline (Edit-2511): its
+        // transformer takes extra inputs and it wants a Qwen2.5-VL encoder
+        // (this rewrite only knows Qwen3-VL). Keep those dirs on the Python
+        // diffusers backend untouched.
+        if let Ok(index) = std::fs::read_to_string(dir.join("model_index.json")) {
+            if index.contains("EditPlus") {
+                tracing::info!(
+                    "pipeline dir '{}' is an Edit-Plus pipeline; leaving it \
+                     on the Python diffusers backend",
+                    dir.display()
+                );
+                return params;
+            }
         }
 
         let diffusion = Self::first_existing(&[
