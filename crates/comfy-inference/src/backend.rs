@@ -31,6 +31,15 @@ pub trait InferenceBackend: Send + Sync {
         Err(InferenceError::BackendNotAvailable("3D generation not implemented".to_string()))
     }
 
+    /// Whether the Bernini-R t2v / v2v Python fallback (bernini_generate.py)
+    /// is reachable on this backend. Distinct from
+    /// [`supports_video_generation`](Self::supports_video_generation), which
+    /// tracks the generic sd.cpp-style [`generate_video`](Self::generate_video)
+    /// path.
+    fn supports_bernini_video(&self) -> bool {
+        false
+    }
+
     /// Bernini-R t2v / v2v video via the Python bernini_generate.py fallback.
     fn generate_bernini_video(
         &self,
@@ -68,6 +77,7 @@ pub trait InferenceBackend: Send + Sync {
             supports_audio_video_generation: self.supports_audio_video_generation(),
             supports_context_ir: self.supports_context_ir(),
             supports_music3: self.supports_music3(),
+            supports_bernini_video: self.supports_bernini_video(),
         }
     }
 }
@@ -136,6 +146,9 @@ pub struct BackendCapabilities {
     pub supports_audio_video_generation: bool,
     pub supports_context_ir: bool,
     pub supports_music3: bool,
+    /// Bernini-R t2v/v2v via bernini_generate.py. Kept separate from
+    /// `supports_video_generation`, which tracks the generic sd.cpp path.
+    pub supports_bernini_video: bool,
 }
 
 pub struct NullBackend;

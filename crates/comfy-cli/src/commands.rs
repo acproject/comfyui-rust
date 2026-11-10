@@ -10,7 +10,7 @@ use comfy_inference::params::{
     BerniniVideoParams, Gaussian3DParams, H3Mode, H3Params, ImageGenParams, ModelConfig,
     Music3Params,
 };
-use comfy_inference::{InferenceBackend, InferenceError};
+use comfy_inference::{InferenceBackend, InferenceError, PythonBackend};
 use serde_json::{Value, json};
 
 use crate::args::{
@@ -212,7 +212,18 @@ fn video(
     globals: &GlobalOpts,
     a: VideoArgs,
 ) -> DispatchResult {
+    if !backend.supports_bernini_video() {
+        return Err(unsupported("Bernini-R video generation"));
+    }
     require_existing(&a.model, "--model")?;
+    // Same Bernini-R shape rule the FallbackBackend applies at runtime; check
+    // it up front so a mismatched model fails before any process is spawned.
+    if !PythonBackend::is_bernini_model_dir(&a.model) {
+        return Err(InferenceError::InvalidParameter(format!(
+            "--model '{}' is not a Bernini-R model directory: expected a directory whose name contains 'bernini' and which contains a config.json",
+            a.model
+        )));
+    }
     if let Some(input) = &a.input_video {
         require_existing(input, "--input-video")?;
     }
@@ -432,6 +443,7 @@ fn capabilities(
         "capabilities": {
             "image_generation": caps.supports_image_generation,
             "video_generation": caps.supports_video_generation,
+            "bernini_video": caps.supports_bernini_video,
             "3d_generation": caps.supports_3d_generation,
             "audio_video_generation": caps.supports_audio_video_generation,
             "context_ir": caps.supports_context_ir,

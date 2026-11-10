@@ -1150,6 +1150,12 @@ impl InferenceBackend for PythonBackend {
         self.script_path("music3_generate.py").map(|p| p.exists()).unwrap_or(false)
     }
 
+    fn supports_bernini_video(&self) -> bool {
+        self.script_path("bernini_generate.py")
+            .map(|p| p.exists())
+            .unwrap_or(false)
+    }
+
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
         self.generate_image_blocking(&params)
     }
@@ -1448,6 +1454,12 @@ impl InferenceBackend for FallbackBackend {
 
     fn supports_music3(&self) -> bool {
         self.primary.supports_music3() || self.python.supports_music3()
+    }
+
+    fn supports_bernini_video(&self) -> bool {
+        // Reuse the existing inherent gate so trait-object and internal
+        // callers always observe the same answer.
+        self.supports_bernini()
     }
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {

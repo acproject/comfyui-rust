@@ -429,6 +429,7 @@ fn test_backend_capabilities() {
     let caps = backend.get_capabilities();
     assert!(!caps.supports_image_generation);
     assert!(!caps.supports_video_generation);
+    assert!(!caps.supports_bernini_video);
 }
 
 #[test]
