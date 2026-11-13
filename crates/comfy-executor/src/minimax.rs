@@ -260,6 +260,13 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 m.insert("width".to_string(), int_input(0, 1536, 32, 0));
                 m.insert("height".to_string(), int_input(0, 1536, 32, 0));
                 m.insert("embed_frames".to_string(), bool_input(true));
+                // Multi-GPU split deploy: transformer / text_encoder / VAE on
+                // separate cards, cross-card tensors routed via host (no P2P).
+                // Required when the H3 checkpoint + activations exceed one card.
+                m.insert("split_gpu".to_string(), bool_input(false));
+                // Output subfolder under the server output root; the muxed mp4
+                // and the audio sidecar both land in output/<output_subfolder>/.
+                m.insert("output_subfolder".to_string(), string_input(false, "h3"));
                 m
             },
             hidden: HashMap::new(),
@@ -300,6 +307,25 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
         let embed_frames = node.inputs.get("embed_frames")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        let split_gpu = node.inputs.get("split_gpu")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // Sanitize to a single relative path segment so a workflow can never
+        // escape the server output root.
+        let output_subfolder = node.inputs.get("output_subfolder")
+            .and_then(|v| v.as_str())
+            .unwrap_or("h3")
+            .trim()
+            .trim_start_matches('/')
+            .split(['/', '\\'])
+            .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+            .collect::<Vec<_>>()
+            .join("/");
+        let output_subfolder = if output_subfolder.is_empty() {
+            "h3".to_string()
+        } else {
+            output_subfolder
+        };
         let node_id_str = node_id.to_string();
 
         Box::pin(async move {
@@ -378,7 +404,8 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 .with_variant(variant)
                 .with_steps(steps)
                 .with_num_frames(num_frames)
-                .with_seed(seed);
+                .with_seed(seed)
+                .with_split_gpu(split_gpu);
             params.mode = h3_mode;
             if width > 0 && height > 0 {
                 params = params.with_resolution(width, height);
@@ -403,8 +430,8 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 .generate_av(params)
                 .map_err(ExecutorError::Inference)?;
 
-            // 落盘到 output/videos/。
-            let video_dir = get_output_dir("videos");
+            // 落盘到 output/<output_subfolder>/（默认 output/h3/）。
+            let video_dir = get_output_dir(&output_subfolder);
             let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
             let filename = format!("minimax_h3_{}_{}.mp4", timestamp, seed);
             let dest_mp4 = video_dir.join(&filename);
@@ -431,14 +458,14 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 "type": "video",
                 "videos": [{
                     "filename": filename,
-                    "subfolder": "videos",
+                    "subfolder": output_subfolder,
                     "type": "output",
                     "frame_count": frame_count,
                     "fps": video.fps,
                 }],
                 "path": src_mp4.to_string_lossy().to_string(),
                 "filename": filename,
-                "subfolder": "videos",
+                "subfolder": output_subfolder,
                 "frame_count": frame_count,
                 "fps": video.fps,
             });
@@ -449,10 +476,10 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 envelope["frames"] = Value::Array(frames);
             }
 
-            // 副输出 AUDIO：写 sidecar wav 以便 SaveAudio 等节点直连。
+            // 副输出 AUDIO：与 mp4 同目录写 sidecar wav，供 SaveAudio 等节点直连。
             let audio_envelope = match video.audio {
                 Some(audio) => {
-                    let audio_dir = get_output_dir("audio");
+                    let audio_dir = get_output_dir(&output_subfolder);
                     let wav_name = format!("minimax_h3_{}_{}.wav", timestamp, seed);
                     let wav_path = audio_dir.join(&wav_name);
                     fs::write(&wav_path, audio.to_wav_bytes()).map_err(|e| {
@@ -468,14 +495,14 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                         "type": "audio",
                         "path": wav_path.to_string_lossy().to_string(),
                         "filename": wav_name,
-                        "subfolder": "audio",
+                        "subfolder": output_subfolder,
                         "format": "wav",
                         "duration": audio.duration_sec(),
                         "sample_rate": audio.sample_rate,
                         "channels": audio.channels,
                         "audios": [{
                             "filename": wav_name,
-                            "subfolder": "audio",
+                            "subfolder": output_subfolder,
                             "type": "output",
                         }],
                     })

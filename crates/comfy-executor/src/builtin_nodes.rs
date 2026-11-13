@@ -1420,6 +1420,15 @@ fn register_save_audio(registry: &mut NodeRegistry) {
 
             let filename = format!("{}_{}.{}", prefix, chrono::Utc::now().format("%Y%m%d_%H%M%S"), ext);
             let dest_path = output_dir_path.join(&filename);
+            // A prefix may contain a subfolder (e.g. "h3/shot_01"); ensure it exists.
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ExecutorError::NodeExecutionFailed {
+                        node_id: node_id.to_string(),
+                        message: format!("Failed to create audio output dir: {}", e),
+                    }
+                })?;
+            }
 
             if ext == "wav" {
                 std::fs::copy(src_path, &dest_path)
