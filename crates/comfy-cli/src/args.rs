@@ -155,6 +155,8 @@ pub struct AvArgs {
     pub sfx: Option<bool>,
     pub bgm: Option<bool>,
     pub variant: Option<String>,
+    pub offload: bool,
+    pub split_gpu: bool,
     pub output: Option<String>,
 }
 
@@ -564,6 +566,8 @@ fn parse_av(reader: &mut Reader) -> Result<AvArgs, CliUsage> {
                 }
                 a.variant = Some(v);
             }
+            "--offload" => a.offload = true,
+            "--split-gpu" => a.split_gpu = true,
             "--output" => a.output = Some(reader.value(token, "--output")?),
             other => return Err(usage(format!("av: unknown option '{other}'"))),
         }
@@ -741,6 +745,8 @@ OPTIONS:
     --sfx / --no-sfx        Generate sound effects [default: on]
     --bgm / --no-bgm        Generate background music [default: off]
     --variant V             fl2va | ref2va (normally auto-selected from --mode)
+    --offload               Enable CPU offload (required when model > single-GPU VRAM)
+    --split-gpu             Split transformer/text_encoder/VAE across GPUs; cross-card tensors route via CPU (no P2P)
     --output PATH           Destination .mp4 (requires ffmpeg)
 "#;
 

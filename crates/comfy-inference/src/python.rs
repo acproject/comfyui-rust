@@ -556,6 +556,21 @@ impl PythonBackend {
             .ok_or_else(|| {
                 InferenceError::InvalidParameter("No model path for Bernini video fallback".to_string())
             })?;
+        // Pre-validate the model directory shape so a mismatched model fails
+        // before any Python process is spawned. A missing path is reported
+        // first (higher priority) than the Bernini shape rule.
+        if !Path::new(&model_path).exists() {
+            return Err(InferenceError::InvalidParameter(format!(
+                "Bernini video model path does not exist: '{}'",
+                model_path
+            )));
+        }
+        if !Self::is_bernini_model_dir(&model_path) {
+            return Err(InferenceError::InvalidParameter(format!(
+                "'{}' is not a Bernini-R model directory: expected a directory whose name contains 'bernini' and which contains a config.json",
+                model_path
+            )));
+        }
         let script = self.script_path("bernini_generate.py")?;
 
         let output_path = match params.output_path.clone() {
@@ -958,6 +973,14 @@ impl PythonBackend {
             args.push("--reference".into());
             args.push(format!("{}{}", path.to_string_lossy(), suffix));
         }
+        if params.offload {
+            args.push("--offload".into());
+        }
+        if params.split_gpu {
+            // Multi-GPU split: transformer / text_encoder / VAE on separate
+            // cards, every cross-card tensor routed through host memory (no P2P).
+            args.push("--split-gpu".into());
+        }
 
         let json = self.run_json_script("h3_generate.py", &args)?;
         let reported = json.get("output").and_then(|v| v.as_str()).map(PathBuf::from);
@@ -1171,6 +1194,11 @@ impl InferenceBackend for PythonBackend {
         &self,
         params: BerniniVideoParams,
     ) -> InferenceResult<BerniniVideoOutput> {
+        if !self.supports_bernini_video() {
+            return Err(InferenceError::BackendNotAvailable(
+                "Bernini-R video generation requires bernini_generate.py (not found in script dir)".to_string(),
+            ));
+        }
         self.generate_bernini_video_blocking(&params)
     }
 
@@ -1558,23 +1586,12 @@ impl InferenceBackend for FallbackBackend {
         params: crate::params::BerniniVideoParams,
     ) -> InferenceResult<crate::params::BerniniVideoOutput> {
         // Bernini-R video is Python-only (sd.cpp has no Bernini support).
-        let path = params
-            .model_config
-            .model_path
-            .clone()
-            .or_else(|| params.model_config.diffusion_model_path.clone());
-        let is_bernini = path
-            .as_deref()
-            .map(PythonBackend::is_bernini_model_dir)
-            .unwrap_or(false);
-        if !is_bernini {
-            return Err(InferenceError::InvalidParameter(
-                "generate_bernini_video requires a Bernini-R model directory".to_string(),
-            ));
-        }
+        // Capability gating runs first; the model-directory shape check lives
+        // in generate_bernini_video_blocking (shared with PythonBackend) so
+        // the rule is enforced on every code path.
         if !self.supports_bernini() {
             return Err(InferenceError::BackendNotAvailable(
-                "Bernini-R model selected but bernini_generate.py is unavailable".to_string(),
+                "Bernini-R video generation requires bernini_generate.py (not found in script dir)".to_string(),
             ));
         }
         tracing::info!(
@@ -1726,6 +1743,106 @@ mod bernini_video_tests {
         let dir = std::env::temp_dir().join("comfyui-rust");
         std::fs::create_dir_all(&dir).ok();
         dir
+    }
+
+    fn test_backend() -> PythonBackend {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        PythonBackend::new(PythonInferConfig::default(), Some(&workspace))
+    }
+
+    /// Scenario 1: a missing model path is reported before any other check.
+    #[test]
+    fn bernini_video_rejects_nonexistent_model_path() {
+        let backend = test_backend();
+        let params = BerniniVideoParams::new(
+            ModelConfig::new().with_model("/no/such/path/Bernini-R-1.3B-Diffusers".to_string()),
+            "a cat",
+        );
+        let err = backend.generate_bernini_video_blocking(&params).unwrap_err();
+        match err {
+            InferenceError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("does not exist"),
+                    "expected 'does not exist', got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidParameter, got {other:?}"),
+        }
+    }
+
+    /// Scenario 1 (priority): path-not-exist wins over the Bernini shape rule
+    /// even when the name looks like a Bernini directory.
+    #[test]
+    fn bernini_video_missing_path_outranks_shape_check() {
+        let backend = test_backend();
+        let params = BerniniVideoParams::new(
+            ModelConfig::new().with_model("/tmp/definitely/missing/Bernini-R".to_string()),
+            "a cat",
+        );
+        let err = backend.generate_bernini_video_blocking(&params).unwrap_err();
+        match err {
+            InferenceError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("does not exist"),
+                    "missing path should report 'does not exist' first, got: {msg}"
+                );
+                assert!(
+                    !msg.contains("not a Bernini-R model directory"),
+                    "shape rule must not run before existence check, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidParameter, got {other:?}"),
+        }
+    }
+
+    /// Scenario 2: an existing directory that is not a Bernini-R layout fails
+    /// the shape check fast, without spawning Python.
+    #[test]
+    fn bernini_video_rejects_non_bernini_dir() {
+        let backend = test_backend();
+        // /tmp exists but its name does not contain "bernini".
+        let params = BerniniVideoParams::new(
+            ModelConfig::new().with_model(std::env::temp_dir().to_string_lossy().to_string()),
+            "a cat",
+        );
+        let err = backend.generate_bernini_video_blocking(&params).unwrap_err();
+        match err {
+            InferenceError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("not a Bernini-R model directory"),
+                    "expected shape rejection, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidParameter, got {other:?}"),
+        }
+    }
+
+    /// Scenario 3: the shape rule itself accepts a real self-contained
+    /// Bernini-R directory. End-to-end generation is covered by the GPU
+    /// smoke tests above; here we only assert the directory passes the gate.
+    #[test]
+    fn is_bernini_model_dir_accepts_real_bernini_layout() {
+        let model = std::env::var("COMFY_BERNINI_TEST_MODEL")
+            .unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        if !Path::new(&model).exists() {
+            eprintln!("skipping: Bernini model directory not found: {model}");
+            return;
+        }
+        assert!(
+            PythonBackend::is_bernini_model_dir(&model),
+            "real Bernini dir should pass is_bernini_model_dir: {model}"
+        );
+    }
+
+    /// is_bernini_model_dir negatives: empty / nonexistent / wrong name.
+    #[test]
+    fn is_bernini_model_dir_rejects_non_bernini() {
+        assert!(!PythonBackend::is_bernini_model_dir(""));
+        assert!(!PythonBackend::is_bernini_model_dir("/no/such/bernini"));
+        // Real dir but name lacks "bernini".
+        assert!(!PythonBackend::is_bernini_model_dir(
+            &std::env::temp_dir().to_string_lossy()
+        ));
     }
 }
 

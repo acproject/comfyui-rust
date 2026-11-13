@@ -326,6 +326,8 @@ fn av(backend: &Arc<dyn InferenceBackend>, globals: &GlobalOpts, a: AvArgs) -> D
     if let Some(variant) = &a.variant {
         params.variant = Some(variant.clone());
     }
+    params.offload = a.offload;
+    params.split_gpu = a.split_gpu;
     for path in &a.references {
         params.reference_images.push(load_image(path, "--reference")?);
     }

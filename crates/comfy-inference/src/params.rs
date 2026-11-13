@@ -1023,6 +1023,11 @@ pub struct H3Params {
     /// 任务分区变体："fl2va"（t2va/fl2va，transformer/）或
     /// "ref2va"（transformer_ref/）；None 时按 mode 自动选择
     pub variant: Option<String>,
+    /// 是否启用 CPU offload（H3 模型 >100GB，单卡放不下时必须开启）
+    pub offload: bool,
+    /// 是否多卡分离部署（transformer / text_encoder / VAE 分到不同 GPU，
+    /// 跨卡数据经 CPU 主机内存绕行，禁用 P2P；多卡显存不足时开启）
+    pub split_gpu: bool,
 }
 
 impl Default for H3Params {
@@ -1048,6 +1053,8 @@ impl Default for H3Params {
             generate_bgm: false,
             model_path: None,
             variant: None,
+            offload: false,
+            split_gpu: false,
         }
     }
 }
@@ -1170,6 +1177,18 @@ impl H3Params {
     /// 强制任务分区："fl2va" 或 "ref2va"
     pub fn with_variant(mut self, variant: impl Into<String>) -> Self {
         self.variant = Some(variant.into());
+        self
+    }
+
+    /// 启用 CPU offload（H3 模型 >100GB，单卡放不下时必须开启）
+    pub fn with_offload(mut self, enable: bool) -> Self {
+        self.offload = enable;
+        self
+    }
+
+    /// 启用多卡分离部署（跨卡张量经 CPU 绕行，禁用 P2P，规避单卡 OOM）
+    pub fn with_split_gpu(mut self, enable: bool) -> Self {
+        self.split_gpu = enable;
         self
     }
 
