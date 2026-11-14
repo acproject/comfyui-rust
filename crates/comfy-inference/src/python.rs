@@ -462,6 +462,73 @@ impl PythonBackend {
         Ok(vec![img])
     }
 
+    /// Remove the background of an input image using rembg.
+    ///
+    /// Calls `py/flash_attn_v100/comfy_fallback/remove_background.py` which
+    /// uses the rembg library (default model: bria-rmbg).
+    pub fn remove_background_blocking(
+        &self,
+        image: &SdImage,
+        model: &str,
+    ) -> InferenceResult<Vec<SdImage>> {
+        let script = self.script_path("remove_background.py")?;
+        let input_path = Self::write_temp_png(image, "py_rmbg_in")?;
+        let output_path = Self::temp_dir().join(format!(
+            "py_rmbg_out_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        let args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "--input".to_string(),
+            input_path.to_string_lossy().to_string(),
+            "--output".to_string(),
+            output_path.to_string_lossy().to_string(),
+            "--model".to_string(),
+            model.to_string(),
+            "--device".to_string(),
+            self.config.device.clone(),
+        ];
+
+        tracing::info!(
+            "Python fallback remove_background: {} {}",
+            self.interpreter,
+            args.join(" ")
+        );
+
+        let output = Command::new(&self.interpreter)
+            .args(&args)
+            .output()
+            .map_err(|e| InferenceError::BackendNotAvailable(format!(
+                "Failed to execute Python fallback '{}': {}",
+                self.interpreter, e
+            )))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InferenceError::GenerationFailed(format!(
+                "Python remove_background.py exited with status {}: {}",
+                output.status,
+                stderr.lines().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+            )));
+        }
+
+        if !output_path.exists() {
+            return Err(InferenceError::GenerationFailed(
+                "Python fallback produced no output image".to_string(),
+            ));
+        }
+
+        let bytes = std::fs::read(&output_path)
+            .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))?;
+        let img = SdImage::from_png_bytes(&bytes)?;
+        Ok(vec![img])
+    }
+
     /// Run the Bernini-R one-shot script (t2i / i2i single frame).
     pub fn generate_bernini_blocking(
         &self,
@@ -928,14 +995,19 @@ impl PythonBackend {
                     }
                     ("ref2va", Vec::new(), refs)
                 } else {
-                    // I2VA -> first-keyframe (fl2va)
+                    // I2VA -> first-keyframe (fl2va), optionally with last keyframe
                     let Some(first) = params.reference_images.first() else {
                         return Err(InferenceError::InvalidParameter(
                             "I2VA requires at least one reference image".to_string()
                         ));
                     };
                     let path = Self::write_temp_png(first, "py_h3_first")?;
-                    ("fl2va", vec![("--first-frame".to_string(), path.to_string_lossy().to_string())], Vec::new())
+                    let mut kf = vec![("--first-frame".to_string(), path.to_string_lossy().to_string())];
+                    if let Some(last) = &params.last_frame {
+                        let lpath = Self::write_temp_png(last, "py_h3_last")?;
+                        kf.push(("--last-frame".to_string(), lpath.to_string_lossy().to_string()));
+                    }
+                    ("fl2va", kf, Vec::new())
                 }
             }
             H3Mode::SFX | H3Mode::Audio => {
@@ -1181,6 +1253,10 @@ impl InferenceBackend for PythonBackend {
 
     fn generate_image(&self, params: ImageGenParams) -> InferenceResult<Vec<SdImage>> {
         self.generate_image_blocking(&params)
+    }
+
+    fn remove_background(&self, image: SdImage, model: &str) -> InferenceResult<Vec<SdImage>> {
+        self.remove_background_blocking(&image, model)
     }
 
     fn generate_3d_gaussian(
@@ -1533,6 +1609,11 @@ impl InferenceBackend for FallbackBackend {
 
     fn generate_video(&self, params: VideoGenParams) -> InferenceResult<SdVideo> {
         self.primary.generate_video(params)
+    }
+
+    fn remove_background(&self, image: SdImage, model: &str) -> InferenceResult<Vec<SdImage>> {
+        // Background removal runs exclusively through the rembg Python fallback.
+        self.python.remove_background(image, model)
     }
 
     fn upscale(&self, image: SdImage, params: UpscaleParams) -> InferenceResult<SdImage> {

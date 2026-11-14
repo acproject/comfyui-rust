@@ -195,8 +195,16 @@ impl AppState {
     }
 
     pub fn with_config(registry: NodeRegistry, config: ComfyConfig, config_path: PathBuf) -> Self {
-        let output_dir = config.output.dir.clone();
-        Self::build(registry, Some(output_dir), Some((config, config_path)))
+        // Even when no local/CLI inference backend is compiled in, the Python
+        // HF fallback can still provide capabilities like background removal
+        // (rembg). Wrap the NullBackend primary with the fallback when enabled.
+        let workspace_root = workspace_root_from_config(&config_path);
+        let backend = with_optional_python_fallback(
+            Arc::new(NullBackend) as Arc<dyn comfy_inference::InferenceBackend>,
+            &config,
+            workspace_root.as_deref(),
+        );
+        build_state_with_backend(registry, config, config_path, backend)
     }
 
     pub fn with_executor(registry: NodeRegistry, executor: Executor) -> Self {

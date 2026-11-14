@@ -396,6 +396,7 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     crate::minimax::register_minimax_nodes(registry);
     crate::qwen::register_qwen_nodes(registry);
     crate::boogu::register_boogu_nodes(registry);
+    crate::remove_background::register_remove_background_nodes(registry);
 
     // Video editing nodes (Premiere-like timeline editing)
     register_video_edit(registry);

@@ -1008,6 +1008,8 @@ pub struct H3Params {
     pub context: Option<H3Context>,
     /// 参考图像（I2VA/MR2VA）
     pub reference_images: Vec<crate::image::SdImage>,
+    /// 末尾关键帧（I2VA fl2va 首尾帧模式；为 None 时仅用首帧）
+    pub last_frame: Option<crate::image::SdImage>,
     /// 参考视频（Ref2VA/MR2VA）
     pub reference_video: Option<crate::image::SdVideo>,
     /// 音频引导（可选）
@@ -1046,6 +1048,7 @@ impl Default for H3Params {
             seed: 42,
             context: None,
             reference_images: Vec::new(),
+            last_frame: None,
             reference_video: None,
             audio_guide: None,
             shift: None,
@@ -1189,6 +1192,12 @@ impl H3Params {
     /// 启用多卡分离部署（跨卡张量经 CPU 绕行，禁用 P2P，规避单卡 OOM）
     pub fn with_split_gpu(mut self, enable: bool) -> Self {
         self.split_gpu = enable;
+        self
+    }
+
+    /// 设置末尾关键帧（fl2va 首尾帧模式）
+    pub fn with_last_frame(mut self, image: crate::image::SdImage) -> Self {
+        self.last_frame = Some(image);
         self
     }
 

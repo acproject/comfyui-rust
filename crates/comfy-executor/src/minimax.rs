@@ -252,6 +252,11 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                     type_name: "IMAGE".to_string(),
                     extra: HashMap::new(),
                 });
+                // 末尾关键帧（fl2va 首尾帧模式）；仅 i2va 模式下生效。
+                m.insert("last_frame".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
                 m.insert("seed".to_string(), int_input(0, u32::MAX as i64, 1, 42));
                 m.insert("steps".to_string(), int_input(1, 100, 1, 30));
                 // 17n+5 对齐，范围 123 (≈5s) – 362 (≈15s)。
@@ -283,6 +288,7 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
 
     registry.register(class_def, Arc::new(move |ctx, node, node_id| {
         let image_in = ctx.resolve_input(node_id, "image").unwrap_or_else(|_| json!(null));
+        let last_frame_in = ctx.resolve_input(node_id, "last_frame").unwrap_or_else(|_| json!(null));
         let context_in = ctx.resolve_input(node_id, "context").unwrap_or_else(|_| json!(null));
         let model_label = node.inputs.get("minimax_h3_model")
             .and_then(|v| v.as_str())
@@ -347,6 +353,8 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 })?;
 
             let mut images = resolve_input_images(&image_in, &node_id_str)?;
+            // 末尾关键帧（可选）：仅 i2va fl2va 首尾帧模式使用。
+            let last_frames = resolve_input_images(&last_frame_in, &node_id_str).unwrap_or_default();
 
             // auto：有图走 i2va(fl2va)，无图走 t2va。
             let (h3_mode, variant) = match mode.as_str() {
@@ -418,6 +426,10 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 // i2va 只取首帧；ref2va 传入全部参考图。
                 if matches!(h3_mode, H3Mode::I2VA) {
                     params.reference_images = vec![images.remove(0)];
+                    // fl2va 首尾帧：若提供了 last_frame，则作为末尾关键帧。
+                    if let Some(lf) = last_frames.into_iter().next() {
+                        params = params.with_last_frame(lf);
+                    }
                 } else {
                     params.reference_images = std::mem::take(&mut images);
                 }

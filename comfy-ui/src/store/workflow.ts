@@ -10,6 +10,7 @@ import {
   type ValidationResult,
   type ExecutionOrderResult,
 } from '@/dag';
+import { useCustomNodesStore } from './customNodes';
 
 interface SubgraphLink {
   id: number;
@@ -478,10 +479,83 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   getPrompt: () => {
     const { nodes, edges, objectInfo } = get();
+
+    // --- Handle frontend-only custom nodes (those with executeCode) ---
+    // The ComfyUI server does not know about custom nodes defined in the
+    // frontend (e.g. RemoveBackground). Such nodes carry an `executeCode`
+    // snippet that runs in the browser. Before submitting the prompt we
+    // parse that code to figure out which input each output maps to, then
+    // bypass the custom node by rewiring downstream edges directly to the
+    // original source. Nodes whose executeCode does not yield a usable
+    // mapping are dropped (their downstream consumers lose that input).
+    const customNodeDefs = useCustomNodesStore.getState().customNodes;
+    const customClassTypes = new Set(customNodeDefs.map((d) => d.classType));
+    const customNodesInGraph = nodes.filter((n) => customClassTypes.has(n.data.classType));
+    // Only frontend-only custom nodes (those carrying executeCode) are bypassed.
+    // Custom nodes without executeCode (e.g. RemoveBackground) are real
+    // server-side nodes and must be submitted in the prompt.
+    const hasExecuteCode = (classType: string) =>
+      customNodeDefs.find((d) => d.classType === classType)?.executeCode;
+    const customNodeIds = new Set(
+      customNodesInGraph.filter((n) => hasExecuteCode(n.data.classType)).map((n) => n.id)
+    );
+
+    // output index -> input name (or null) for each custom node instance
+    const outputToInput = new Map<string, Map<number, string | null>>();
+    for (const cn of customNodesInGraph) {
+      const def = customNodeDefs.find((d) => d.classType === cn.data.classType);
+      if (!def?.executeCode) continue;
+      const inputNames = def.inputs.map((i) => i.name);
+      const mockInputs: Record<string, string> = {};
+      for (const name of inputNames) mockInputs[name] = name;
+      const mapping = new Map<number, string | null>();
+      try {
+        // eslint-disable-next-line no-new-func
+        const fn = new Function('inputs', def.executeCode);
+        const result = fn(mockInputs);
+        if (Array.isArray(result)) {
+          result.forEach((val, idx) => {
+            mapping.set(idx, typeof val === 'string' && inputNames.includes(val) ? val : null);
+          });
+        }
+      } catch (e) {
+        console.warn('[workflow] Failed to parse custom node executeCode:', e);
+      }
+      outputToInput.set(cn.id, mapping);
+    }
+
+    // For each custom node input, record the (sourceNodeId, sourceOutputIndex)
+    const inputSources = new Map<string, Map<string, { nodeId: string; outputIndex: number }>>();
+    for (const edge of edges) {
+      if (!customNodeIds.has(edge.target)) continue;
+      const sourceNode = nodes.find((n) => n.id === edge.source);
+      if (!sourceNode) continue;
+      const outputIndex = sourceNode.data.outputs.findIndex((o) => o.name === edge.sourceHandle);
+      if (outputIndex < 0) continue;
+      if (!inputSources.has(edge.target)) inputSources.set(edge.target, new Map());
+      inputSources.get(edge.target)!.set(edge.targetHandle, { nodeId: edge.source, outputIndex });
+    }
+
+    // Rewrite map: "customNodeId:outputIndex" -> { nodeId, outputIndex } of the real source
+    const rewrite = new Map<string, { nodeId: string; outputIndex: number }>();
+    for (const cn of customNodesInGraph) {
+      const mapping = outputToInput.get(cn.id);
+      const sources = inputSources.get(cn.id);
+      const def = customNodeDefs.find((d) => d.classType === cn.data.classType);
+      if (!mapping || !sources || !def) continue;
+      def.outputs.forEach((_out, idx) => {
+        const inputName = mapping.get(idx);
+        if (!inputName) return;
+        const src = sources.get(inputName);
+        if (src) rewrite.set(`${cn.id}:${idx}`, src);
+      });
+    }
+
     const prompt: Record<string, unknown> = {};
 
     for (const node of nodes) {
       if (node.data.isNote) continue;
+      if (customNodeIds.has(node.id)) continue; // skip frontend-only custom nodes
 
       const classDef = objectInfo[node.data.classType];
       const allInputSpecs = {
@@ -510,13 +584,21 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         if (edge.target === node.id && edge.targetHandle) {
           const inputName = edge.targetHandle;
           const sourceNode = nodes.find((n) => n.id === edge.source);
-          if (sourceNode) {
-            const outputIndex = sourceNode.data.outputs.findIndex(
-              (o) => o.name === edge.sourceHandle
-            );
-            if (outputIndex >= 0) {
-              inputs[inputName] = [edge.source, outputIndex];
+          if (!sourceNode) continue;
+          const outputIndex = sourceNode.data.outputs.findIndex(
+            (o) => o.name === edge.sourceHandle
+          );
+          if (outputIndex < 0) continue;
+
+          if (customNodeIds.has(edge.source)) {
+            // The source is a frontend custom node: rewire to the real source.
+            const real = rewrite.get(`${edge.source}:${outputIndex}`);
+            if (real) {
+              inputs[inputName] = [real.nodeId, real.outputIndex];
             }
+            // If no mapping, the input is left at its widget value (or dropped).
+          } else {
+            inputs[inputName] = [edge.source, outputIndex];
           }
         }
       }

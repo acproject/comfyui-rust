@@ -65,6 +65,17 @@ pub trait InferenceBackend: Send + Sync {
         Err(InferenceError::BackendNotAvailable("Music3 generation not available on this backend".to_string()))
     }
 
+    /// Background removal via rembg (Python fallback).
+    fn remove_background(
+        &self,
+        _image: SdImage,
+        _model: &str,
+    ) -> InferenceResult<Vec<SdImage>> {
+        Err(InferenceError::BackendNotAvailable(
+            "Background removal not available on this backend".to_string(),
+        ))
+    }
+
     fn decode_video_latent(&self, _latent: &Value, _params: &VideoGenParams) -> InferenceResult<SdVideo> {
         Err(InferenceError::BackendNotAvailable("decode_video_latent not implemented".to_string()))
     }

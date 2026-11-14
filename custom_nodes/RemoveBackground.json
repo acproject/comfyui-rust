@@ -1,0 +1,47 @@
+{
+  "category": "image",
+  "classType": "RemoveBackground",
+  "createdAt": 1794626024085,
+  "description": "使用 AI 模型去除图像中人物的背景，输出透明背景的图像",
+  "displayName": "Remove Background",
+  "id": "cc30aec0-f4bc-4b82-be8e-f6a031c57d5e",
+  "inputs": [
+    {
+      "default": "",
+      "name": "image",
+      "required": true,
+      "type": "IMAGE"
+    },
+    {
+      "default": "bria-rmbg",
+      "name": "model",
+      "required": false,
+      "type": "COMBO",
+      "extra": {
+        "choices": [
+          "bria-rmbg",
+          "u2net",
+          "u2netp",
+          "u2net_human_seg",
+          "isnet-general-use",
+          "silueta",
+          "birefnet-general",
+          "birefnet-general-lite",
+          "birefnet-portrait"
+        ]
+      }
+    }
+  ],
+  "isOutputNode": false,
+  "outputs": [
+    {
+      "name": "image",
+      "type": "IMAGE"
+    },
+    {
+      "name": "mask",
+      "type": "MASK"
+    }
+  ],
+  "updatedAt": 1794626024085
+}
