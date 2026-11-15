@@ -47,9 +47,12 @@ fn main() {
     }
 
     // Environment always wins for the models directory (executor reads the
-    // same variable directly).
+    // same variable directly). Otherwise propagate the config's base_dir into
+    // the environment so executor nodes (qwen/bernini/boogu/...) find models.
     if let Ok(dir) = std::env::var("COMFY_MODELS_DIR") {
         config.models.base_dir = dir;
+    } else {
+        unsafe { std::env::set_var("COMFY_MODELS_DIR", &config.models.base_dir) };
     }
 
     let mut registry = NodeRegistry::new();

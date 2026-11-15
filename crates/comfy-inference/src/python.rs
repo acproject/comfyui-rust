@@ -18,8 +18,9 @@ use crate::params::{
     H3Context, H3Mode, H3Params, ImageGenParams, Music3Output, Music3Params, UpscaleParams,
     VideoGenParams,
 };
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 /// Name of the fallback package directory inside py/flash_attn_v100.
@@ -426,6 +427,11 @@ impl PythonBackend {
             args.push("--lora-scale".to_string());
             args.push(format!("{}", lora.multiplier));
         }
+        // Flow-matching shift (e.g. Qwen-Image-Edit 2509/2511 needs 3.0).
+        if let Some(fs) = params.sample_params.flow_shift {
+            args.push("--flow-shift".to_string());
+            args.push(fs.to_string());
+        }
 
         tracing::info!(
             "Python fallback image generation: {} {}",
@@ -433,20 +439,70 @@ impl PythonBackend {
             args.join(" ")
         );
 
-        let output = Command::new(&self.interpreter)
+        // Spawn with piped stderr so we can stream progress logs to the server
+        // log in real time (img_generate.py logs to stderr).
+        let mut child = Command::new(&self.interpreter)
             .args(&args)
-            .output()
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
             .map_err(|e| InferenceError::BackendNotAvailable(format!(
                 "Failed to execute Python fallback '{}': {}",
                 self.interpreter, e
             )))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        // Stream stderr to the server log in real time. tqdm progress bars
+        // use '\r' (carriage return) to update in place, so we split on BOTH
+        // '\r' and '\n' — otherwise 40 steps of progress get buffered as one
+        // giant line and never appear until the run finishes.
+        let stderr = child.stderr.take().expect("stderr was piped");
+        let mut reader = BufReader::new(stderr);
+        let mut pending: Vec<u8> = Vec::new();
+        let mut tail: Vec<String> = Vec::with_capacity(50);
+        let mut chunk = vec![0u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => {
+                    // EOF: flush any trailing partial line.
+                    if !pending.is_empty() {
+                        let s = String::from_utf8_lossy(&pending).to_string();
+                        tracing::info!("[img_generate] {}", s);
+                        if tail.len() >= 50 { tail.remove(0); }
+                        tail.push(s);
+                    }
+                    break;
+                }
+                Ok(n) => {
+                    let data = &chunk[..n];
+                    let mut start = 0;
+                    for (i, &b) in data.iter().enumerate() {
+                        if b == b'\r' || b == b'\n' {
+                            pending.extend_from_slice(&data[start..i]);
+                            if !pending.is_empty() {
+                                let s = String::from_utf8_lossy(&pending).to_string();
+                                tracing::info!("[img_generate] {}", s);
+                                if tail.len() >= 50 { tail.remove(0); }
+                                tail.push(s);
+                                pending.clear();
+                            }
+                            start = i + 1;
+                        }
+                    }
+                    pending.extend_from_slice(&data[start..]);
+                }
+                Err(_) => break,
+            }
+        }
+
+        let status = child.wait().map_err(|e| {
+            InferenceError::BackendNotAvailable(format!("Failed to wait for Python fallback: {}", e))
+        })?;
+
+        if !status.success() {
+            let tail_str = tail.iter().rev().take(10).rev().cloned().collect::<Vec<_>>().join("\n");
             return Err(InferenceError::GenerationFailed(format!(
                 "Python img_generate.py exited with status {}: {}",
-                output.status,
-                stderr.lines().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+                status, tail_str
             )));
         }
 

@@ -265,6 +265,7 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     register_clip_text_encode(registry);
     register_ksampler(registry);
     register_save_image(registry);
+    register_image_grid(registry);
     register_empty_latent_image(registry);
     register_vae_decode(registry);
     register_vae_encode(registry);
@@ -2630,6 +2631,128 @@ fn register_save_image(registry: &mut NodeRegistry) {
             // can be chained (e.g. multi-view results -> SaveImage -> more
             // edits); output 1 carries the saved-file metadata for the UI.
             Ok(vec![images.clone(), json!({ "images": saved_images })])
+        })
+    }));
+}
+
+fn register_image_grid(registry: &mut NodeRegistry) {
+    let class_def = NodeClassDef {
+        class_type: "ImageGrid".to_string(),
+        display_name: "Image Grid".to_string(),
+        category: "image".to_string(),
+        input_types: NodeInputTypes {
+            required: {
+                let mut m = HashMap::new();
+                m.insert("images".to_string(), InputTypeSpec {
+                    type_name: "IMAGE".to_string(),
+                    extra: HashMap::new(),
+                });
+                m
+            },
+            optional: {
+                let mut m = HashMap::new();
+                m.insert("rows".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0));
+                        e.insert("min".to_string(), json!(0));
+                        e
+                    },
+                });
+                m.insert("columns".to_string(), InputTypeSpec {
+                    type_name: "INT".to_string(),
+                    extra: {
+                        let mut e = HashMap::new();
+                        e.insert("default".to_string(), json!(0));
+                        e.insert("min".to_string(), json!(0));
+                        e
+                    },
+                });
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Image],
+        output_names: vec!["IMAGE".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        not_idempotent: false,
+        function_name: "grid".to_string(),
+    };
+
+    registry.register(class_def, Arc::new(|ctx, _node, node_id| {
+        let images = ctx.resolve_input(node_id, "images")
+            .unwrap_or_else(|_| json!(null));
+        let rows_param = ctx.resolve_input(node_id, "rows")
+            .unwrap_or_else(|_| json!(0));
+        let cols_param = ctx.resolve_input(node_id, "columns")
+            .unwrap_or_else(|_| json!(0));
+
+        Box::pin(async move {
+            let img_arr = images.get("images")
+                .and_then(|v| v.as_array())
+                .or_else(|| images.get("samples").and_then(|v| v.as_array()))
+                .ok_or_else(|| ExecutorError::NodeExecution("ImageGrid: no images input".to_string()))?;
+
+            let n = img_arr.len();
+            if n == 0 {
+                return Err(ExecutorError::NodeExecution("ImageGrid: empty image list".to_string()));
+            }
+
+            // Auto-calculate grid dimensions if not specified
+            let mut rows = rows_param.as_u64().unwrap_or(0) as usize;
+            let mut cols = cols_param.as_u64().unwrap_or(0) as usize;
+            if rows == 0 && cols == 0 {
+                cols = (n as f64).sqrt().ceil() as usize;
+                rows = (n + cols - 1) / cols;
+            } else if rows == 0 {
+                rows = (n + cols - 1) / cols;
+            } else if cols == 0 {
+                cols = (n + rows - 1) / rows;
+            }
+
+            // Deserialize all images
+            let mut sd_images: Vec<comfy_inference::SdImage> = Vec::with_capacity(n);
+            for sample in img_arr.iter() {
+                let sd: comfy_inference::SdImage = serde_json::from_value(sample.clone())
+                    .map_err(|e| ExecutorError::NodeExecution(format!("ImageGrid: failed to decode image: {}", e)))?;
+                sd_images.push(sd);
+            }
+
+            let single_w = sd_images[0].width;
+            let single_h = sd_images[0].height;
+            let channel = sd_images[0].channel;
+            let grid_w = single_w * cols as u32;
+            let grid_h = single_h * rows as u32;
+
+            tracing::info!("ImageGrid: {} images -> {}x{} grid ({}x{})", n, cols, rows, grid_w, grid_h);
+
+            // Create output image buffer
+            let mut out_data = vec![0u8; (grid_w * grid_h * channel) as usize];
+
+            for (idx, img) in sd_images.iter().enumerate() {
+                let row = idx / cols;
+                let col = idx % cols;
+                if row >= rows { break; }
+                for y in 0..img.height {
+                    for x in 0..img.width {
+                        let src_idx = ((y * img.width + x) * channel) as usize;
+                        let dst_y = (row as u32 * img.height + y) * grid_w;
+                        let dst_x = col as u32 * img.width + x;
+                        let dst_idx = ((dst_y + dst_x) * channel) as usize;
+                        out_data[dst_idx..dst_idx + channel as usize]
+                            .copy_from_slice(&img.data[src_idx..src_idx + channel as usize]);
+                    }
+                }
+            }
+
+            let grid_image = comfy_inference::SdImage::from_raw(grid_w, grid_h, channel, out_data)
+                .map_err(|e| ExecutorError::NodeExecution(format!("ImageGrid: {}", e)))?;
+
+            Ok(vec![json!({ "images": [grid_image] })])
         })
     }));
 }
