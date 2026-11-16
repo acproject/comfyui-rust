@@ -2695,11 +2695,11 @@ fn register_image_grid(registry: &mut NodeRegistry) {
             let img_arr = images.get("images")
                 .and_then(|v| v.as_array())
                 .or_else(|| images.get("samples").and_then(|v| v.as_array()))
-                .ok_or_else(|| ExecutorError::NodeExecution("ImageGrid: no images input".to_string()))?;
+                .ok_or_else(|| ExecutorError::NodeExecutionFailed { node_id: node_id.to_string(), message: "ImageGrid: no images input".to_string() })?;
 
             let n = img_arr.len();
             if n == 0 {
-                return Err(ExecutorError::NodeExecution("ImageGrid: empty image list".to_string()));
+                return Err(ExecutorError::NodeExecutionFailed { node_id: node_id.to_string(), message: "ImageGrid: empty image list".to_string() });
             }
 
             // Auto-calculate grid dimensions if not specified
@@ -2718,7 +2718,7 @@ fn register_image_grid(registry: &mut NodeRegistry) {
             let mut sd_images: Vec<comfy_inference::SdImage> = Vec::with_capacity(n);
             for sample in img_arr.iter() {
                 let sd: comfy_inference::SdImage = serde_json::from_value(sample.clone())
-                    .map_err(|e| ExecutorError::NodeExecution(format!("ImageGrid: failed to decode image: {}", e)))?;
+                    .map_err(|e| ExecutorError::NodeExecutionFailed { node_id: node_id.to_string(), message: format!("ImageGrid: failed to decode image: {}", e) })?;
                 sd_images.push(sd);
             }
 
@@ -2750,7 +2750,7 @@ fn register_image_grid(registry: &mut NodeRegistry) {
             }
 
             let grid_image = comfy_inference::SdImage::from_raw(grid_w, grid_h, channel, out_data)
-                .map_err(|e| ExecutorError::NodeExecution(format!("ImageGrid: {}", e)))?;
+                .map_err(|e| ExecutorError::NodeExecutionFailed { node_id: node_id.to_string(), message: format!("ImageGrid: {}", e) })?;
 
             Ok(vec![json!({ "images": [grid_image] })])
         })
