@@ -1,0 +1,221 @@
+{
+  "1": {
+    "class_type": "LTXLoader",
+    "inputs": {
+      "ckpt_name": "ltx-2.3-22b-dev-Q8_0.gguf",
+      "audio_vae_name": "ltx-2.3-22b-dev_audio_vae.safetensors",
+      "embeddings_connectors_name": "ltx-2.3-22b-dev_embeddings_connector.safetensors",
+      "llm_name": "gemma-3-12b-it-qat-UD-Q4_K_XL.gguf",
+      "vae_name": "ltx-2.3-22b-dev_video_vae.safetensors"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "A serene misty bamboo forest at dawn. A woman in flowing traditional hanfu clothing walks slowly from a distance along a narrow stone path toward a clearing deep in the bamboo grove. A rustic thatched pavilion stands quietly beside the bamboo forest. Soft golden morning sunlight filters through the tall green bamboo stalks, casting dappled light and long shadows on the mossy ground. Thin white mist drifts gently between the bamboo, partially obscuring the view so that from afar only the woman's silhouette and the color of her garments are visible. The camera slowly pushes forward and smoothly follows the woman as she walks deeper into the forest. Gentle wind sways the bamboo leaves softly. Cinematic, atmospheric, tranquil mood, film grain, shallow depth of field, natural lighting. Ambient sound of gentle wind rustling through bamboo leaves, peaceful forest atmosphere.",
+      "clip": [
+        "1",
+        1
+      ]
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, low quality, distorted, deformed, extra limbs, bad anatomy, text, watermark, logo, jittery, flickering, fast motion, unnatural movement, cartoon, anime, 3d render, oversaturated, harsh lighting, modern buildings, cars, people in background",
+      "clip": [
+        "1",
+        1
+      ]
+    }
+  },
+  "5": {
+    "class_type": "LTXVConditioning",
+    "inputs": {
+      "frame_rate": 24,
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "ss_ren01.png"
+    }
+  },
+  "7": {
+    "class_type": "LTXVPreprocess",
+    "inputs": {
+      "strip_weight": 1.0,
+      "image": [
+        "6",
+        0
+      ]
+    }
+  },
+  "8": {
+    "class_type": "EmptyLTXVLatentVideo",
+    "inputs": {
+      "batch_size": 1,
+      "height": 512,
+      "length": 97,
+      "width": 768
+    }
+  },
+  "9": {
+    "class_type": "LTXVImgToVideoInplace",
+    "inputs": {
+      "bypass": false,
+      "vae": [
+        "1",
+        2
+      ],
+      "image": [
+        "7",
+        0
+      ],
+      "latent": [
+        "8",
+        0
+      ]
+    }
+  },
+  "10": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "control_after_generate": "randomize",
+      "noise_seed": 42
+    }
+  },
+  "11": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "cfg": 3.0,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "5",
+        1
+      ]
+    }
+  },
+  "12": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "13": {
+    "class_type": "ManualSigmas",
+    "inputs": {
+      "sigmas": "1.000000,0.994596,0.988632,0.982017,0.974638,0.966354,0.956989,0.946317,0.934041,0.919772,0.902982,0.882937,0.858590,0.828389,0.789934,0.739306,0.669639,0.567704,0.404329,0.100000,0.000000"
+    }
+  },
+  "14": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "latent_image": [
+        "9",
+        0
+      ],
+      "noise": [
+        "10",
+        0
+      ],
+      "guider": [
+        "11",
+        0
+      ],
+      "sampler": [
+        "12",
+        0
+      ],
+      "sigmas": [
+        "13",
+        0
+      ]
+    }
+  },
+  "15": {
+    "class_type": "LTXVSeparateAVLatent",
+    "inputs": {
+      "av_latent": [
+        "14",
+        0
+      ]
+    }
+  },
+  "16": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "overlap": 0,
+      "temporal_overlap": 0,
+      "temporal_size": 0,
+      "tile_size": 0,
+      "vae": [
+        "1",
+        2
+      ],
+      "samples": [
+        "15",
+        0
+      ]
+    }
+  },
+  "17": {
+    "class_type": "LTXVAudioVAELoader",
+    "inputs": {
+      "ckpt_name": "ltx-2.3-22b-dev_audio_vae.safetensors"
+    }
+  },
+  "18": {
+    "class_type": "LTXVAudioVAEDecode",
+    "inputs": {
+      "audio_vae": [
+        "17",
+        0
+      ],
+      "samples": [
+        "15",
+        1
+      ]
+    }
+  },
+  "19": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "fps": 24,
+      "images": [
+        "16",
+        0
+      ]
+    }
+  },
+  "20": {
+    "class_type": "SaveVideoWithAudio",
+    "inputs": {
+      "audio": [
+        "18",
+        0
+      ],
+      "filename_prefix": "bamboo_woman",
+      "format": "mp4",
+      "video": [
+        "19",
+        0
+      ]
+    }
+  }
+}

@@ -76,6 +76,41 @@ pub trait InferenceBackend: Send + Sync {
         ))
     }
 
+    /// Extract a MiniMax H3 RefMod from one or more reference images.
+    ///
+    /// Encodes the images with the H3 video VAE and writes a ``.safetensors``
+    /// mod to ``models/refmods/<name>.safetensors``.  Returns the saved path.
+    fn refmod_extract(
+        &self,
+        _image_paths: &[String],
+        _vae_dir: &str,
+        _name: &str,
+        _mode: &str,
+        _resolution: i64,
+        _pool: i64,
+        _identity: i64,
+        _concept_type: &str,
+        _description: &str,
+    ) -> InferenceResult<String> {
+        Err(InferenceError::BackendNotAvailable(
+            "RefMod extraction not available on this backend".to_string(),
+        ))
+    }
+
+    /// Decode a saved RefMod's first latent frame back to an image.
+    ///
+    /// Used by the Apply node to turn a stored RefMod into a reference image
+    /// that the native H3 ref2va path can consume.
+    fn refmod_decode(
+        &self,
+        _mod_path: &str,
+        _vae_dir: &str,
+    ) -> InferenceResult<SdImage> {
+        Err(InferenceError::BackendNotAvailable(
+            "RefMod decode not available on this backend".to_string(),
+        ))
+    }
+
     fn decode_video_latent(&self, _latent: &Value, _params: &VideoGenParams) -> InferenceResult<SdVideo> {
         Err(InferenceError::BackendNotAvailable("decode_video_latent not implemented".to_string()))
     }

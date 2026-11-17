@@ -199,8 +199,10 @@ impl CliBackend {
             args.push(path.clone());
         }
         if let Some(ref path) = model_config.text_encoder_path {
-            args.push("--text-encoder".to_string());
-            args.push(path.clone());
+            if model_config.llm_path.is_none() {
+                args.push("--llm".to_string());
+                args.push(path.clone());
+            }
         }
         if let Some(ref path) = model_config.audio_vae_path {
             args.push("--audio-vae".to_string());
@@ -505,14 +507,48 @@ impl InferenceBackend for CliBackend {
         let output_dir = &self.config.default_output_dir;
         std::fs::create_dir_all(output_dir).ok();
 
-        let output_path = Path::new(output_dir).join(format!("comfyui_cli_vid_{}.webm", params.seed));
+        // Output frames as an image sequence so we can load them back.
+        let frame_prefix = format!("comfyui_cli_vid_{}", params.seed);
+        let output_pattern = Path::new(output_dir).join(format!("{}_%04d.png", frame_prefix));
         args.push("-o".to_string());
-        args.push(output_path.to_string_lossy().to_string());
+        args.push(output_pattern.to_string_lossy().to_string());
 
         self.run_sd_cli(&args)?;
 
-        let frames = Vec::new();
-        let video = SdVideo::new_without_audio(frames, 16);
+        // Collect generated frames in sorted order.
+        let mut frames: Vec<SdImage> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(output_dir) {
+            let mut paths: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with(&frame_prefix) && n.ends_with(".png"))
+                        .unwrap_or(false)
+                })
+                .collect();
+            paths.sort();
+            for path in paths {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if let Ok(img) = SdImage::from_png_bytes(&bytes) {
+                        frames.push(img);
+                    }
+                }
+                if !self.config.verbose {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+
+        if frames.is_empty() {
+            return Err(InferenceError::GenerationFailed(
+                "sd-cli produced no video frames".to_string(),
+            ));
+        }
+
+        let fps = if params.fps > 0 { params.fps } else { 8 };
+        let video = SdVideo::new_without_audio(frames, fps);
 
         Ok(video)
     }

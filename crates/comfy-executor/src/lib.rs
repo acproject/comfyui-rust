@@ -15,6 +15,7 @@ pub mod qwen;
 pub mod mask;
 pub mod prompt_relay;
 pub mod remove_background;
+pub mod refmod;
 pub mod triposplat;
 
 /// Serializes unit tests that mutate process-global state (`COMFY_MODELS_DIR`,

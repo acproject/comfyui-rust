@@ -361,6 +361,29 @@ impl PythonBackend {
         dir
     }
 
+    /// Directory for saved RefMod ``.safetensors`` files.
+    fn refmods_dir() -> PathBuf {
+        // Resolve relative to the workspace root: models/refmods/
+        let candidates: Vec<PathBuf> = [
+            std::env::var_os("COMFY_REFMODS_DIR").map(PathBuf::from),
+            std::env::current_dir().ok().map(|d| d.join("models/refmods")),
+            std::env::current_exe().ok().and_then(|p| {
+                p.ancestors().nth(3).map(|r| r.join("models/refmods"))
+            }),
+        ].into_iter().flatten().collect();
+        for c in candidates {
+            if c.exists() || c.parent().map(|p| p.exists()).unwrap_or(false) {
+                std::fs::create_dir_all(&c).ok();
+                return c;
+            }
+        }
+        let dir = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("models/refmods");
+        std::fs::create_dir_all(&dir).ok();
+        dir
+    }
+
     fn write_temp_png(image: &SdImage, prefix: &str) -> InferenceResult<PathBuf> {
         let path = Self::temp_dir().join(format!("{}_{}.png", prefix, std::process::id()));
         std::fs::write(&path, image.to_png_bytes()?)
@@ -583,6 +606,116 @@ impl PythonBackend {
             .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))?;
         let img = SdImage::from_png_bytes(&bytes)?;
         Ok(vec![img])
+    }
+
+    /// Extract a MiniMax H3 RefMod from reference images.
+    ///
+    /// Calls ``refmod.py extract`` which loads the H3 video VAE, encodes each
+    /// image (pooling/optimising in training mode), and writes a
+    /// ``.safetensors`` mod under ``models/refmods/``.  The printed stdout
+    /// line is the saved path.
+    pub fn refmod_extract_blocking(
+        &self,
+        image_paths: &[String],
+        vae_dir: &str,
+        name: &str,
+        mode: &str,
+        resolution: i64,
+        pool: i64,
+        identity: i64,
+        concept_type: &str,
+        description: &str,
+    ) -> InferenceResult<String> {
+        let script = self.script_path("refmod.py")?;
+        let mut args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "extract".to_string(),
+            "--vae".to_string(), vae_dir.to_string(),
+            "--name".to_string(), name.to_string(),
+            "--out".to_string(), Self::refmods_dir().to_string_lossy().to_string(),
+            "--mode".to_string(), mode.to_string(),
+            "--resolution".to_string(), resolution.to_string(),
+            "--pool".to_string(), pool.to_string(),
+            "--identity".to_string(), identity.to_string(),
+            "--concept-type".to_string(), concept_type.to_string(),
+            "--device".to_string(), self.config.device.clone(),
+        ];
+        for p in image_paths {
+            args.push("--image".to_string());
+            args.push(p.clone());
+        }
+        if !description.is_empty() {
+            args.push("--description".to_string());
+            args.push(description.to_string());
+        }
+
+        tracing::info!("Python refmod extract: {} {}", self.interpreter, args.join(" "));
+        let output = Command::new(&self.interpreter).args(&args).output().map_err(|e| {
+            InferenceError::BackendNotAvailable(format!(
+                "Failed to execute Python refmod.py: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InferenceError::GenerationFailed(format!(
+                "refmod.py extract exited with status {}: {}",
+                output.status,
+                stderr.lines().rev().take(15).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let path = stdout.lines().last().unwrap_or("").trim().to_string();
+        if path.is_empty() || !std::path::Path::new(&path).exists() {
+            return Err(InferenceError::GenerationFailed(
+                "refmod.py extract did not produce an output path".to_string(),
+            ));
+        }
+        Ok(path)
+    }
+
+    /// Decode a RefMod's first latent frame back to an image.
+    pub fn refmod_decode_blocking(
+        &self,
+        mod_path: &str,
+        vae_dir: &str,
+    ) -> InferenceResult<SdImage> {
+        let script = self.script_path("refmod.py")?;
+        let output_path = Self::temp_dir().join(format!(
+            "py_refmod_decode_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos()).unwrap_or(0)
+        ));
+
+        let args: Vec<String> = vec![
+            script.to_string_lossy().to_string(),
+            "decode".to_string(),
+            "--vae".to_string(), vae_dir.to_string(),
+            "--mod".to_string(), mod_path.to_string(),
+            "--out".to_string(), output_path.to_string_lossy().to_string(),
+            "--device".to_string(), self.config.device.clone(),
+        ];
+
+        tracing::info!("Python refmod decode: {} {}", self.interpreter, args.join(" "));
+        let output = Command::new(&self.interpreter).args(&args).output().map_err(|e| {
+            InferenceError::BackendNotAvailable(format!(
+                "Failed to execute Python refmod.py: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InferenceError::GenerationFailed(format!(
+                "refmod.py decode exited with status {}: {}",
+                output.status,
+                stderr.lines().rev().take(15).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+            )));
+        }
+
+        let bytes = std::fs::read(&output_path)
+            .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))?;
+        Ok(SdImage::from_png_bytes(&bytes)?)
     }
 
     /// Run the Bernini-R one-shot script (t2i / i2i single frame).
@@ -1315,6 +1448,26 @@ impl InferenceBackend for PythonBackend {
         self.remove_background_blocking(&image, model)
     }
 
+    fn refmod_extract(
+        &self,
+        image_paths: &[String],
+        vae_dir: &str,
+        name: &str,
+        mode: &str,
+        resolution: i64,
+        pool: i64,
+        identity: i64,
+        concept_type: &str,
+        description: &str,
+    ) -> InferenceResult<String> {
+        self.refmod_extract_blocking(image_paths, vae_dir, name, mode, resolution,
+                                     pool, identity, concept_type, description)
+    }
+
+    fn refmod_decode(&self, mod_path: &str, vae_dir: &str) -> InferenceResult<SdImage> {
+        self.refmod_decode_blocking(mod_path, vae_dir)
+    }
+
     fn generate_3d_gaussian(
         &self,
         params: Gaussian3DParams,
@@ -1670,6 +1823,26 @@ impl InferenceBackend for FallbackBackend {
     fn remove_background(&self, image: SdImage, model: &str) -> InferenceResult<Vec<SdImage>> {
         // Background removal runs exclusively through the rembg Python fallback.
         self.python.remove_background(image, model)
+    }
+
+    fn refmod_extract(
+        &self,
+        image_paths: &[String],
+        vae_dir: &str,
+        name: &str,
+        mode: &str,
+        resolution: i64,
+        pool: i64,
+        identity: i64,
+        concept_type: &str,
+        description: &str,
+    ) -> InferenceResult<String> {
+        self.python.refmod_extract(image_paths, vae_dir, name, mode, resolution,
+                                   pool, identity, concept_type, description)
+    }
+
+    fn refmod_decode(&self, mod_path: &str, vae_dir: &str) -> InferenceResult<SdImage> {
+        self.python.refmod_decode(mod_path, vae_dir)
     }
 
     fn upscale(&self, image: SdImage, params: UpscaleParams) -> InferenceResult<SdImage> {

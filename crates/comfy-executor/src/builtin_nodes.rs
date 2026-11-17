@@ -398,6 +398,7 @@ pub fn register_builtin_nodes(registry: &mut NodeRegistry) {
     crate::qwen::register_qwen_nodes(registry);
     crate::boogu::register_boogu_nodes(registry);
     crate::remove_background::register_remove_background_nodes(registry);
+    crate::refmod::register_refmod_nodes(registry);
 
     // Video editing nodes (Premiere-like timeline editing)
     register_video_edit(registry);
@@ -4361,10 +4362,14 @@ fn register_wan_video_sampler(registry: &mut NodeRegistry) {
                     Ok(video) => {
                         let frame_count = video.frame_count();
                         tracing::info!("WanVideoSampler: generated {} video frames", frame_count);
+                        let video_val = serde_json::to_value(&video).unwrap_or(json!({}));
                         Ok(vec![json!({
                             "type": "video",
                             "frame_count": frame_count,
                             "fps": video.fps,
+                            "frames": video_val.get("frames").cloned().unwrap_or(json!([])),
+                            "width": width,
+                            "height": height,
                         })])
                     }
                     Err(e) => {
