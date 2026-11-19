@@ -33,6 +33,9 @@
       "seed": 42,
       "steps": 30,
       "num_frames": 123,
+      "width": 832,
+      "height": 480,
+      "fps": 24,
       "embed_frames": true
     }
   },

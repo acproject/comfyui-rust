@@ -264,6 +264,8 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 // 0 = 由 pipeline 自动决定（短边 768，按宽高比）。
                 m.insert("width".to_string(), int_input(0, 1536, 32, 0));
                 m.insert("height".to_string(), int_input(0, 1536, 32, 0));
+                // 视频帧率；H3 原生 24fps，可按需调整（影响音视频时长对齐）。
+                m.insert("fps".to_string(), int_input(1, 60, 1, 24));
                 m.insert("embed_frames".to_string(), bool_input(true));
                 // Multi-GPU split deploy: transformer / text_encoder / VAE on
                 // separate cards, cross-card tensors routed via host (no P2P).
@@ -310,6 +312,7 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
         let num_frames = node.inputs.get("num_frames").and_then(|v| v.as_i64()).unwrap_or(123) as i32;
         let width = node.inputs.get("width").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let height = node.inputs.get("height").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let fps = node.inputs.get("fps").and_then(|v| v.as_i64()).unwrap_or(24).clamp(1, 60) as i32;
         let embed_frames = node.inputs.get("embed_frames")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
@@ -413,7 +416,8 @@ fn register_h3_pipeline(registry: &mut NodeRegistry) {
                 .with_steps(steps)
                 .with_num_frames(num_frames)
                 .with_seed(seed)
-                .with_split_gpu(split_gpu);
+                .with_split_gpu(split_gpu)
+                .with_fps(fps);
             params.mode = h3_mode;
             if width > 0 && height > 0 {
                 params = params.with_resolution(width, height);

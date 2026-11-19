@@ -1,0 +1,54 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "/home/acproject/workspace/rust_projects/comfyui-rust/output/OK_041_00000.png"
+    }
+  },
+  "2": {
+    "class_type": "MiniMaxH3RefModExtract",
+    "inputs": {
+      "image": ["1", 0],
+      "vae_dir": "/home/acproject/usb/comfyui/models/MiniMax-H3/Ref2VA/video_vae",
+      "name": "bamboo_woman",
+      "mode": "encode",
+      "resolution": 2048,
+      "pool": 16,
+      "identity": 500,
+      "concept_type": "appearance",
+      "description": "bamboo woman reference identity"
+    }
+  },
+  "3": {
+    "class_type": "MiniMaxH3RefModApply",
+    "inputs": {
+      "mods": ["2", 0],
+      "vae_dir": "/home/acproject/usb/comfyui/models/MiniMax-H3/Ref2VA/video_vae",
+      "strength": 1.0
+    }
+  },
+  "4": {
+    "class_type": "MiniMaxH3Pipeline",
+    "inputs": {
+      "prompt": "A serene misty bamboo forest at dawn. A woman in flowing traditional hanfu clothing walks slowly from a distance along a narrow stone path toward a clearing deep in the bamboo grove. A rustic thatched pavilion stands quietly beside the bamboo forest. Soft golden morning sunlight filters through the tall green bamboo stalks, casting dappled light and long shadows on the mossy ground. Thin white mist drifts gently between the bamboo, partially obscuring the view so that from afar only the woman's silhouette and the color of her garments are visible. The camera slowly pushes forward and smoothly follows the woman as she walks deeper into the forest. Gentle wind sways the bamboo leaves softly. Cinematic, atmospheric, tranquil mood, film grain, shallow depth of field, natural lighting. Ambient sound of gentle wind rustling through bamboo leaves, peaceful forest atmosphere.",
+      "minimax_h3_model": "MiniMax-H3",
+      "mode": "ref2va",
+      "image": ["3", 0],
+      "seed": 42,
+      "steps": 30,
+      "num_frames": 123,
+      "width": 832,
+      "height": 480,
+      "fps": 24,
+      "embed_frames": true,
+      "split_gpu": true
+    }
+  },
+  "5": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": ["4", 0],
+      "filename_prefix": "h3_refmod_bamboo_s"
+    }
+  }
+}
