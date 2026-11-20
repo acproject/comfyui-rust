@@ -385,7 +385,17 @@ impl PythonBackend {
     }
 
     fn write_temp_png(image: &SdImage, prefix: &str) -> InferenceResult<PathBuf> {
-        let path = Self::temp_dir().join(format!("{}_{}.png", prefix, std::process::id()));
+        // Per-call sequence so loop callers (e.g. multiple H3 reference
+        // images) never overwrite each other's temp files.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = Self::temp_dir().join(format!(
+            "{}_{}_{}.png",
+            prefix,
+            std::process::id(),
+            seq
+        ));
         std::fs::write(&path, image.to_png_bytes()?)
             .map_err(|e| InferenceError::ImageDecodeError(e.to_string()))?;
         Ok(path)

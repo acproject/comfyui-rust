@@ -10,6 +10,7 @@
 //!   * ``MiniMaxH3RefModFolderLoader`` — list images/videos in a folder
 //!   * ``MiniMaxH3RefModApply``    — decode mods → reference images on H3 cond
 //!   * ``MiniMaxH3RefModsAxis``    — A/B mod pairs on signed sliders
+//!   * ``MiniMaxH3RefModsMerge``   — merge up to 4 RefMod bundles into one
 
 use crate::error::ExecutorError;
 use crate::registry::NodeRegistry;
@@ -566,10 +567,72 @@ fn register_axis(registry: &mut NodeRegistry) {
     }));
 }
 
+// ── 6. Merge H3 RefMod bundles ────────────────────────────────────────────
+
+fn register_merge(registry: &mut NodeRegistry) {
+    let class = NodeClassDef {
+        class_type: "MiniMaxH3RefModsMerge".to_string(),
+        display_name: "Merge H3 RefMods (合并参考Mod)".to_string(),
+        category: "H3/ref2va".to_string(),
+        input_types: NodeInputTypes {
+            required: HashMap::new(),
+            optional: {
+                let mut m = HashMap::new();
+                for i in 1..=4 {
+                    m.insert(format!("mods_{}", i), InputTypeSpec {
+                        type_name: REFMODS_IO.to_string(),
+                        extra: HashMap::new(),
+                    });
+                }
+                m
+            },
+            hidden: HashMap::new(),
+        },
+        output_types: vec![IoType::Custom(REFMODS_IO.to_string())],
+        output_names: vec!["REFMODS".to_string()],
+        output_is_list: vec![false],
+        is_output_node: false,
+        has_intermediate_output: false,
+        is_changed: None,
+        // The merge itself is deterministic, but upstream Extract nodes are
+        // not; marking idempotent keeps caching consistent for pure merges.
+        not_idempotent: false,
+        function_name: "merge".to_string(),
+    };
+
+    registry.register(class, Arc::new(move |ctx, node, node_id| {
+        let node_id_str = node_id.to_string();
+        Box::pin(async move {
+            let mut merged: Vec<Value> = Vec::new();
+            for i in 1..=4 {
+                let key = format!("mods_{}", i);
+                let val = match ctx.resolve_input(&node_id_str, &key) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if val.is_null() {
+                    continue;
+                }
+                if let Some(arr) = val.get("mods").and_then(|v| v.as_array()) {
+                    merged.extend(arr.iter().cloned());
+                }
+            }
+            if merged.is_empty() {
+                return Err(ExecutorError::NodeExecutionFailed {
+                    node_id: node_id_str,
+                    message: "Merge H3 RefMods: no input mods connected".to_string(),
+                });
+            }
+            Ok(vec![json!({ "mods": merged })])
+        })
+    }));
+}
+
 pub fn register_refmod_nodes(registry: &mut NodeRegistry) {
     register_extract(registry);
     register_loader(registry);
     register_folder_loader(registry);
     register_apply(registry);
     register_axis(registry);
+    register_merge(registry);
 }
