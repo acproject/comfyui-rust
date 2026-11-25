@@ -1,0 +1,35 @@
+[package]
+name = "h3-studio"
+version = "0.1.0"
+edition = "2021"
+description = "H3 Studio — desktop AI filmmaking workstation (egui)"
+
+[[bin]]
+name = "h3-studio"
+path = "src/main.rs"
+
+[dependencies]
+egui = "0.31"
+eframe = { version = "0.31", default-features = true, features = ["glow"] }
+egui_extras = { version = "0.31", features = ["image"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "json", "charset"] }
+
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+rfd = "0.15"
+
+dirs = "5"
+sysinfo = { version = "0.33", default-features = false, features = ["system", "disk"] }
+
+[features]
+# Enables eframe's headless screenshot mode (EFRAME_SCREENSHOT_TO=path.png).
+screenshot = ["eframe/__screenshot"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

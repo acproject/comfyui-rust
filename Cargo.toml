@@ -6,5 +6,6 @@ members = [
     "crates/comfy-api",
     "crates/comfy-mcp",
     "crates/comfy-cli",
+    "crates/h3-studio",
 ]
 resolver = "2"
