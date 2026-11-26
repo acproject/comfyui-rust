@@ -1,9 +1,20 @@
 //! Project workspace — project header, global settings, linked characters, scenes, production progress.
 
-use egui::{Align2, Color32, FontId, FontFamily, Rect, Stroke, StrokeKind};
+use egui::{Align2, Color32, FontId, FontFamily, Rect, Sense, Stroke, StrokeKind};
 use crate::app::{H3App, Screen};
+use crate::state::ProjectRecord;
 use crate::theme::{color, typography};
 use crate::widgets;
+
+/// Apply a mutation to the currently-selected project and persist it.
+fn mutate_project<F: FnOnce(&mut ProjectRecord)>(app: &mut H3App, f: F) {
+    if let Some(id) = app.local.selected_project_id.clone() {
+        if let Some(p) = app.local.projects.iter_mut().find(|p| p.id == id) {
+            f(p);
+            app.local.save();
+        }
+    }
+}
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     let project = app.local.project().cloned();
@@ -43,9 +54,15 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                 let pill_x = gs.left() + 132.0 + i as f32 * 118.0;
                 let pill_rect = Rect::from_min_size(egui::pos2(pill_x, gs.top() + 52.0), egui::vec2(104.0, 28.0));
                 let active = aspect == &project.aspect;
-                ui.painter().rect_filled(pill_rect, 6.0f32, if active { color::indigo() } else { Color32::TRANSPARENT });
-                ui.painter().rect_stroke(pill_rect, 6.0f32, Stroke::new(1.0, if active { color::indigo() } else { color::border() }), StrokeKind::Middle);
+                let resp = ui.interact(pill_rect, ui.id().with(("proj-aspect", *aspect)), Sense::click());
+                let hover = resp.hovered() && !active;
+                ui.painter().rect_filled(pill_rect, 6.0f32, if active { color::indigo() } else if hover { color::card() } else { Color32::TRANSPARENT });
+                ui.painter().rect_stroke(pill_rect, 6.0f32, Stroke::new(1.0, if active || hover { color::indigo() } else { color::border() }), StrokeKind::Middle);
                 ui.painter().text(pill_rect.center(), Align2::CENTER_CENTER, aspect, FontId::new(10.5, FontFamily::Proportional), if active { color::on_accent() } else { color::text() });
+                if resp.clicked() {
+                    mutate_project(app, |p| p.aspect = aspect.to_string());
+                    app.set_toast(format!("Aspect ratio → {}", aspect));
+                }
             }
             // FPS pills
             ui.painter().text(egui::pos2(gs.left() + 22.0, gs.top() + 104.0), Align2::LEFT_CENTER, "Default FPS", FontId::new(11.0, FontFamily::Proportional), color::text2());
@@ -53,9 +70,17 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                 let pill_x = gs.left() + 132.0 + i as f32 * 88.0;
                 let pill_rect = Rect::from_min_size(egui::pos2(pill_x, gs.top() + 92.0), egui::vec2(80.0, 28.0));
                 let active = fps.parse::<u32>().ok().unwrap() == project.fps;
-                ui.painter().rect_filled(pill_rect, 6.0f32, if active { color::indigo() } else { Color32::TRANSPARENT });
-                ui.painter().rect_stroke(pill_rect, 6.0f32, Stroke::new(1.0, if active { color::indigo() } else { color::border() }), StrokeKind::Middle);
+                let resp = ui.interact(pill_rect, ui.id().with(("proj-fps", *fps)), Sense::click());
+                let hover = resp.hovered() && !active;
+                ui.painter().rect_filled(pill_rect, 6.0f32, if active { color::indigo() } else if hover { color::card() } else { Color32::TRANSPARENT });
+                ui.painter().rect_stroke(pill_rect, 6.0f32, Stroke::new(1.0, if active || hover { color::indigo() } else { color::border() }), StrokeKind::Middle);
                 ui.painter().text(pill_rect.center(), Align2::CENTER_CENTER, fps, FontId::new(10.5, FontFamily::Proportional), if active { color::on_accent() } else { color::text() });
+                if resp.clicked() {
+                    if let Ok(v) = fps.parse::<u32>() {
+                        mutate_project(app, |p| p.fps = v);
+                        app.set_toast(format!("Default FPS → {}", fps));
+                    }
+                }
             }
             // resolution pills
             ui.painter().text(egui::pos2(gs.left() + 22.0, gs.top() + 140.0), Align2::LEFT_CENTER, "Resolution", FontId::new(11.0, FontFamily::Proportional), color::text2());
@@ -63,9 +88,15 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                 let pill_x = gs.left() + 132.0 + i as f32 * 138.0;
                 let pill_rect = Rect::from_min_size(egui::pos2(pill_x, gs.top() + 124.0), egui::vec2(130.0, 28.0));
                 let active = res == &project.resolution;
-                ui.painter().rect_filled(pill_rect, 6.0f32, if active { color::indigo() } else { Color32::TRANSPARENT });
-                ui.painter().rect_stroke(pill_rect, 6.0f32, Stroke::new(1.0, if active { color::indigo() } else { color::border() }), StrokeKind::Middle);
+                let resp = ui.interact(pill_rect, ui.id().with(("proj-res", *res)), Sense::click());
+                let hover = resp.hovered() && !active;
+                ui.painter().rect_filled(pill_rect, 6.0f32, if active { color::indigo() } else if hover { color::card() } else { Color32::TRANSPARENT });
+                ui.painter().rect_stroke(pill_rect, 6.0f32, Stroke::new(1.0, if active || hover { color::indigo() } else { color::border() }), StrokeKind::Middle);
                 ui.painter().text(pill_rect.center(), Align2::CENTER_CENTER, res, FontId::new(10.0, FontFamily::Proportional), if active { color::on_accent() } else { color::text() });
+                if resp.clicked() {
+                    mutate_project(app, |p| p.resolution = res.to_string());
+                    app.set_toast(format!("Resolution → {}", res));
+                }
             }
             ui.add_space(196.0);
         });
@@ -78,13 +109,25 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             ui.painter().rect_stroke(scenes, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
             ui.painter().text(egui::pos2(scenes.left() + 18.0, scenes.top() + 22.0), Align2::LEFT_CENTER, "Scenes", FontId::new(13.0, FontFamily::Proportional), color::text());
             ui.painter().text(egui::pos2(scenes.left() + 18.0, scenes.top() + 40.0), Align2::LEFT_CENTER, "Storyboard order · drag to reorder", FontId::new(10.0, FontFamily::Proportional), color::text3());
+            let mut open_scene = None;
             for (i, scene) in project.scenes.iter().take(4).enumerate() {
                 let row_y = scenes.top() + 50.0 + i as f32 * 40.0;
-                let active = i == 0;
+                let row_rect = Rect::from_min_size(egui::pos2(scenes.left() + 8.0, row_y - 3.0), egui::vec2(scenes.width() - 16.0, 36.0));
+                let row_resp = ui.interact(row_rect, ui.id().with(("proj-scene", i)), Sense::click());
+                let active = i == app.ui.selected_scene;
+                if row_resp.hovered() {
+                    ui.painter().rect_filled(row_rect, 6.0f32, color::card());
+                }
                 ui.painter().rect_filled(Rect::from_min_size(egui::pos2(scenes.left() + 12.0, row_y), egui::vec2(6.0, 30.0)), 3.0f32, if active { color::indigo() } else { color::text3() });
                 ui.painter().text(egui::pos2(scenes.left() + 30.0, row_y + 10.0), Align2::LEFT_CENTER, &format!("Scene {:02}", i + 1), FontId::new(11.5, FontFamily::Proportional), color::text());
                 ui.painter().text(egui::pos2(scenes.left() + 30.0, row_y + 25.0), Align2::LEFT_CENTER, &scene.name, FontId::new(10.0, FontFamily::Proportional), color::text2());
                 ui.painter().text(egui::pos2(scenes.right() - 16.0, row_y + 15.0), Align2::RIGHT_CENTER, &format!("{} shots", scene.shots.len()), FontId::new(10.5, FontFamily::Proportional), color::text2());
+                if row_resp.clicked() { open_scene = Some(i); }
+            }
+            if let Some(i) = open_scene {
+                app.ui.selected_scene = i;
+                app.set_toast(format!("Open Scene {:02} in storyboard", i + 1));
+                app.nav_to(Screen::Storyboard);
             }
             ui.add_space(168.0);
             // Production progress
@@ -110,10 +153,12 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     ui.painter().rect_stroke(strip, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
     ui.painter().text(egui::pos2(strip.left() + 20.0, strip.top() + 22.0), Align2::LEFT_CENTER, "Character Library", FontId::new(13.0, FontFamily::Proportional), color::text());
     ui.painter().text(egui::pos2(strip.right() - 20.0, strip.top() + 22.0), Align2::RIGHT_CENTER, "Reusable across projects · 4 characters linked", FontId::new(10.0, FontFamily::Proportional), color::text3());
+    let mut open_char = None;
     for (i, c) in app.local.characters.iter().enumerate() {
         let card_x = strip.left() + 20.0 + i as f32 * 248.0;
         let card_rect = Rect::from_min_size(egui::pos2(card_x, strip.top() + 36.0), egui::vec2(236.0, 98.0));
-        ui.painter().rect_filled(card_rect, 10.0f32, color::card());
+        let card_resp = ui.interact(card_rect, ui.id().with(("proj-char-card", i)), Sense::click());
+        ui.painter().rect_filled(card_rect, 10.0f32, if card_resp.hovered() { color::card().linear_multiply(1.15) } else { color::card() });
         ui.painter().rect_stroke(card_rect, 10.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
         let accent = char_accent(&c.accent);
         ui.painter().rect_filled(Rect::from_min_size(card_rect.min, egui::vec2(4.0, card_rect.height())), 0.0f32, accent);
@@ -122,6 +167,12 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.painter().text(egui::pos2(card_rect.left() + 58.0, card_rect.top() + 26.0), Align2::LEFT_CENTER, &c.name, FontId::new(12.5, FontFamily::Proportional), color::text());
         ui.painter().text(egui::pos2(card_rect.left() + 58.0, card_rect.top() + 46.0), Align2::LEFT_CENTER, &format!("{} · {} refs", c.role, c.refs), FontId::new(10.0, FontFamily::Proportional), color::text2());
         ui.painter().text(egui::pos2(card_rect.left() + 58.0, card_rect.top() + 66.0), Align2::LEFT_CENTER, &format!("consistency {:.0}% · {}", c.consistency, c.updated_at), FontId::new(9.5, FontFamily::Proportional), color::text3());
+        if card_resp.clicked() { open_char = Some(i); }
+    }
+    if let Some(i) = open_char {
+        let name = app.local.characters.get(i).map(|c| c.name.clone()).unwrap_or_default();
+        app.set_toast(format!("Open reference assets for {}", name));
+        app.nav_to(Screen::Assets);
     }
 }
 

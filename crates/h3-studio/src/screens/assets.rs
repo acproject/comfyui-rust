@@ -1,9 +1,19 @@
 //! Reference assets — import zone, filters, server asset grid with previews.
 
-use egui::{Align2, Color32, FontId, FontFamily, Rect, Stroke, StrokeKind};
+use egui::{Align2, Color32, FontId, FontFamily, Rect, Sense, Stroke, StrokeKind};
 use crate::app::{H3App};
 use crate::theme::{color, typography};
 use crate::widgets;
+
+/// Small clickable pill used for filter rows. Returns true on click.
+fn click_pill(ui: &mut egui::Ui, rect: Rect, id: egui::Id, label: &str, active: bool) -> bool {
+    let resp = ui.interact(rect, id, Sense::click());
+    let hover = resp.hovered() && !active;
+    ui.painter().rect_filled(rect, 10.0f32, if active { color::indigo_dim() } else if hover { color::card() } else { Color32::TRANSPARENT });
+    ui.painter().rect_stroke(rect, 10.0f32, Stroke::new(1.0, if active || hover { color::indigo() } else { color::border() }), StrokeKind::Middle);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, FontId::new(9.5, FontFamily::Proportional), if active { color::indigo() } else { color::text2() });
+    resp.clicked()
+}
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     // Intro line
@@ -60,9 +70,39 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             ui.painter().rect_filled(filters, 12.0f32, color::panel());
             ui.painter().rect_stroke(filters, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
             ui.painter().text(egui::pos2(filters.left() + 20.0, filters.top() + 24.0), Align2::LEFT_CENTER, "FILTERS", FontId::new(10.0, FontFamily::Proportional), color::text2());
-            ui.painter().text(egui::pos2(filters.left() + 20.0, filters.top() + 52.0), Align2::LEFT_CENTER, "Type: All · Images · Video · Audio", FontId::new(10.5, FontFamily::Proportional), color::text2());
-            ui.painter().text(egui::pos2(filters.left() + 20.0, filters.top() + 76.0), Align2::LEFT_CENTER, "Role: All · Character · Identity · Costume", FontId::new(10.5, FontFamily::Proportional), color::text2());
-            ui.painter().text(egui::pos2(filters.left() + 20.0, filters.top() + 100.0), Align2::LEFT_CENTER, "Project: Bamboo Grove", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            // Type filter — clickable pills
+            let ty = filters.top() + 52.0;
+            ui.painter().text(egui::pos2(filters.left() + 20.0, ty), Align2::LEFT_CENTER, "Type:", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            let mut px = filters.left() + 62.0;
+            for (i, opt) in ["All", "Images", "Video", "Audio"].iter().enumerate() {
+                let w = widgets::est_text_width(opt, 9.5) + 18.0;
+                let r = Rect::from_min_size(egui::pos2(px, ty - 11.0), egui::vec2(w, 22.0));
+                let active = if i == 0 { app.ui.asset_type_filter.is_empty() } else { app.ui.asset_type_filter == *opt };
+                if click_pill(ui, r, ui.id().with(("f-type", i)), opt, active) {
+                    app.ui.asset_type_filter = if i == 0 { String::new() } else { opt.to_string() };
+                }
+                px += w + 6.0;
+            }
+            // Role filter — clickable pills
+            let ry = filters.top() + 76.0;
+            ui.painter().text(egui::pos2(filters.left() + 20.0, ry), Align2::LEFT_CENTER, "Role:", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            let mut px = filters.left() + 62.0;
+            for (i, opt) in ["All", "Character", "Identity", "Costume"].iter().enumerate() {
+                let w = widgets::est_text_width(opt, 9.5) + 18.0;
+                let r = Rect::from_min_size(egui::pos2(px, ry - 11.0), egui::vec2(w, 22.0));
+                let active = if i == 0 { app.ui.asset_role_filter.is_empty() } else { app.ui.asset_role_filter == *opt };
+                if click_pill(ui, r, ui.id().with(("f-role", i)), opt, active) {
+                    app.ui.asset_role_filter = if i == 0 { String::new() } else { opt.to_string() };
+                }
+                px += w + 6.0;
+            }
+            // Project — clickable
+            let py = filters.top() + 100.0;
+            ui.painter().text(egui::pos2(filters.left() + 20.0, py), Align2::LEFT_CENTER, "Project:", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            let pr = Rect::from_min_size(egui::pos2(filters.left() + 86.0, py - 11.0), egui::vec2(widgets::est_text_width("Bamboo Grove", 9.5) + 22.0, 22.0));
+            if click_pill(ui, pr, ui.id().with("f-project"), "Bamboo Grove", true) {
+                app.set_toast("Project filter — Bamboo Grove (only project)");
+            }
         });
 
         // Asset library
@@ -122,13 +162,16 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                 }
             }
 
+            let mut picked_asset: Option<String> = None;
             for row in cards.chunks(3) {
                 ui.horizontal(|ui| {
                     for card in row {
                         let accent = card.accent;
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(grid_w - 12.0, 138.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, 10.0f32, color::panel());
-                        ui.painter().rect_stroke(rect, 10.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
+                        let (rect, response) = ui.allocate_exact_size(egui::vec2(grid_w - 12.0, 138.0), egui::Sense::click());
+                        let hov = response.hovered();
+                        let is_sel = app.ui.selected_asset.as_deref() == Some(card.key.as_str());
+                        ui.painter().rect_filled(rect, 10.0f32, if hov { color::card() } else { color::panel() });
+                        ui.painter().rect_stroke(rect, 10.0f32, Stroke::new(if is_sel { 1.6 } else { 1.0 }, if is_sel { color::indigo() } else { color::border() }), StrokeKind::Middle);
                         ui.painter().rect_filled(Rect::from_min_size(rect.min, egui::vec2(rect.width(), 4.0)), 3.0f32, accent);
                         let thumb = Rect::from_min_size(egui::pos2(rect.left() + 10.0, rect.top() + 14.0), egui::vec2(rect.width() - 20.0, 74.0));
                         if let Some(tex) = app.textures.peek(&card.key) {
@@ -146,10 +189,15 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                         }
                         ui.painter().text(egui::pos2(rect.left() + 14.0, rect.bottom() - 40.0), Align2::LEFT_CENTER, &truncate(&card.name, 26), FontId::new(11.0, FontFamily::Proportional), color::text());
                         ui.painter().text(egui::pos2(rect.left() + 14.0, rect.bottom() - 22.0), Align2::LEFT_CENTER, &card.role, FontId::new(9.5, FontFamily::Proportional), color::text2());
+                        if response.clicked() { picked_asset = Some(card.key.clone()); }
                         ui.add_space(12.0);
                     }
                 });
                 ui.add_space(12.0);
+            }
+            if let Some(k) = picked_asset {
+                app.ui.selected_asset = Some(k.clone());
+                app.set_toast(format!("Selected asset · {}", k));
             }
         });
     });

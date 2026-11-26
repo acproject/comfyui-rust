@@ -9,6 +9,7 @@ mod placeholder;
 mod screens;
 mod state;
 mod theme;
+mod ui_state;
 mod workflows;
 mod widgets;
 

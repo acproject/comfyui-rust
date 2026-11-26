@@ -1,6 +1,6 @@
 //! Storyboard editor — shot timeline strip, 4×2 shot card grid, shot tools.
 
-use egui::{Align2, Color32, FontId, FontFamily, Rect, Stroke, StrokeKind};
+use egui::{Align2, Color32, FontId, FontFamily, Rect, Sense, Stroke, StrokeKind};
 use crate::app::{H3App, Screen};
 use crate::theme::{color, typography};
 use crate::widgets;
@@ -79,17 +79,26 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     ui.painter().text(egui::pos2(tl.left() + 20.0, tl.top() + 24.0), Align2::LEFT_CENTER, "SHOT TIMELINE · SCENE 01", FontId::new(10.0, FontFamily::Proportional), color::text2());
     let total_width = tl.right() - tl.left() - 40.0;
     let chip_w = (total_width / 12.0) - 10.0;
+    let mut timeline_pick = None;
     for (i, shot) in scene.shots.iter().take(12).enumerate() {
         let x = tl.left() + 20.0 + i as f32 * (chip_w + 10.0);
         let chip_rect = Rect::from_min_size(egui::pos2(x, tl.top() + 38.0), egui::vec2(chip_w, 40.0));
         let is_selected = Some(shot.id.as_str()) == selected_shot_id.as_deref();
-        ui.painter().rect_filled(chip_rect, 8.0f32, if is_selected { color::card() } else { color::panel() });
-        let chip_stroke = if is_selected { Stroke::new(1.6, color::indigo()) } else { Stroke::new(1.0, color::border()) };
+        let chip_resp = ui.interact(chip_rect, ui.id().with(("tl-chip", i)), Sense::click());
+        let hover = chip_resp.hovered() && !is_selected;
+        ui.painter().rect_filled(chip_rect, 8.0f32, if is_selected || hover { color::card() } else { color::panel() });
+        let chip_stroke = if is_selected { Stroke::new(1.6, color::indigo()) } else { Stroke::new(if hover { 1.3 } else { 1.0 }, if hover { color::indigo() } else { color::border() }) };
         ui.painter().rect_stroke(chip_rect, 8.0f32, chip_stroke, StrokeKind::Middle);
         let num = format!("{:02}", shot.number);
         let num_col = if is_selected { color::indigo() } else { color::text() };
         ui.painter().text(egui::pos2(chip_rect.center().x, chip_rect.top() + 12.0), Align2::CENTER_CENTER, &num, FontId::new(12.0, FontFamily::Monospace), num_col);
         ui.painter().text(egui::pos2(chip_rect.center().x, chip_rect.bottom() - 11.0), Align2::CENTER_CENTER, &format!("{}s", shot.duration), FontId::new(9.5, FontFamily::Monospace), color::text3());
+        if chip_resp.clicked() { timeline_pick = Some(shot.id.clone()); }
+    }
+    if let Some(id) = timeline_pick {
+        app.local.selected_shot_id = Some(id.clone());
+        app.local.save();
+        app.set_toast(format!("Selected shot {:?}", id));
     }
 
     ui.add_space(12.0);

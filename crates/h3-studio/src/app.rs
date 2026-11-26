@@ -225,6 +225,9 @@ pub struct H3App {
     pub studio_prompt: String,
     pub cine_prompt: String,
 
+    /// Transient, in-memory UI selections/toggles (not persisted).
+    pub ui: crate::ui_state::UiState,
+
     /// When set, the app captures its own window to this PNG after a few frames
     /// and exits. Used for headless screenshot verification (H3_SCREENSHOT_TO).
     pub screenshot_path: Option<String>,
@@ -298,6 +301,20 @@ impl H3App {
             studio_mode: crate::screens::studio::StudioMode::default(),
             studio_prompt: String::new(),
             cine_prompt: String::new(),
+            ui: crate::ui_state::UiState {
+                new_project_aspect: "16:9".into(),
+                new_project_style: "Cinematic Wuxia".into(),
+                export_container: "MP4".into(),
+                export_resolution: "2560×1440".into(),
+                export_fps: "24".into(),
+                export_select_all: true,
+                export_selected: ["S01 · 001", "S01 · 002", "S01 · 003", "S01 · 004"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                review_version: 1,
+                ..Default::default()
+            },
             screenshot_path: std::env::var("H3_SCREENSHOT_TO").ok(),
             screenshot_taken: false,
             frame: 0,

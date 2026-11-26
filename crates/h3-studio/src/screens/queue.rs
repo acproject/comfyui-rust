@@ -1,8 +1,9 @@
 //! Generation Queue — live queue from /queue with status chips, progress, logs.
 
-use egui::{Align2, Color32, FontId, FontFamily, Rect, Stroke, StrokeKind};
+use egui::{Align2, Color32, FontId, FontFamily, Rect, Sense, Stroke, StrokeKind};
 use crate::app::H3App;
 use crate::theme::{color, typography};
+use crate::ui_state::QueueFilter;
 use crate::widgets;
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
@@ -12,11 +13,14 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
 
     // Filter chips + summary
     ui.horizontal(|ui| {
-        chip(ui, &format!("{} Running", running), widgets::Tone::Indigo);
+        let f = app.ui.queue_filter;
+        if chip(ui, "All", widgets::Tone::Gray, f == QueueFilter::All) { app.ui.queue_filter = QueueFilter::All; }
         ui.add_space(4.0);
-        chip(ui, &format!("{} Queued", pending), widgets::Tone::Gray);
+        if chip(ui, &format!("{} Running", running), widgets::Tone::Indigo, f == QueueFilter::Running) { app.ui.queue_filter = QueueFilter::Running; }
         ui.add_space(4.0);
-        chip(ui, &format!("{} Completed", completed), widgets::Tone::Teal);
+        if chip(ui, &format!("{} Queued", pending), widgets::Tone::Gray, f == QueueFilter::Queued) { app.ui.queue_filter = QueueFilter::Queued; }
+        ui.add_space(4.0);
+        if chip(ui, &format!("{} Completed", completed), widgets::Tone::Teal, f == QueueFilter::Completed) { app.ui.queue_filter = QueueFilter::Completed; }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.colored_label(color::text3(), "Estimated queue remaining 00:18:42");
         });
@@ -63,6 +67,15 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ];
     }
 
+    // Apply the active filter chip
+    let f = app.ui.queue_filter;
+    rows.retain(|(_, _, _, status, _)| match f {
+        QueueFilter::All => true,
+        QueueFilter::Running => *status == "Running",
+        QueueFilter::Queued => *status == "Queued",
+        QueueFilter::Completed => false,
+    });
+
     let mut y = table.top() + 36.0;
     let mut idx = 0;
     for (id, shot, mode, status, gpu) in rows {
@@ -77,9 +90,9 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         let chip_tone = if is_running { widgets::Tone::Indigo } else { widgets::Tone::Gray };
         let status_txt = status.to_string();
 
-        ui.painter().text(egui::pos2(row.left() + 20.0, row.center().y - 7.0), Align2::LEFT_CENTER, id, FontId::new(11.5, FontFamily::Monospace), color::text());
+        ui.painter().text(egui::pos2(row.left() + 20.0, row.center().y - 7.0), Align2::LEFT_CENTER, &id, FontId::new(11.5, FontFamily::Monospace), color::text());
         ui.painter().text(egui::pos2(row.left() + 20.0, row.center().y + 11.0), Align2::LEFT_CENTER, "", FontId::new(9.0, FontFamily::Proportional), color::text3());
-        ui.painter().text(egui::pos2(row.left() + 84.0, row.center().y - 5.0), Align2::LEFT_CENTER, shot, FontId::new(11.5, FontFamily::Proportional), color::text());
+        ui.painter().text(egui::pos2(row.left() + 84.0, row.center().y - 5.0), Align2::LEFT_CENTER, &shot, FontId::new(11.5, FontFamily::Proportional), color::text());
         ui.painter().text(egui::pos2(row.left() + 430.0, row.center().y), Align2::LEFT_CENTER, mode, FontId::new(11.0, FontFamily::Proportional), color::text2());
         let chip_rect = Rect::from_min_size(egui::pos2(row.left() + 560.0, row.center().y - 12.0), egui::vec2(104.0, 24.0));
         ui.painter().rect_filled(chip_rect, 12.0f32, chip_tone.dim());
@@ -99,6 +112,9 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.painter().rect_filled(btn_rect, 6.0f32, if btn_resp.hovered() { color::card() } else { Color32::TRANSPARENT });
         ui.painter().rect_stroke(btn_rect, 6.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
         ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, "Logs", FontId::new(10.0, FontFamily::Proportional), color::text());
+        if btn_resp.clicked() {
+            app.set_toast(format!("Showing logs for task {} · {}", id, shot));
+        }
 
         y += row_h;
         idx += 1;
@@ -123,10 +139,12 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     }
 }
 
-fn chip(ui: &mut egui::Ui, text: &str, tone: widgets::Tone) {
+fn chip(ui: &mut egui::Ui, text: &str, tone: widgets::Tone, active: bool) -> bool {
     let w = widgets::est_text_width(text, 11.0) + 26.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w.max(90.0), 26.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 13.0f32, tone.dim());
-    ui.painter().rect_stroke(rect, 13.0f32, Stroke::new(1.0, tone.accent().linear_multiply(0.45)), StrokeKind::Middle);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w.max(90.0), 26.0), Sense::click());
+    let hov = resp.hovered() && !active;
+    ui.painter().rect_filled(rect, 13.0f32, if active || hov { tone.dim().linear_multiply(1.3) } else { tone.dim() });
+    ui.painter().rect_stroke(rect, 13.0f32, Stroke::new(if active { 1.4 } else { 1.0 }, tone.accent().linear_multiply(if active { 0.9 } else { 0.45 })), StrokeKind::Middle);
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, FontId::new(11.0, FontFamily::Proportional), tone.accent());
+    resp.clicked()
 }
