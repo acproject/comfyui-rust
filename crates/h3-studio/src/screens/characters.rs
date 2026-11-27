@@ -6,8 +6,10 @@ use crate::theme::{color, typography};
 use crate::widgets;
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
+    use crate::i18n::{tr, tf};
+    let lang = app.lang();
     // Intro line
-    ui.colored_label(color::text3(), "Reusable identity across projects · click a card to open the full asset panel");
+    ui.colored_label(color::text3(), tr(lang, "Reusable identity across projects · click a card to open the full asset panel"));
     ui.add_space(14.0);
 
     let n = app.local.characters.len();
@@ -27,17 +29,18 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.painter().rect_filled(well, 10.0f32, color::well());
         ui.painter().rect_stroke(well, 10.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
         crate::placeholder::silhouette(ui, well, accent);
-        ui.painter().text(egui::pos2(well.center().x, well.bottom() - 14.0), Align2::CENTER_CENTER, "identity · front", FontId::new(9.5, FontFamily::Monospace), color::text3());
+        ui.painter().text(egui::pos2(well.center().x, well.bottom() - 14.0), Align2::CENTER_CENTER, tr(lang, "identity · front"), FontId::new(9.5, FontFamily::Monospace), color::text3());
 
         // text block
         let tx = rect.left() + 22.0;
+        let n_projects = (c.refs as f32 / 4.0).round() as u32 + 1;
         ui.painter().text(egui::pos2(tx, well.bottom() + 26.0), Align2::LEFT_CENTER, &c.name, FontId::new(14.5, FontFamily::Proportional), color::text());
         ui.painter().text(egui::pos2(tx, well.bottom() + 46.0), Align2::LEFT_CENTER, &format!("ID · {} · v{}", c.id, 1 + i % 3), FontId::new(9.5, FontFamily::Monospace), color::text3());
-        ui.painter().text(egui::pos2(tx, well.bottom() + 63.0), Align2::LEFT_CENTER, &format!("{} projects · {} shots", (c.refs as f32 / 4.0).round() as u32 + 1, c.refs), FontId::new(10.5, FontFamily::Proportional), color::text2());
+        ui.painter().text(egui::pos2(tx, well.bottom() + 63.0), Align2::LEFT_CENTER, &tf(lang, "{} projects · {} shots", &[&n_projects, &c.refs]), FontId::new(10.5, FontFamily::Proportional), color::text2());
         ui.painter().line_segment([egui::pos2(rect.left() + 22.0, well.bottom() + 82.0), egui::pos2(rect.right() - 22.0, well.bottom() + 82.0)], Stroke::new(1.0, color::border()));
 
-        ui.painter().text(egui::pos2(tx, well.bottom() + 100.0), Align2::LEFT_CENTER, &format!("Face · Hair · Form"), FontId::new(10.0, FontFamily::Proportional), color::text2());
-        ui.painter().text(egui::pos2(tx, well.bottom() + 128.0), Align2::LEFT_CENTER, &format!("consistency {:.0}% · {}", c.consistency, c.updated_at), FontId::new(10.0, FontFamily::Proportional), color::text2());
+        ui.painter().text(egui::pos2(tx, well.bottom() + 100.0), Align2::LEFT_CENTER, tr(lang, "Face · Hair · Form"), FontId::new(10.0, FontFamily::Proportional), color::text2());
+        ui.painter().text(egui::pos2(tx, well.bottom() + 128.0), Align2::LEFT_CENTER, &tf(lang, "consistency {} · {}", &[&format!("{:.0}%", c.consistency), &c.updated_at]), FontId::new(10.0, FontFamily::Proportional), color::text2());
 
         // consistency bar
         let bar = Rect::from_min_size(egui::pos2(rect.left() + 22.0, rect.bottom() - 20.0), egui::vec2(rect.width() - 44.0, 6.0));

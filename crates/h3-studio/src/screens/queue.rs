@@ -7,6 +7,8 @@ use crate::ui_state::QueueFilter;
 use crate::widgets;
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
+    use crate::i18n::{tr, tf};
+    let lang = app.lang();
     let running = app.queue.get("queue_running").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
     let pending = app.queue.get("queue_pending").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
     let completed = app.history_recent.as_object().map(|o| o.len()).unwrap_or(0);
@@ -14,15 +16,15 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     // Filter chips + summary
     ui.horizontal(|ui| {
         let f = app.ui.queue_filter;
-        if chip(ui, "All", widgets::Tone::Gray, f == QueueFilter::All) { app.ui.queue_filter = QueueFilter::All; }
+        if chip(ui, tr(lang, "All"), widgets::Tone::Gray, f == QueueFilter::All) { app.ui.queue_filter = QueueFilter::All; }
         ui.add_space(4.0);
-        if chip(ui, &format!("{} Running", running), widgets::Tone::Indigo, f == QueueFilter::Running) { app.ui.queue_filter = QueueFilter::Running; }
+        if chip(ui, &tf(lang, "{} Running", &[&running]), widgets::Tone::Indigo, f == QueueFilter::Running) { app.ui.queue_filter = QueueFilter::Running; }
         ui.add_space(4.0);
-        if chip(ui, &format!("{} Queued", pending), widgets::Tone::Gray, f == QueueFilter::Queued) { app.ui.queue_filter = QueueFilter::Queued; }
+        if chip(ui, &tf(lang, "{} Queued", &[&pending]), widgets::Tone::Gray, f == QueueFilter::Queued) { app.ui.queue_filter = QueueFilter::Queued; }
         ui.add_space(4.0);
-        if chip(ui, &format!("{} Completed", completed), widgets::Tone::Teal, f == QueueFilter::Completed) { app.ui.queue_filter = QueueFilter::Completed; }
+        if chip(ui, &tf(lang, "{} Completed", &[&completed]), widgets::Tone::Teal, f == QueueFilter::Completed) { app.ui.queue_filter = QueueFilter::Completed; }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.colored_label(color::text3(), "Estimated queue remaining 00:18:42");
+            ui.colored_label(color::text3(), tr(lang, "Estimated queue remaining 00:18:42"));
         });
     });
     ui.add_space(10.0);
@@ -34,36 +36,36 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     // header
     let header_rect = Rect::from_min_size(egui::pos2(table.left(), table.top()), egui::vec2(table.width(), 36.0));
     ui.painter().rect_filled(header_rect, 12.0f32, color::card());
-    ui.painter().text(egui::pos2(table.left() + 20.0, header_rect.center().y), Align2::LEFT_CENTER, "ID", FontId::new(10.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(table.left() + 84.0, header_rect.center().y), Align2::LEFT_CENTER, "SHOT", FontId::new(10.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(table.left() + 430.0, header_rect.center().y), Align2::LEFT_CENTER, "MODE", FontId::new(10.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(table.left() + 560.0, header_rect.center().y), Align2::LEFT_CENTER, "STATUS", FontId::new(10.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(table.left() + 730.0, header_rect.center().y), Align2::LEFT_CENTER, "PROGRESS", FontId::new(10.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(table.left() + 1070.0, header_rect.center().y), Align2::LEFT_CENTER, "ELAPSED", FontId::new(10.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(table.left() + 1240.0, header_rect.center().y), Align2::LEFT_CENTER, "GPU", FontId::new(10.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(table.left() + 1330.0, header_rect.center().y), Align2::LEFT_CENTER, "ACTIONS", FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 20.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "ID"), FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 84.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "SHOT"), FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 430.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "MODE"), FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 560.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "STATUS"), FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 730.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "PROGRESS"), FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 1070.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "ELAPSED"), FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 1240.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "GPU"), FontId::new(10.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(table.left() + 1330.0, header_rect.center().y), Align2::LEFT_CENTER, tr(lang, "ACTIONS"), FontId::new(10.5, FontFamily::Proportional), color::text2());
 
     // rows (live from queue)
     let mut rows: Vec<(String, String, String, &'static str, &'static str)> = Vec::new();
     if let Some(run) = app.queue.get("queue_running").and_then(|v| v.as_array()) {
         for (i, item) in run.iter().enumerate() {
             let id = item.get("prompt_id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-            rows.push((id.chars().take(8).collect(), format!("Running · T-{:03}", 18 - i), "FL2VA".into(), "Running", "GPU 0"));
+            rows.push((id.chars().take(8).collect(), tf(lang, "Running · T-{}", &[&format!("{:03}", 18 - i)]), "FL2VA".into(), "Running", "GPU 0"));
         }
     }
     if let Some(pend) = app.queue.get("queue_pending").and_then(|v| v.as_array()) {
         for (i, item) in pend.iter().take(4).enumerate() {
             let id = item.get("prompt_id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-            rows.push((id.chars().take(8).collect(), format!("Pending · T-{:03}", 12 - i), "Ref2VA".into(), "Queued", "GPU —"));
+            rows.push((id.chars().take(8).collect(), tf(lang, "Pending · T-{}", &[&format!("{:03}", 12 - i)]), "Ref2VA".into(), "Queued", "GPU —"));
         }
     }
 
     if rows.is_empty() {
         // demo rows when server is offline
         rows = vec![
-            ("T-018".into(), "S01 · Shot 003 · Rain walk".into(), "FL2VA".into(), "Running", "GPU 0"),
-            ("T-017".into(), "S01 · Shot 002 · Sword drawn".into(), "Ref2VA".into(), "Running", "GPU 1"),
-            ("T-016".into(), "S01 · Shot 004 · Cloak flutter".into(), "Ref2VA".into(), "Queued", "GPU 2"),
+            ("T-018".into(), tr(lang, "S01 · Shot 003 · Rain walk").to_string(), "FL2VA".into(), "Running", "GPU 0"),
+            ("T-017".into(), tr(lang, "S01 · Shot 002 · Sword drawn").to_string(), "Ref2VA".into(), "Running", "GPU 1"),
+            ("T-016".into(), tr(lang, "S01 · Shot 004 · Cloak flutter").to_string(), "Ref2VA".into(), "Queued", "GPU 2"),
         ];
     }
 
@@ -88,7 +90,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         let is_running = status == "Running";
         let bar_fill = if is_running { 0.62 } else { 0.32 };
         let chip_tone = if is_running { widgets::Tone::Indigo } else { widgets::Tone::Gray };
-        let status_txt = status.to_string();
+        let status_txt = tr(lang, status).to_string();
 
         ui.painter().text(egui::pos2(row.left() + 20.0, row.center().y - 7.0), Align2::LEFT_CENTER, &id, FontId::new(11.5, FontFamily::Monospace), color::text());
         ui.painter().text(egui::pos2(row.left() + 20.0, row.center().y + 11.0), Align2::LEFT_CENTER, "", FontId::new(9.0, FontFamily::Proportional), color::text3());
@@ -101,7 +103,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
 
         let bar_rect = Rect::from_min_size(egui::pos2(row.left() + 730.0, row.center().y - 5.0), egui::vec2(150.0, 10.0));
         widgets::progress_bar(ui, bar_rect, bar_fill, chip_tone.accent(), 10.0);
-        ui.painter().text(egui::pos2(row.left() + 730.0, bar_rect.bottom() + 8.0), Align2::LEFT_CENTER, if is_running { "stage 4/5 · denoise pass" } else { "queued · waiting for GPU" }, FontId::new(9.0, FontFamily::Proportional), color::text3());
+        ui.painter().text(egui::pos2(row.left() + 730.0, bar_rect.bottom() + 8.0), Align2::LEFT_CENTER, tr(lang, if is_running { "stage 4/5 · denoise pass" } else { "queued · waiting for GPU" }), FontId::new(9.0, FontFamily::Proportional), color::text3());
 
         ui.painter().text(egui::pos2(row.left() + 1070.0, row.center().y), Align2::LEFT_CENTER, if is_running { "00:42" } else { "00:03" }, FontId::new(11.0, FontFamily::Monospace), color::text2());
         ui.painter().text(egui::pos2(row.left() + 1240.0, row.center().y), Align2::LEFT_CENTER, gpu, FontId::new(10.5, FontFamily::Proportional), color::text2());
@@ -111,9 +113,9 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         let btn_resp = ui.interact(btn_rect, ui.id().with(("queue-btn", idx)), egui::Sense::click());
         ui.painter().rect_filled(btn_rect, 6.0f32, if btn_resp.hovered() { color::card() } else { Color32::TRANSPARENT });
         ui.painter().rect_stroke(btn_rect, 6.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
-        ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, "Logs", FontId::new(10.0, FontFamily::Proportional), color::text());
+        ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, tr(lang, "Logs"), FontId::new(10.0, FontFamily::Proportional), color::text());
         if btn_resp.clicked() {
-            app.set_toast(format!("Showing logs for task {} · {}", id, shot));
+            app.set_toast(tf(lang, "Showing logs for task {} · {}", &[&id, &shot]));
         }
 
         y += row_h;
@@ -126,7 +128,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     let (log, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 168.0), egui::Sense::hover());
     ui.painter().rect_filled(log, 12.0f32, color::panel());
     ui.painter().rect_stroke(log, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
-    ui.painter().text(egui::pos2(log.left() + 20.0, log.top() + 24.0), Align2::LEFT_CENTER, "TASK LOG — T-018 · Bamboo Grove S01 · Shot 003 (FL2VA, GPU 0)", FontId::new(10.5, FontFamily::Proportional), color::text());
+    ui.painter().text(egui::pos2(log.left() + 20.0, log.top() + 24.0), Align2::LEFT_CENTER, tr(lang, "TASK LOG — T-018 · Bamboo Grove S01 · Shot 003 (FL2VA, GPU 0)"), FontId::new(10.5, FontFamily::Proportional), color::text());
     let lines = [
         "[00:00] INFO  load model H3_FL2VA_v2.fp16",
         "[00:05] INFO  GPU 0 serving · 13.2GB / 32GB used",

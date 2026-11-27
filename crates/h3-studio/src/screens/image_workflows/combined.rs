@@ -21,7 +21,9 @@ fn arrow_between(ui: &mut egui::Ui, from_x: f32, to_x: f32, y: f32) {
 }
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
-    ui.colored_label(color::text3(), egui::RichText::new("Overview · chained image pipeline — run all at once, or open any step independently").size(11.0));
+    use crate::i18n::{tr, tf};
+    let lang = app.lang();
+    ui.colored_label(color::text3(), egui::RichText::new(tr(lang, "Overview · chained image pipeline — run all at once, or open any step independently")).size(11.0));
     ui.add_space(8.0);
 
     let image = app.selected_input_image.clone()
@@ -36,14 +38,14 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     // label + pills (painter — above the main content row)
     let label_y = graph_rect.top() + 14.0;
     ui.painter().rect_filled(Rect::from_min_size(egui::pos2(graph_rect.left() + 18.0, label_y + 2.0), egui::vec2(4.0, 16.0)), 2.0f32, color::indigo());
-    ui.painter().text(egui::pos2(graph_rect.left() + 30.0, label_y + 10.0), Align2::LEFT_CENTER, "COMBINED PIPELINE", FontId::new(10.0, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(graph_rect.left() + 30.0, label_y + 10.0), Align2::LEFT_CENTER, tr(lang, "COMBINED PIPELINE"), FontId::new(10.0, FontFamily::Proportional), color::text2());
     let pill_y = label_y + 30.0;
     let steps_pill = Rect::from_min_size(egui::pos2(graph_rect.left() + 18.0, pill_y), egui::vec2(76.0, 24.0));
     ui.painter().rect_filled(steps_pill, 12.0f32, color::indigo_dim());
-    ui.painter().text(steps_pill.center(), Align2::CENTER_CENTER, "3 steps", FontId::new(10.0, FontFamily::Proportional), color::indigo());
+    ui.painter().text(steps_pill.center(), Align2::CENTER_CENTER, tr(lang, "3 steps"), FontId::new(10.0, FontFamily::Proportional), color::indigo());
     let mock_pill = Rect::from_min_size(egui::pos2(steps_pill.right() + 8.0, pill_y), egui::vec2(104.0, 24.0));
     ui.painter().rect_filled(mock_pill, 12.0f32, color::gray_dim());
-    ui.painter().text(mock_pill.center(), Align2::CENTER_CENTER, "mock data", FontId::new(10.0, FontFamily::Proportional), color::text2());
+    ui.painter().text(mock_pill.center(), Align2::CENTER_CENTER, tr(lang, "mock data"), FontId::new(10.0, FontFamily::Proportional), color::text2());
 
     // main chain
     let chain_y = graph_rect.top() + 76.0;
@@ -62,23 +64,23 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     let n4 = Rect::from_min_size(egui::pos2(n4_x, chain_y), egui::vec2(node_w, node_h));
 
     // source
-    node_box(ui, n1, "front.png", "SOURCE · char_001", widgets::Tone::Teal, false);
-    status_dot_label(ui, n1, "done", color::teal());
+    node_box(ui, n1, "front.png", tr(lang, "SOURCE · char_001"), widgets::Tone::Teal, false);
+    status_dot_label(ui, n1, tr(lang, "done"), color::teal());
     arrow_between(ui, n1.right(), n2.left(), chain_y + node_h / 2.0);
 
     // remove background
-    node_box(ui, n2, "RemoveBackground", "去背景 · bria-rmbg", widgets::Tone::Teal, false);
-    status_dot_label(ui, n2, "done", color::teal());
+    node_box(ui, n2, "RemoveBackground", tr(lang, "Remove BG · bria-rmbg"), widgets::Tone::Teal, false);
+    status_dot_label(ui, n2, tr(lang, "done"), color::teal());
     arrow_between(ui, n2.right(), n3.left(), chain_y + node_h / 2.0);
 
     // multiview
-    node_box(ui, n3, "MultiViewPose", "4 视图", widgets::Tone::Amber, true);
-    status_dot_label(ui, n3, "run", color::amber());
+    node_box(ui, n3, "MultiViewPose", tr(lang, "4 views"), widgets::Tone::Amber, true);
+    status_dot_label(ui, n3, tr(lang, "run"), color::amber());
     arrow_between(ui, n3.right(), n4.left(), chain_y + node_h / 2.0);
 
     // save
-    node_box(ui, n4, "Save", "2×2 / per-view", widgets::Tone::Gray, false);
-    status_dot_label(ui, n4, "idle", color::text3());
+    node_box(ui, n4, "Save", tr(lang, "2×2 / per-view"), widgets::Tone::Gray, false);
+    status_dot_label(ui, n4, tr(lang, "idle"), color::text3());
 
     // parallel branch (dashed connector + node)
     let branch_y = chain_y + node_h + 44.0;
@@ -92,29 +94,29 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         [egui::pos2(n1_x + node_w / 2.0, branch_y + node_h / 2.0), egui::pos2(branch_x, branch_y + node_h / 2.0)],
         Stroke::new(1.6, color::text3()),
     );
-    ui.painter().text(egui::pos2(branch_x - 8.0, branch_y - 8.0), Align2::RIGHT_CENTER, "parallel branch", FontId::new(9.5, FontFamily::Proportional), color::text3());
+    ui.painter().text(egui::pos2(branch_x - 8.0, branch_y - 8.0), Align2::RIGHT_CENTER, tr(lang, "parallel branch"), FontId::new(9.5, FontFamily::Proportional), color::text3());
     let b1 = Rect::from_min_size(egui::pos2(branch_x, branch_y), egui::vec2(branch_w, node_h));
-    node_box(ui, b1, "QwenImagePipeline", "电影画质 · parallel", widgets::Tone::Indigo, false);
-    status_dot_label(ui, b1, "idle", color::text3());
+    node_box(ui, b1, "QwenImagePipeline", tr(lang, "Cinematic · parallel"), widgets::Tone::Indigo, false);
+    status_dot_label(ui, b1, tr(lang, "idle"), color::text3());
     let b2 = Rect::from_min_size(egui::pos2(branch_x + branch_w + 40.0, branch_y), egui::vec2(160.0, node_h));
-    node_box(ui, b2, "Save", "cinematic still", widgets::Tone::Gray, false);
-    status_dot_label(ui, b2, "idle", color::text3());
+    node_box(ui, b2, "Save", tr(lang, "cinematic still"), widgets::Tone::Gray, false);
+    status_dot_label(ui, b2, tr(lang, "idle"), color::text3());
 
     // right action column
     ui.painter().line_segment(
         [egui::pos2(right_col_x - 18.0, graph_rect.top() + 40.0), egui::pos2(right_col_x - 18.0, graph_rect.bottom() - 28.0)],
         Stroke::new(1.4, color::border()),
     );
-    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 70.0), Align2::LEFT_CENTER, "Run Combined Flow", FontId::new(13.5, FontFamily::Proportional), color::text());
-    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 92.0), Align2::LEFT_CENTER, "去背景 → 4 视图 · cinematic in parallel", FontId::new(9.5, FontFamily::Proportional), color::text2());
-    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 108.0), Align2::LEFT_CENTER, "single graph · 4 steps · shared source", FontId::new(9.0, FontFamily::Proportional), color::text3());
+    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 70.0), Align2::LEFT_CENTER, tr(lang, "Run Combined Flow"), FontId::new(13.5, FontFamily::Proportional), color::text());
+    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 92.0), Align2::LEFT_CENTER, tr(lang, "Remove BG → 4 views · Cinematic in parallel"), FontId::new(9.5, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 108.0), Align2::LEFT_CENTER, tr(lang, "single graph · 4 steps · shared source"), FontId::new(9.0, FontFamily::Proportional), color::text3());
 
     // Run Combined button
     let btn_rect = Rect::from_min_size(egui::pos2(right_col_x, graph_rect.top() + 128.0), egui::vec2(graph_rect.right() - right_col_x - 22.0, 44.0));
     let btn_resp = ui.interact(btn_rect, ui.id().with("run-combined"), egui::Sense::click());
     let hover = btn_resp.hovered();
     ui.painter().rect_filled(btn_rect, 8.0f32, if hover { color::indigo().linear_multiply(1.1) } else { color::indigo() });
-    ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, "▶  Run pipeline", FontId::new(12.5, FontFamily::Proportional), color::on_accent());
+    ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, tr(lang, "▶  Run pipeline"), FontId::new(12.5, FontFamily::Proportional), color::on_accent());
     if btn_resp.clicked() {
         let cinematic = crate::workflows::CinematicParams {
             image: image.clone(),
@@ -145,17 +147,17 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             save_as: crate::workflows::SaveAs::Merged,
         };
         let graph = crate::workflows::combined_workflow(&cinematic, &multi);
-        app.submit_workflow(graph, "Combined Pipeline");
+        app.submit_workflow(graph, tr(lang, "Combined Pipeline"));
     }
-    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 184.0), Align2::LEFT_CENTER, "or open a step independently ↓", FontId::new(9.5, FontFamily::Proportional), color::text3());
+    ui.painter().text(egui::pos2(right_col_x, graph_rect.top() + 184.0), Align2::LEFT_CENTER, tr(lang, "or open a step independently ↓"), FontId::new(9.5, FontFamily::Proportional), color::text3());
 
     // ── 3 step cards ──
     ui.add_space(12.0);
     let card_w = (ui.available_width() - 2.0 * 14.0) / 3.0;
     ui.horizontal(|ui| {
-        draw_step_card(app, ui, card_w, 280.0, "Remove Background", "12-remove-background", "front_cutout.png", "transparent PNG · 1024²", color::teal(), true, Screen::RemoveBg);
-        draw_step_card(app, ui, card_w, 280.0, "Cinematic from Reference", "13-cinematic-from-reference", "cinematic_bamboo.png", "1344×768 · still", color::indigo(), false, Screen::Cinematic);
-        draw_step_card(app, ui, card_w, 280.0, "Multi-View Turnaround", "14-multi-view-turnaround", "4view_grid.png", "1226×832 · 2×2", color::amber(), true, Screen::MultiView);
+        draw_step_card(app, ui, card_w, 280.0, tr(lang, "Remove Background"), "12-remove-background", "front_cutout.png", tr(lang, "transparent PNG · 1024²"), color::teal(), true, Screen::RemoveBg);
+        draw_step_card(app, ui, card_w, 280.0, tr(lang, "Cinematic from Reference"), "13-cinematic-from-reference", "cinematic_bamboo.png", tr(lang, "1344×768 · still"), color::indigo(), false, Screen::Cinematic);
+        draw_step_card(app, ui, card_w, 280.0, tr(lang, "Multi-View Turnaround"), "14-multi-view-turnaround", "4view_grid.png", tr(lang, "1226×832 · 2×2"), color::amber(), true, Screen::MultiView);
     });
 }
 
@@ -177,6 +179,7 @@ fn draw_step_card(
     running: bool,
     screen: Screen,
 ) {
+    let lang = app.lang();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     ui.painter().rect_filled(rect, 12.0f32, color::panel());
     ui.painter().rect_stroke(rect, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
@@ -195,9 +198,9 @@ fn draw_step_card(
     let (pill_tone, pill_label) = if running { (color::amber(), "run") } else { (color::text3(), "idle") };
     ui.painter().rect_filled(pill_rect, 12.0f32, pill_tone.linear_multiply(0.22));
     ui.painter().rect_stroke(pill_rect, 12.0f32, Stroke::new(1.0, pill_tone.linear_multiply(0.5)), StrokeKind::Middle);
-    ui.painter().text(pill_rect.center(), Align2::CENTER_CENTER, pill_label, FontId::new(9.5, FontFamily::Proportional), pill_tone);
+    ui.painter().text(pill_rect.center(), Align2::CENTER_CENTER, crate::i18n::tr(lang, pill_label), FontId::new(9.5, FontFamily::Proportional), pill_tone);
 
-    ui.painter().text(egui::pos2(rect.left() + 22.0, rect.top() + 186.0), Align2::LEFT_CENTER, "OUTPUT", FontId::new(9.5, FontFamily::Proportional), color::text3());
+    ui.painter().text(egui::pos2(rect.left() + 22.0, rect.top() + 186.0), Align2::LEFT_CENTER, crate::i18n::tr(lang, "OUTPUT"), FontId::new(9.5, FontFamily::Proportional), color::text3());
     ui.painter().text(egui::pos2(rect.right() - 22.0, rect.top() + 186.0), Align2::RIGHT_CENTER, output_name, FontId::new(10.5, FontFamily::Monospace), color::text());
     ui.painter().text(egui::pos2(rect.left() + 22.0, rect.top() + 208.0), Align2::LEFT_CENTER, caption, FontId::new(10.5, FontFamily::Proportional), color::text2());
 
@@ -207,7 +210,7 @@ fn draw_step_card(
     let hover = btn_resp.hovered();
     ui.painter().rect_filled(btn_rect, 8.0f32, if hover { color::card() } else { Color32::TRANSPARENT });
     ui.painter().rect_stroke(btn_rect, 8.0f32, Stroke::new(1.0, accent.linear_multiply(0.5)), StrokeKind::Middle);
-    ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, "Open step →", FontId::new(11.5, FontFamily::Proportional), accent);
+    ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, crate::i18n::tr(lang, "Open step →"), FontId::new(11.5, FontFamily::Proportional), accent);
 
     if btn_resp.clicked() || response.clicked() {
         app.nav_to(screen);

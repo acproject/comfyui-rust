@@ -7,7 +7,9 @@ use crate::widgets;
 use super::{field_label, spec_table, node_row, input_panel, output_preview, bottom_action, kv_row, panel_frame, input_picker};
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
-    ui.colored_label(color::text3(), egui::RichText::new("Pipeline · image workflow — runs in parallel with the combined flow").size(11.0));
+    use crate::i18n::{tr, tf};
+    let lang = app.lang();
+    ui.colored_label(color::text3(), egui::RichText::new(tr(lang, "Pipeline · image workflow — runs in parallel with the combined flow")).size(11.0));
     ui.add_space(8.0);
 
     let image = app.selected_input_image.clone()
@@ -23,7 +25,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.set_width(w_in);
             panel_frame().show(ui, |ui| {
-                input_panel(ui, app, "input-front-c", Some(&image), "Xiao Mei — Swordswoman", "char_001 · v3", "Reference card · clothing & styling locked", "INPUT", color::indigo(), false);
+                input_panel(ui, app, "input-front-c", Some(&image), tr(lang, "Xiao Mei — Swordswoman"), "char_001 · v3", tr(lang, "Reference card · clothing & styling locked"), tr(lang, "INPUT"), color::indigo(), false);
             });
         });
 
@@ -32,17 +34,17 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.set_width(w_pipe);
             panel_frame().show(ui, |ui| {
-                field_label(ui, "PIPELINE", color::indigo());
+                field_label(ui, tr(lang, "PIPELINE"), color::indigo());
                 ui.add_space(10.0);
 
                 node_row(ui, &[
-                    ("LoadImage", "ref card", widgets::Tone::Gray, false),
+                    ("LoadImage", tr(lang, "ref card"), widgets::Tone::Gray, false),
                     ("QwenImagePipeline", "Qwen-Image-2.1", widgets::Tone::Indigo, true),
                     ("SaveImage", "1344×768", widgets::Tone::Gray, false),
                 ]);
 
                 ui.add_space(14.0);
-                ui.colored_label(color::text2(), egui::RichText::new("PROMPT").size(9.5).strong());
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "PROMPT")).size(9.5).strong());
                 ui.add_space(4.0);
                 let _ = ui.add(
                     egui::TextEdit::multiline(&mut app.cine_prompt)
@@ -52,26 +54,26 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                         .font(egui::TextStyle::Body)
                         .text_color(color::text())
                         .background_color(Color32::TRANSPARENT)
-                        .hint_text("Enter cinematic prompt…"),
+                        .hint_text(tr(lang, "Enter cinematic prompt…")),
                 );
 
                 ui.add_space(10.0);
-                ui.colored_label(color::text2(), egui::RichText::new("PARAMETERS").size(9.5).strong());
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "PARAMETERS")).size(9.5).strong());
                 ui.add_space(6.0);
                 let rows = vec![
-                    ("model", "Qwen-Image-2.1".to_string()),
-                    ("cfg", "6.5".to_string()),
-                    ("steps", "40".to_string()),
-                    ("resolution", "1344 × 768".to_string()),
-                    ("seed", "42".to_string()),
+                    (tr(lang, "model"), "Qwen-Image-2.1".to_string()),
+                    (tr(lang, "cfg"), "6.5".to_string()),
+                    (tr(lang, "steps"), "40".to_string()),
+                    (tr(lang, "resolution"), "1344 × 768".to_string()),
+                    (tr(lang, "seed"), "42".to_string()),
                 ];
                 spec_table(ui, &rows);
 
                 ui.add_space(4.0);
-                ui.colored_label(color::text3(), egui::RichText::new("Advanced ▸ negative prompt / subject-lock strength (hidden)").size(9.5));
+                ui.colored_label(color::text3(), egui::RichText::new(tr(lang, "Advanced ▸ negative prompt / subject-lock strength (hidden)")).size(9.5));
                 ui.add_space(10.0);
 
-                if widgets::primary_button(ui, "Generate", 220.0, 46.0) {
+                if widgets::primary_button(ui, tr(lang, "Generate"), 220.0, 46.0) {
                     let prompt = if app.cine_prompt.trim().is_empty() { crate::workflows::DEFAULT_CINE_PROMPT.to_string() } else { app.cine_prompt.clone() };
                     let p = crate::workflows::CinematicParams {
                         image: image.clone(),
@@ -86,13 +88,13 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                         prefix: "h3_cinematic".into(),
                     };
                     let graph = crate::workflows::cinematic_workflow(&p);
-                    app.submit_workflow(graph, "Cinematic");
+                    app.submit_workflow(graph, tr(lang, "Cinematic"));
                 }
                 ui.add_space(8.0);
-                ui.colored_label(color::text3(), "queued · est. 14s");
+                ui.colored_label(color::text3(), tr(lang, "queued · est. 14s"));
 
                 ui.add_space(12.0);
-                input_picker(ui, app, &image, "Source");
+                input_picker(ui, app, &image, tr(lang, "Source"));
             });
         });
 
@@ -101,7 +103,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.set_width(w_out);
             panel_frame().show(ui, |ui| {
-                field_label(ui, "OUTPUT", color::indigo());
+                field_label(ui, tr(lang, "OUTPUT"), color::indigo());
                 ui.add_space(10.0);
                 ui.colored_label(color::indigo(), egui::RichText::new("cinematic_bamboo.png").monospace().size(13.0).strong());
                 ui.add_space(8.0);
@@ -111,17 +113,17 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                 output_preview(ui, app, "output-cinematic", if cine_preview.is_empty() { None } else { Some(&cine_preview) }, true);
 
                 ui.add_space(10.0);
-                kv_row(ui, "size", "1344 × 768", color::text());
+                kv_row(ui, tr(lang, "size"), "1344 × 768", color::text());
                 ui.add_space(2.0);
-                kv_row(ui, "file", "PNG · 3.4 MB", color::text());
+                kv_row(ui, tr(lang, "file"), "PNG · 3.4 MB", color::text());
                 ui.add_space(2.0);
-                kv_row(ui, "model", "Qwen-Image-2.1", color::text());
+                kv_row(ui, tr(lang, "model"), "Qwen-Image-2.1", color::text());
                 ui.add_space(2.0);
-                kv_row(ui, "parallel", "independent of chain", color::text());
+                kv_row(ui, tr(lang, "parallel"), tr(lang, "independent of chain"), color::text());
 
                 ui.add_space(12.0);
-                if bottom_action(ui, "↓  Save to project assets", color::indigo()) {
-                    app.set_toast("cinematic saved to project assets (demo)");
+                if bottom_action(ui, tr(lang, "↓  Save to project assets"), color::indigo()) {
+                    app.toast_success(tr(lang, "cinematic saved to project assets (demo)").to_string());
                 }
             });
         });

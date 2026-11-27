@@ -28,23 +28,25 @@ impl StudioMode {
 }
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
+    use crate::i18n::{tr, tf};
+    let lang = app.lang();
     let mode = app.studio_mode;
 
     // Mode segmented control
     ui.horizontal(|ui| {
         if mode == StudioMode::Fl2VA {
-            let _ = widgets::primary_button(ui, "FL2VA · first/last frame", 250.0, 30.0);
-        } else if widgets::outline_button(ui, "FL2VA · first/last frame", 250.0, 30.0) {
+            let _ = widgets::primary_button(ui, tr(lang, "FL2VA · first/last frame"), 250.0, 30.0);
+        } else if widgets::outline_button(ui, tr(lang, "FL2VA · first/last frame"), 250.0, 30.0) {
             app.studio_mode = StudioMode::Fl2VA;
         }
         ui.add_space(4.0);
         if mode == StudioMode::Ref2VA {
-            let _ = widgets::primary_button(ui, "Ref2VA · multimodal refs", 250.0, 30.0);
-        } else if widgets::outline_button(ui, "Ref2VA · multimodal refs", 250.0, 30.0) {
+            let _ = widgets::primary_button(ui, tr(lang, "Ref2VA · multimodal refs"), 250.0, 30.0);
+        } else if widgets::outline_button(ui, tr(lang, "Ref2VA · multimodal refs"), 250.0, 30.0) {
             app.studio_mode = StudioMode::Ref2VA;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.colored_label(color::text3(), "switch: ⌘↵");
+            ui.colored_label(color::text3(), tr(lang, "switch: ⌘↵"));
         });
     });
     ui.add_space(10.0);
@@ -54,16 +56,16 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.set_width(340.0);
             Frame::none().fill(color::panel()).stroke(Stroke::new(1.0, color::border())).inner_margin(16.0).corner_radius(12.0).show(ui, |ui| {
-                ui.colored_label(color::text2(), egui::RichText::new("SHOT CONTEXT").size(9.5).strong());
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "SHOT CONTEXT")).size(9.5).strong());
                 ui.add_space(4.0);
-                ui.colored_label(color::text(), egui::RichText::new("S01 · Shot 003").size(16.5).strong());
+                ui.colored_label(color::text(), egui::RichText::new(tr(lang, "S01 · Shot 003")).size(16.5).strong());
                 ui.add_space(2.0);
-                ui.colored_label(color::text2(), egui::RichText::new("Rain walk through bamboo forest").size(10.5));
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "Rain walk through bamboo forest")).size(10.5));
                 ui.add_space(2.0);
-                ui.colored_label(color::text3(), egui::RichText::new("8s · 25fps · 1920×1080").monospace().size(10.0));
+                ui.colored_label(color::text3(), egui::RichText::new(tr(lang, "8s · 25fps · 1920×1080")).monospace().size(10.0));
 
                 ui.add_space(12.0);
-                ui.colored_label(color::text2(), egui::RichText::new("CHARACTER REFERENCE").size(9.0).strong());
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "CHARACTER REFERENCE")).size(9.0).strong());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
@@ -72,17 +74,17 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                     ui.add_space(2.0);
                     ui.vertical(|ui| {
                         ui.colored_label(color::text(), egui::RichText::new("Xiao Mei — front.png · v3").size(10.5));
-                        ui.colored_label(color::text3(), egui::RichText::new("last used 2m ago").size(9.5));
+                        ui.colored_label(color::text3(), egui::RichText::new(tr(lang, "last used 2m ago")).size(9.5));
                     });
                 });
 
                 ui.add_space(12.0);
-                ui.colored_label(color::text2(), egui::RichText::new("REFERENCE ASSETS").size(9.0).strong());
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "REFERENCE ASSETS")).size(9.0).strong());
                 ui.add_space(6.0);
                 let assets = [
-                    ("bamboo_forest.png", "Environment", color::teal()),
-                    ("rain_loop.mp4", "Motion ref", color::teal()),
-                    ("bamboo_ambience.wav", "Audio ref", color::amber()),
+                    ("bamboo_forest.png", tr(lang, "Environment"), color::teal()),
+                    ("rain_loop.mp4", tr(lang, "Motion ref"), color::teal()),
+                    ("bamboo_ambience.wav", tr(lang, "Audio ref"), color::amber()),
                 ];
                 for (name, role, accent) in assets {
                     let row = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::hover()).0;
@@ -95,22 +97,22 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                 }
 
                 ui.add_space(4.0);
-                ui.colored_label(color::text3(), egui::RichText::new("3 references attached · within model limits").size(9.5));
+                ui.colored_label(color::text3(), egui::RichText::new(tr(lang, "3 references attached · within model limits")).size(9.5));
 
                 ui.add_space(8.0);
-                ui.colored_label(color::text2(), egui::RichText::new("CAPABILITY STATUS").size(9.0).strong());
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "CAPABILITY STATUS")).size(9.0).strong());
                 ui.add_space(6.0);
                 let caps: Vec<(&str, &str, &str)> = match mode {
                     StudioMode::Fl2VA => vec![
-                        ("FL2VA · first/last frame", "SUPPORTED", "teal"),
-                        ("Ref2VA · multimodal", "SUPPORTED", "teal"),
-                        ("Audio-driven motion", "EXPERIMENTAL", "amber"),
-                        ("Attention backbones", "UNSUPPORTED", "red"),
+                        (tr(lang, "FL2VA · first/last frame"), tr(lang, "SUPPORTED"), "teal"),
+                        (tr(lang, "Ref2VA · multimodal"), tr(lang, "SUPPORTED"), "teal"),
+                        (tr(lang, "Audio-driven motion"), tr(lang, "EXPERIMENTAL"), "amber"),
+                        (tr(lang, "Attention backbones"), tr(lang, "UNSUPPORTED"), "red"),
                     ],
                     StudioMode::Ref2VA => vec![
-                        ("Ref2VA · multimodal", "SUPPORTED", "teal"),
-                        ("FL2VA · first/last frame", "SUPPORTED", "teal"),
-                        ("Attention backbones", "UNSUPPORTED", "red"),
+                        (tr(lang, "Ref2VA · multimodal"), tr(lang, "SUPPORTED"), "teal"),
+                        (tr(lang, "FL2VA · first/last frame"), tr(lang, "SUPPORTED"), "teal"),
+                        (tr(lang, "Attention backbones"), tr(lang, "UNSUPPORTED"), "red"),
                     ],
                 };
                 for (label, status, tone) in caps {
@@ -133,16 +135,16 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         // ── CENTER: preview well ──
         ui.add_space(14.0);
         ui.vertical(|ui| {
-            ui.colored_label(color::text2(), egui::RichText::new("VIDEO PREVIEW · first frame + last frame").size(10.5));
+            ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "VIDEO PREVIEW · first frame + last frame")).size(10.5));
             ui.add_space(8.0);
             let (well, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 380.0), egui::Sense::hover());
             crate::placeholder::bamboo_scene(ui, well, 21);
             ui.painter().rect_filled(well, 12.0f32, Color32::from_rgba_premultiplied(0x0B, 0x12, 0x19, 64));
             ui.painter().rect_stroke(well, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
             crate::placeholder::play_button(ui, well.center(), 34.0, if mode == StudioMode::Fl2VA { color::indigo() } else { color::teal() });
-            ui.painter().text(egui::pos2(well.center().x, well.bottom() - 18.0), Align2::CENTER_CENTER, "1920×1080 · 25fps · 8s", FontId::new(9.5, FontFamily::Monospace), color::text3());
+            ui.painter().text(egui::pos2(well.center().x, well.bottom() - 18.0), Align2::CENTER_CENTER, tr(lang, "1920×1080 · 25fps · 8s"), FontId::new(9.5, FontFamily::Monospace), color::text3());
             ui.add_space(8.0);
-            ui.colored_label(color::text3(), "First + last frame · H3 Video");
+            ui.colored_label(color::text3(), tr(lang, "First + last frame · H3 Video"));
         });
 
         // ── RIGHT: PROMPT panel ──
@@ -150,7 +152,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.set_width(360.0);
             Frame::none().fill(color::panel()).stroke(Stroke::new(1.0, color::border())).inner_margin(16.0).corner_radius(12.0).show(ui, |ui| {
-                ui.colored_label(color::text(), egui::RichText::new("PROMPT").size(10.5).strong());
+                ui.colored_label(color::text(), egui::RichText::new(tr(lang, "PROMPT")).size(10.5).strong());
                 ui.add_space(2.0);
                 ui.add(
                     egui::TextEdit::multiline(&mut app.studio_prompt)
@@ -160,21 +162,21 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                         .font(egui::TextStyle::Body)
                         .text_color(color::text())
                         .background_color(Color32::TRANSPARENT)
-                        .hint_text("Enter prompt…"),
+                        .hint_text(tr(lang, "Enter prompt…")),
                 );
                 ui.add_space(4.0);
-                ui.colored_label(color::text2(), egui::RichText::new("Duration  8s   ·   FPS  25").size(11.0));
-                ui.colored_label(color::text3(), egui::RichText::new(format!("Mode  {}", mode.prompt_label())).size(10.0));
+                ui.colored_label(color::text2(), egui::RichText::new(tr(lang, "Duration 8s · FPS 25")).size(11.0));
+                ui.colored_label(color::text3(), egui::RichText::new(tf(lang, "Mode  {}", &[&tr(lang, mode.prompt_label())])).size(10.0));
                 ui.add_space(8.0);
 
-                if widgets::primary_button(ui, "Generate Video", ui.available_width() - 2.0, 40.0) {
+                if widgets::primary_button(ui, tr(lang, "Generate Video"), ui.available_width() - 2.0, 40.0) {
                     let graph = build_video_graph(app, mode);
-                    app.submit_workflow(graph, &format!("Video · {}", mode.label()));
+                    app.submit_workflow(graph, &tf(lang, "Video · {}", &[&mode.label()]));
                 }
 
                 ui.add_space(8.0);
-                ui.colored_label(color::text3(), egui::RichText::new("Estimated 00:12 on GPU 0 · 13.2GB VRAM").size(10.0));
-                ui.colored_label(color::amber(), egui::RichText::new("⚠ first/last frame not yet verified").size(10.0));
+                ui.colored_label(color::text3(), egui::RichText::new(tr(lang, "Estimated 00:12 on GPU 0 · 13.2GB VRAM")).size(10.0));
+                ui.colored_label(color::amber(), egui::RichText::new(tr(lang, "⚠ first/last frame not yet verified")).size(10.0));
             });
         });
     });

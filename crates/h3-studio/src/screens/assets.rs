@@ -16,8 +16,10 @@ fn click_pill(ui: &mut egui::Ui, rect: Rect, id: egui::Id, label: &str, active: 
 }
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
+    use crate::i18n::{tr, tf};
+    let lang = app.lang();
     // Intro line
-    ui.colored_label(color::text3(), "Drag & drop to import · assign reference roles explicitly");
+    ui.colored_label(color::text3(), tr(lang, "Drag & drop to import · assign reference roles explicitly"));
     ui.add_space(14.0);
 
     let n_assets = app.assets.get("assets").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
@@ -28,7 +30,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             let (zone, resp) = ui.allocate_exact_size(egui::vec2(340.0, 240.0), egui::Sense::click());
             ui.painter().rect_filled(zone, 12.0f32, color::panel());
             ui.painter().rect_stroke(zone, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
-            ui.painter().text(egui::pos2(zone.left() + 20.0, zone.top() + 24.0), Align2::LEFT_CENTER, "IMPORT ZONE", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            ui.painter().text(egui::pos2(zone.left() + 20.0, zone.top() + 24.0), Align2::LEFT_CENTER, tr(lang, "IMPORT ZONE"), FontId::new(10.5, FontFamily::Proportional), color::text2());
             let drop = Rect::from_min_size(egui::pos2(zone.left() + 20.0, zone.top() + 44.0), egui::vec2(300.0, 130.0));
             ui.painter().rect_filled(drop, 10.0f32, color::bg());
             // dashed border (simulated with segments)
@@ -47,9 +49,9 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                 ui.painter().line_segment([egui::pos2(drop.left(), y0), egui::pos2(drop.left(), y1)], stroke);
                 ui.painter().line_segment([egui::pos2(drop.right(), y0), egui::pos2(drop.right(), y1)], stroke);
             }
-            ui.painter().text(drop.center(), Align2::CENTER_CENTER, "Drag & Drop Files", FontId::new(13.0, FontFamily::Proportional), color::text());
-            ui.painter().text(egui::pos2(drop.center().x, drop.bottom() - 24.0), Align2::CENTER_CENTER, "Supported: images, video, audio, pose, depth", FontId::new(9.5, FontFamily::Proportional), color::text3());
-            ui.painter().text(egui::pos2(zone.left() + 22.0, zone.bottom() - 18.0), Align2::LEFT_CENTER, "Files import as assets only · role assigned by user", FontId::new(9.5, FontFamily::Proportional), color::text3());
+            ui.painter().text(drop.center(), Align2::CENTER_CENTER, tr(lang, "Drag & Drop Files"), FontId::new(13.0, FontFamily::Proportional), color::text());
+            ui.painter().text(egui::pos2(drop.center().x, drop.bottom() - 24.0), Align2::CENTER_CENTER, tr(lang, "Supported: images, video, audio, pose, depth"), FontId::new(9.5, FontFamily::Proportional), color::text3());
+            ui.painter().text(egui::pos2(zone.left() + 22.0, zone.bottom() - 18.0), Align2::LEFT_CENTER, tr(lang, "Files import as assets only · role assigned by user"), FontId::new(9.5, FontFamily::Proportional), color::text3());
 
             if resp.clicked() || resp.drag_started() {
                 if let Some(path) = rfd::FileDialog::new().add_filter("images", &["png", "jpg", "jpeg", "webp"]).add_filter("all", &["*"]).pick_file() {
@@ -60,7 +62,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                         std::thread::spawn(move || {
                             let _ = client.upload_asset(bytes, &filename);
                         });
-                        app.set_toast(format!("Imported {} (uploading → Assets server)", toast_name));
+                        app.set_toast(tf(lang, "Imported {} (uploading → Assets server)", &[&toast_name]));
                     }
                 }
             }
@@ -69,39 +71,39 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             let (filters, _) = ui.allocate_exact_size(egui::vec2(340.0, 140.0), egui::Sense::hover());
             ui.painter().rect_filled(filters, 12.0f32, color::panel());
             ui.painter().rect_stroke(filters, 12.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
-            ui.painter().text(egui::pos2(filters.left() + 20.0, filters.top() + 24.0), Align2::LEFT_CENTER, "FILTERS", FontId::new(10.0, FontFamily::Proportional), color::text2());
+            ui.painter().text(egui::pos2(filters.left() + 20.0, filters.top() + 24.0), Align2::LEFT_CENTER, tr(lang, "FILTERS"), FontId::new(10.0, FontFamily::Proportional), color::text2());
             // Type filter — clickable pills
             let ty = filters.top() + 52.0;
-            ui.painter().text(egui::pos2(filters.left() + 20.0, ty), Align2::LEFT_CENTER, "Type:", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            ui.painter().text(egui::pos2(filters.left() + 20.0, ty), Align2::LEFT_CENTER, tr(lang, "Type:"), FontId::new(10.5, FontFamily::Proportional), color::text2());
             let mut px = filters.left() + 62.0;
             for (i, opt) in ["All", "Images", "Video", "Audio"].iter().enumerate() {
-                let w = widgets::est_text_width(opt, 9.5) + 18.0;
+                let w = widgets::est_text_width(tr(lang, opt), 9.5) + 18.0;
                 let r = Rect::from_min_size(egui::pos2(px, ty - 11.0), egui::vec2(w, 22.0));
                 let active = if i == 0 { app.ui.asset_type_filter.is_empty() } else { app.ui.asset_type_filter == *opt };
-                if click_pill(ui, r, ui.id().with(("f-type", i)), opt, active) {
+                if click_pill(ui, r, ui.id().with(("f-type", i)), tr(lang, opt), active) {
                     app.ui.asset_type_filter = if i == 0 { String::new() } else { opt.to_string() };
                 }
                 px += w + 6.0;
             }
             // Role filter — clickable pills
             let ry = filters.top() + 76.0;
-            ui.painter().text(egui::pos2(filters.left() + 20.0, ry), Align2::LEFT_CENTER, "Role:", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            ui.painter().text(egui::pos2(filters.left() + 20.0, ry), Align2::LEFT_CENTER, tr(lang, "Role:"), FontId::new(10.5, FontFamily::Proportional), color::text2());
             let mut px = filters.left() + 62.0;
             for (i, opt) in ["All", "Character", "Identity", "Costume"].iter().enumerate() {
-                let w = widgets::est_text_width(opt, 9.5) + 18.0;
+                let w = widgets::est_text_width(tr(lang, opt), 9.5) + 18.0;
                 let r = Rect::from_min_size(egui::pos2(px, ry - 11.0), egui::vec2(w, 22.0));
                 let active = if i == 0 { app.ui.asset_role_filter.is_empty() } else { app.ui.asset_role_filter == *opt };
-                if click_pill(ui, r, ui.id().with(("f-role", i)), opt, active) {
+                if click_pill(ui, r, ui.id().with(("f-role", i)), tr(lang, opt), active) {
                     app.ui.asset_role_filter = if i == 0 { String::new() } else { opt.to_string() };
                 }
                 px += w + 6.0;
             }
             // Project — clickable
             let py = filters.top() + 100.0;
-            ui.painter().text(egui::pos2(filters.left() + 20.0, py), Align2::LEFT_CENTER, "Project:", FontId::new(10.5, FontFamily::Proportional), color::text2());
+            ui.painter().text(egui::pos2(filters.left() + 20.0, py), Align2::LEFT_CENTER, tr(lang, "Project:"), FontId::new(10.5, FontFamily::Proportional), color::text2());
             let pr = Rect::from_min_size(egui::pos2(filters.left() + 86.0, py - 11.0), egui::vec2(widgets::est_text_width("Bamboo Grove", 9.5) + 22.0, 22.0));
             if click_pill(ui, pr, ui.id().with("f-project"), "Bamboo Grove", true) {
-                app.set_toast("Project filter — Bamboo Grove (only project)");
+                app.set_toast(tr(lang, "Project filter — Bamboo Grove (only project)").to_string());
             }
         });
 
@@ -111,8 +113,8 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             // header
             let (header, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 42.0), egui::Sense::hover());
             ui.painter().rect_filled(header, 8.0f32, color::card());
-            ui.painter().text(egui::pos2(header.left() + 18.0, header.center().y), Align2::LEFT_CENTER, "ASSET LIBRARY", FontId::new(10.5, FontFamily::Proportional), color::text());
-            ui.painter().text(egui::pos2(header.right() - 18.0, header.center().y), Align2::RIGHT_CENTER, &format!("{} assets · sorted by project", n_assets), FontId::new(10.5, FontFamily::Proportional), color::text3());
+            ui.painter().text(egui::pos2(header.left() + 18.0, header.center().y), Align2::LEFT_CENTER, tr(lang, "ASSET LIBRARY"), FontId::new(10.5, FontFamily::Proportional), color::text());
+            ui.painter().text(egui::pos2(header.right() - 18.0, header.center().y), Align2::RIGHT_CENTER, &tf(lang, "{} assets · sorted by project", &[&n_assets]), FontId::new(10.5, FontFamily::Proportional), color::text3());
             ui.add_space(12.0);
 
             // asset grid — 3 cols × 2 rows. Real server assets first; if the
@@ -147,7 +149,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                     cards.push(Card {
                         key: format!("mock-{}", idx),
                         name: (*name).to_string(),
-                        role: (*role).to_string(),
+                        role: tr(lang, role).to_string(),
                         accent: if idx % 2 == 0 { color::teal() } else { color::indigo() },
                         rel_path: String::new(),
                         audio: role.contains("Audio"),
@@ -197,7 +199,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             }
             if let Some(k) = picked_asset {
                 app.ui.selected_asset = Some(k.clone());
-                app.set_toast(format!("Selected asset · {}", k));
+                app.set_toast(tf(lang, "Selected asset · {}", &[&k]));
             }
         });
     });

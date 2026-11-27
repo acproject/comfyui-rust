@@ -179,6 +179,7 @@ pub fn kv_row(ui: &mut egui::Ui, label: &str, value: &str, value_color: Color32)
 
 /// Input source picker — browse button + filename display.
 pub fn input_picker(ui: &mut egui::Ui, app: &mut H3App, current: &str, label: &str) {
+    let lang = app.lang();
     ui.colored_label(color::text2(), label);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -192,7 +193,7 @@ pub fn input_picker(ui: &mut egui::Ui, app: &mut H3App, current: &str, label: &s
                         let _ = client.upload_input_image(bytes, &fname);
                     });
                     app.selected_input_image = Some(filename.clone());
-                    app.set_toast(format!("Uploading {} · input folder", filename));
+                    app.set_toast(crate::i18n::tf(lang, "Uploading {} · input folder", &[&filename]));
                     app.last_poll = std::time::Instant::now() - std::time::Duration::from_secs(999);
                 }
             }

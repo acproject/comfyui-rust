@@ -97,6 +97,27 @@ pub fn draw_icon(painter: &Painter, tab: NavTab, cx: f32, cy: f32, color: Color3
     }
 }
 
+/// Trash-can line icon (~14px), centered at (cx, cy).
+pub fn draw_trash(painter: &Painter, cx: f32, cy: f32, color: Color32) {
+    let s = Stroke::new(1.5, color);
+    let top = cy - 6.0;
+    // lid handle
+    painter.line_segment([pos2(cx - 3.0, top), pos2(cx + 3.0, top)], s);
+    // lid
+    painter.line_segment([pos2(cx - 5.5, top + 2.0), pos2(cx + 5.5, top + 2.0)], s);
+    // body (slightly tapered)
+    let body_l = cx - 4.5;
+    let body_r = cx + 4.5;
+    let body_t = top + 2.0;
+    let body_b = cy + 6.0;
+    painter.line_segment([pos2(body_l, body_t), pos2(body_l + 1.0, body_b)], s);
+    painter.line_segment([pos2(body_r, body_t), pos2(body_r - 1.0, body_b)], s);
+    painter.line_segment([pos2(body_l + 1.0, body_b), pos2(body_r - 1.0, body_b)], s);
+    // inner stripes
+    painter.line_segment([pos2(cx - 1.5, top + 4.5), pos2(cx - 1.0, body_b - 1.5)], s);
+    painter.line_segment([pos2(cx + 1.5, top + 4.5), pos2(cx + 1.0, body_b - 1.5)], s);
+}
+
 /// 4-tile toggle box (compact/expanded, cosmetic).
 pub fn draw_toggle_at(ui: &mut egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();

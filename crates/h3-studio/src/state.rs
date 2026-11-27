@@ -62,6 +62,13 @@ pub struct AppLocalState {
     pub characters: Vec<CharacterRecord>,
     pub selected_project_id: Option<String>,
     pub selected_shot_id: Option<String>,
+    /// UI language — "en" (default) or "zh".
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+fn default_language() -> String {
+    "en".to_string()
 }
 
 impl AppLocalState {
@@ -208,6 +215,7 @@ impl AppLocalState {
             characters,
             selected_project_id: Some("bamboo-grove".into()),
             selected_shot_id: Some("shot-01-03".into()),
+            language: "en".into(),
         }
     }
 

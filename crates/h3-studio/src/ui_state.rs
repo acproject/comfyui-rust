@@ -18,6 +18,9 @@ impl Default for ComparisonMode { fn default() -> Self { ComparisonMode::SideByS
 
 #[derive(Default)]
 pub struct UiState {
+    // App shell — sidebar density toggle (false = expanded, true = compact icon rail)
+    pub compact_mode: bool,
+
     // Home — New Project form
     pub new_project_name: String,
     pub new_project_aspect: String,
@@ -48,4 +51,7 @@ pub struct UiState {
 
     // Project — selected scene row index
     pub selected_scene: usize,
+
+    // Home — project id awaiting delete confirmation (two-step delete).
+    pub pending_delete_project: Option<String>,
 }

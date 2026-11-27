@@ -44,20 +44,29 @@ pub mod color {
     pub fn red() -> Color32 { Color32::from_rgb(0xE3, 0x6D, 0x6D) }
 
     /// Indigo translucent chip fill
-    pub fn indigo_dim() -> Color32 { Color32::from_rgba_premultiplied(0x8B, 0x9D, 0xFF, 26) }
+    pub fn indigo_dim() -> Color32 { Color32::from_rgba_unmultiplied(0x8B, 0x9D, 0xFF, 26) }
+    /// Indigo selected-row highlight (sidebar nav) — tuned so the displayed color
+    /// matches the design-system source `fill="#8B9DFF" fill-opacity="0.10"`
+    /// (which renders as ~#242936 over the sidebar bg). egui blends in linear
+    /// space on an sRGB framebuffer, so a smaller alpha reproduces the same look.
+    pub fn indigo_selected() -> Color32 { Color32::from_rgba_unmultiplied(0x8B, 0x9D, 0xFF, 3) }
     /// Teal translucent chip fill
-    pub fn teal_dim() -> Color32 { Color32::from_rgba_premultiplied(0x45, 0xC6, 0xB0, 26) }
+    pub fn teal_dim() -> Color32 { Color32::from_rgba_unmultiplied(0x45, 0xC6, 0xB0, 26) }
     /// Amber translucent chip fill
-    pub fn amber_dim() -> Color32 { Color32::from_rgba_premultiplied(0xE5, 0xAD, 0x59, 26) }
+    pub fn amber_dim() -> Color32 { Color32::from_rgba_unmultiplied(0xE5, 0xAD, 0x59, 26) }
     /// Purple translucent chip fill
-    pub fn purple_dim() -> Color32 { Color32::from_rgba_premultiplied(0xB0, 0x7C, 0xE0, 26) }
+    pub fn purple_dim() -> Color32 { Color32::from_rgba_unmultiplied(0xB0, 0x7C, 0xE0, 26) }
     /// Red translucent chip fill
-    pub fn red_dim() -> Color32 { Color32::from_rgba_premultiplied(0xE3, 0x6D, 0x6D, 26) }
+    pub fn red_dim() -> Color32 { Color32::from_rgba_unmultiplied(0xE3, 0x6D, 0x6D, 26) }
     /// Gray chip fill
-    pub fn gray_dim() -> Color32 { Color32::from_rgba_premultiplied(0x96, 0x9D, 0xA8, 22) }
+    pub fn gray_dim() -> Color32 { Color32::from_rgba_unmultiplied(0x96, 0x9D, 0xA8, 22) }
 
-    /// Ink text on colored chips (near-black)
+    /// Ink text on colored chips (near-black) — indigo / red accent fills
     pub fn on_accent() -> Color32 { Color32::from_rgb(0x11, 0x13, 0x15) }
+    /// Ink text on teal accent fills (#0B1219, per design mockups)
+    pub fn on_teal() -> Color32 { Color32::from_rgb(0x0B, 0x12, 0x19) }
+    /// Ink text on amber accent fills (#1A1206, per design mockups)
+    pub fn on_amber() -> Color32 { Color32::from_rgb(0x1A, 0x12, 0x06) }
 }
 
 pub mod metrics {

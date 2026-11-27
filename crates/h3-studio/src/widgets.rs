@@ -105,16 +105,18 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> bool {
     button(ui, text, w, h, color::indigo(), color::on_accent(), false)
 }
 pub fn teal_button(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> bool {
-    button(ui, text, w, h, color::teal(), color::on_accent(), false)
+    button(ui, text, w, h, color::teal(), color::on_teal(), false)
 }
 pub fn amber_button(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> bool {
-    button(ui, text, w, h, color::amber(), Color32::from_rgb(0x1A, 0x12, 0x06), false)
+    button(ui, text, w, h, color::amber(), color::on_amber(), false)
 }
 pub fn outline_button(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> bool {
     button(ui, text, w, h, Color32::TRANSPARENT, color::text(), true)
 }
 pub fn outline_button_indigo(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> bool {
-    button(ui, text, w, h, Color32::TRANSPARENT, color::indigo(), true)
+    // Secondary/topbar action: outline with white label (design system secondary
+    // button + screen mockups both use #F0F1F3 text); hover tints border indigo.
+    button(ui, text, w, h, Color32::TRANSPARENT, color::text(), true)
 }
 pub fn ghost_button(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> bool {
     button(ui, text, w, h, color::card(), color::text(), false)

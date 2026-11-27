@@ -29,6 +29,7 @@ fn draw_shot_card(
 
     let mut clicked = false;
     let mut generate = false;
+    let lang = app.lang();
 
     if let Some(shot) = shot {
         let tone = status_tone(shot.status);
@@ -39,22 +40,22 @@ fn draw_shot_card(
         ui.painter().text(
             egui::pos2(well.left() + 12.0, well.top() + 15.0),
             Align2::LEFT_CENTER,
-            &format!("SHOT {:02}", shot.number),
+            &crate::i18n::tf(lang, "SHOT {}", &[&format!("{:02}", shot.number)]),
             FontId::new(9.5, FontFamily::Proportional),
             color::text(),
         );
         let chip_rect = Rect::from_min_size(egui::pos2(well.right() - 62.0, well.top() + 10.0), egui::vec2(52.0, 20.0));
         ui.painter().rect_filled(chip_rect, 10.0f32, tone.dim());
-        ui.painter().text(chip_rect.center(), Align2::CENTER_CENTER, status_label(shot.status), FontId::new(9.5, FontFamily::Proportional), tone.accent());
+        ui.painter().text(chip_rect.center(), Align2::CENTER_CENTER, status_label(lang, shot.status), FontId::new(9.5, FontFamily::Proportional), tone.accent());
 
         ui.painter().text(egui::pos2(rect.left() + 16.0, rect.top() + 78.0), Align2::LEFT_CENTER, &shot.title, FontId::new(12.5, FontFamily::Proportional), color::text());
-        ui.painter().text(egui::pos2(rect.left() + 16.0, rect.top() + 97.0), Align2::LEFT_CENTER, &format!("{} · {}s", shot.mode, shot.duration), FontId::new(10.5, FontFamily::Proportional), color::text2());
+        ui.painter().text(egui::pos2(rect.left() + 16.0, rect.top() + 97.0), Align2::LEFT_CENTER, &crate::i18n::tf(lang, "{} · {}s", &[&shot.mode, &shot.duration]), FontId::new(10.5, FontFamily::Proportional), color::text2());
 
         let btn_rect = Rect::from_min_size(egui::pos2(rect.right() - 86.0, rect.bottom() - 28.0), egui::vec2(70.0, 22.0));
         let btn_resp = ui.interact(btn_rect, ui.id().with(("shot-gen", shot.id.clone())), egui::Sense::click());
         ui.painter().rect_filled(btn_rect, 6.0f32, color::card());
         ui.painter().rect_stroke(btn_rect, 6.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
-        ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, "Generate", FontId::new(9.5, FontFamily::Proportional), color::text());
+        ui.painter().text(btn_rect.center(), Align2::CENTER_CENTER, crate::i18n::tr(lang, "Generate"), FontId::new(9.5, FontFamily::Proportional), color::text());
         generate = btn_resp.clicked();
 
         clicked = outer.clicked() && !generate;
@@ -65,6 +66,7 @@ fn draw_shot_card(
 }
 
 pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
+    let lang = app.lang();
     let project = app.local.project().cloned();
     let scene = project.as_ref().and_then(|p| p.scenes.first().cloned());
     let (Some(project), Some(scene)) = (project, scene) else {
@@ -76,7 +78,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     let (tl, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 92.0), egui::Sense::hover());
     ui.painter().rect_filled(tl, 10.0f32, color::panel());
     ui.painter().rect_stroke(tl, 10.0f32, Stroke::new(1.0, color::border()), StrokeKind::Middle);
-    ui.painter().text(egui::pos2(tl.left() + 20.0, tl.top() + 24.0), Align2::LEFT_CENTER, "SHOT TIMELINE · SCENE 01", FontId::new(10.0, FontFamily::Proportional), color::text2());
+    ui.painter().text(egui::pos2(tl.left() + 20.0, tl.top() + 24.0), Align2::LEFT_CENTER, crate::i18n::tr(lang, "SHOT TIMELINE · SCENE 01"), FontId::new(10.0, FontFamily::Proportional), color::text2());
     let total_width = tl.right() - tl.left() - 40.0;
     let chip_w = (total_width / 12.0) - 10.0;
     let mut timeline_pick = None;
@@ -98,7 +100,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
     if let Some(id) = timeline_pick {
         app.local.selected_shot_id = Some(id.clone());
         app.local.save();
-        app.set_toast(format!("Selected shot {:?}", id));
+        app.set_toast(crate::i18n::tf(lang, "Selected shot {}", &[&id]));
     }
 
     ui.add_space(12.0);
@@ -129,7 +131,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
         app.local.save();
     }
     if generate_id.is_some() {
-        app.set_toast("Shot queued for generation (demo)");
+        app.toast_success(crate::i18n::tr(lang, "Shot queued for generation (demo)").to_string());
         app.nav_to(Screen::Queue);
     }
 }
@@ -143,12 +145,12 @@ fn status_tone(status: crate::state::ShotStatus) -> widgets::Tone {
     }
 }
 
-fn status_label(status: crate::state::ShotStatus) -> &'static str {
+fn status_label(lang: crate::i18n::Lang, status: crate::state::ShotStatus) -> &'static str {
     match status {
-        crate::state::ShotStatus::Done => "Done",
-        crate::state::ShotStatus::Running => "Running",
-        crate::state::ShotStatus::Queued => "Queued",
-        crate::state::ShotStatus::Pending => "Pending",
-        crate::state::ShotStatus::Failed => "Failed",
+        crate::state::ShotStatus::Done => crate::i18n::tr(lang, "Done"),
+        crate::state::ShotStatus::Running => crate::i18n::tr(lang, "Running"),
+        crate::state::ShotStatus::Queued => crate::i18n::tr(lang, "Queued"),
+        crate::state::ShotStatus::Pending => crate::i18n::tr(lang, "Pending"),
+        crate::state::ShotStatus::Failed => crate::i18n::tr(lang, "Failed"),
     }
 }
