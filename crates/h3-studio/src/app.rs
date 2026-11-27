@@ -684,6 +684,9 @@ impl H3App {
         if self.draw_sidebar_collapse_button(ui) {
             self.ui.compact_mode = true;
         }
+        // 18px gap between the top edge and the brand — aligns it with the
+        // topbar title / action button.
+        ui.add_space(18.0);
         // Brand
         ui.horizontal(|ui| {
             ui.add_space(16.0);
@@ -874,6 +877,8 @@ impl H3App {
             .show(ctx, |ui| {
                 ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(4.0, metrics::TOPBAR)), 0.0f32, color::border());
                 ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(24.0, 15.0), egui::vec2(26.0, 4.0)), 2.0f32, color::indigo());
+                // 18px gap between the top edge and the title / action button.
+                ui.add_space(18.0);
                 ui.horizontal(|ui| {
                     ui.add_space(56.0);
                     ui.vertical(|ui| {
