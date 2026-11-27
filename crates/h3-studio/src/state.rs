@@ -26,7 +26,7 @@ pub struct Scene {
     pub shots: Vec<Shot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Shot {
     pub id: String,
     pub number: u32,
@@ -34,14 +34,28 @@ pub struct Shot {
     pub mode: String,      // FL2VA / Ref2VA
     pub duration: u32,     // seconds
     pub status: ShotStatus,
+    /// Prompt text used for this shot's generation (editable in the storyboard).
+    #[serde(default)]
+    pub prompt: String,
+    /// Reference / first-frame input image name (server input_images entry).
+    #[serde(default)]
+    pub reference_image: Option<String>,
+    /// prompt_id of the last submitted generation job, used to correlate the
+    /// shot with live /queue + /history + WebSocket progress.
+    #[serde(default)]
+    pub prompt_id: Option<String>,
+    /// Filename of the generated output (video/image) once the job completes.
+    #[serde(default)]
+    pub output: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ShotStatus {
-    Done,
-    Running,
-    Queued,
+    #[default]
     Pending,
+    Queued,
+    Running,
+    Done,
     Failed,
 }
 
@@ -120,13 +134,8 @@ impl AppLocalState {
                         .into(),
                         mode: if i % 2 == 0 { "Ref2VA".into() } else { "FL2VA".into() },
                         duration: [6, 4, 8, 5, 6, 4, 5, 4][(i - 1) as usize],
-                        status: match i {
-                            1 => ShotStatus::Done,
-                            2 => ShotStatus::Done,
-                            3 => ShotStatus::Running,
-                            4 => ShotStatus::Queued,
-                            _ => ShotStatus::Pending,
-                        },
+                        status: ShotStatus::Pending,
+                        ..Default::default()
                     })
                     .collect(),
             },
@@ -140,6 +149,7 @@ impl AppLocalState {
                     mode: "Ref2VA".into(),
                     duration: 5,
                     status: ShotStatus::Pending,
+                    ..Default::default()
                 }).collect(),
             },
             Scene {
@@ -152,6 +162,7 @@ impl AppLocalState {
                     mode: "FL2VA".into(),
                     duration: 4,
                     status: ShotStatus::Pending,
+                    ..Default::default()
                 }).collect(),
             },
             Scene {
@@ -164,6 +175,7 @@ impl AppLocalState {
                     mode: "FL2VA".into(),
                     duration: 4,
                     status: ShotStatus::Pending,
+                    ..Default::default()
                 }).collect(),
             },
         ];
@@ -193,12 +205,12 @@ impl AppLocalState {
                 id: "jade-s1".into(),
                 name: "Jade Blade · Act 01".into(),
                 shots: vec![
-                    Shot { id: "jade-1".into(), number: 1, title: "Face close-up".into(), mode: "FL2VA".into(), duration: 4, status: ShotStatus::Done },
-                    Shot { id: "jade-2".into(), number: 2, title: "Costume detail".into(), mode: "Ref2VA".into(), duration: 3, status: ShotStatus::Done },
-                    Shot { id: "jade-3".into(), number: 3, title: "Expression turn".into(), mode: "Ref2VA".into(), duration: 4, status: ShotStatus::Done },
-                    Shot { id: "jade-4".into(), number: 4, title: "Standing wide".into(), mode: "Ref2VA".into(), duration: 5, status: ShotStatus::Done },
-                    Shot { id: "jade-5".into(), number: 5, title: "Emotional beat".into(), mode: "Ref2VA".into(), duration: 3, status: ShotStatus::Queued },
-                    Shot { id: "jade-6".into(), number: 6, title: "Action hold".into(), mode: "Ref2VA".into(), duration: 4, status: ShotStatus::Pending },
+                    Shot { id: "jade-1".into(), number: 1, title: "Face close-up".into(), mode: "FL2VA".into(), duration: 4, ..Default::default() },
+                    Shot { id: "jade-2".into(), number: 2, title: "Costume detail".into(), mode: "Ref2VA".into(), duration: 3, ..Default::default() },
+                    Shot { id: "jade-3".into(), number: 3, title: "Expression turn".into(), mode: "Ref2VA".into(), duration: 4, ..Default::default() },
+                    Shot { id: "jade-4".into(), number: 4, title: "Standing wide".into(), mode: "Ref2VA".into(), duration: 5, ..Default::default() },
+                    Shot { id: "jade-5".into(), number: 5, title: "Emotional beat".into(), mode: "Ref2VA".into(), duration: 3, ..Default::default() },
+                    Shot { id: "jade-6".into(), number: 6, title: "Action hold".into(), mode: "Ref2VA".into(), duration: 4, ..Default::default() },
                 ],
             }],
         };
@@ -231,6 +243,48 @@ impl AppLocalState {
             for shot in &scene.shots {
                 if &shot.id == id {
                     return Some((p, scene, shot));
+                }
+            }
+        }
+        None
+    }
+
+    /// Look up a shot by id across every project (for prompt_id → shot correlation).
+    pub fn shot(&self, id: &str) -> Option<(&ProjectRecord, &Scene, &Shot)> {
+        for p in &self.projects {
+            for scene in &p.scenes {
+                for shot in &scene.shots {
+                    if shot.id == id {
+                        return Some((p, scene, shot));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Mutable lookup of a shot by id across every project.
+    pub fn shot_mut(&mut self, id: &str) -> Option<&mut Shot> {
+        for p in &mut self.projects {
+            for scene in &mut p.scenes {
+                for shot in &mut scene.shots {
+                    if shot.id == id {
+                        return Some(shot);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find the shot that owns the given prompt_id (the last job it submitted).
+    pub fn shot_by_prompt(&self, prompt_id: &str) -> Option<(&ProjectRecord, &Scene, &Shot)> {
+        for p in &self.projects {
+            for scene in &p.scenes {
+                for shot in &scene.shots {
+                    if shot.prompt_id.as_deref() == Some(prompt_id) {
+                        return Some((p, scene, shot));
+                    }
                 }
             }
         }

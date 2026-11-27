@@ -144,7 +144,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
             ui.painter().text(egui::pos2(prog.left() + 18.0 + 86.0, prog.top() + 66.0), Align2::LEFT_CENTER, &tf(lang, " / {} shots", &[&all_shots.len()]), FontId::new(17.0, FontFamily::Proportional), color::text3());
             let bar_rect = Rect::from_min_size(egui::pos2(prog.left() + 18.0, prog.top() + 86.0), egui::vec2(508.0, 10.0));
             widgets::progress_bar(ui, bar_rect, frac, color::indigo(), 10.0);
-            ui.painter().text(egui::pos2(prog.left() + 18.0, prog.bottom() - 20.0), Align2::LEFT_CENTER, &tf(lang, "{}% generated · estimated remaining {}", &[&format!("{:.0}", frac * 100.0), &"00:42:18"]), FontId::new(10.5, FontFamily::Proportional), color::text2());
+            ui.painter().text(egui::pos2(prog.left() + 18.0, prog.bottom() - 20.0), Align2::LEFT_CENTER, &tf(lang, "{}% generated", &[&format!("{:.0}", frac * 100.0)]), FontId::new(10.5, FontFamily::Proportional), color::text2());
         });
     });
 

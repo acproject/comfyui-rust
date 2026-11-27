@@ -252,6 +252,7 @@ pub fn draw(app: &mut H3App, ui: &mut egui::Ui) {
                                 mode: "FL2VA".into(),
                                 duration: 4,
                                 status: ShotStatus::Pending,
+                                ..Default::default()
                             })
                             .collect(),
                     }],

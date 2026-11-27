@@ -13,6 +13,7 @@ mod theme;
 mod ui_state;
 mod workflows;
 mod widgets;
+mod ws;
 
 fn main() -> eframe::Result<()> {
     let mut args = std::env::args().skip(1);

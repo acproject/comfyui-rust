@@ -49,7 +49,7 @@ impl Screen {
     pub fn title(&self) -> &'static str {
         match self {
             Screen::Home => "Home",
-            Screen::Projects => "Bamboo Grove",
+            Screen::Projects => "Project",
             Screen::Storyboard => "Storyboard",
             Screen::Characters => "Character Library",
             Screen::Assets => "Reference Assets",
@@ -68,7 +68,7 @@ impl Screen {
     pub fn subtitle(&self) -> &'static str {
         match self {
             Screen::Home => "Local project library · 2 workers live · GPU 0/1/2",
-            Screen::Projects => "Project · 12 scenes · 24 shots · 17 generated",
+            Screen::Projects => "Project workspace",
             Screen::Storyboard => "Bamboo Grove · Scene 01 · Rainy Bamboo Forest",
             Screen::Characters => "Reusable identity across projects · click a card to open the full asset panel",
             Screen::Assets => "Drag & drop to import · assign reference roles explicitly",
@@ -178,6 +178,20 @@ pub struct JobResult {
     pub msg: String,
     /// Output filenames discovered by polling /history/{prompt_id}, mapped to UI slots.
     pub outputs: Vec<(OutputSlot, String)>,
+    /// prompt_id returned by the server (set on both the queued ack and the
+    /// ready/error terminal messages) so the UI can correlate the job.
+    pub prompt_id: Option<String>,
+    /// When this job was submitted for a storyboard shot, the shot id so the
+    /// ingest path can write status + output back onto the shot.
+    pub shot_id: Option<String>,
+}
+
+/// Live progress for a running prompt_id, received over WebSocket.
+#[derive(Debug, Clone)]
+pub struct WsProgressEntry {
+    pub value: f64,
+    pub max: f64,
+    pub updated: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -220,6 +234,48 @@ fn classify_slot(filename: &str) -> OutputSlot {
     }
 }
 
+/// Pull the first saved filename (image/video/audio) out of an outputs value,
+/// regardless of which node produced it. Used to record a shot's output even
+/// for video jobs (whose filenames don't match the h3_* image prefixes).
+pub fn first_output_filename(outputs: &serde_json::Value) -> Option<String> {
+    fn walk(v: &serde_json::Value, found: &mut Option<String>) {
+        if found.is_some() {
+            return;
+        }
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(f) = map.get("filename").and_then(|x| x.as_str()) {
+                    *found = Some(f.to_string());
+                    return;
+                }
+                for val in map.values() {
+                    walk(val, found);
+                    if found.is_some() {
+                        return;
+                    }
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for val in arr {
+                    walk(val, found);
+                    if found.is_some() {
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = None;
+    walk(outputs, &mut found);
+    found
+}
+
+/// First 8 chars of a prompt_id for compact log/row display.
+fn short_id(prompt_id: &str) -> String {
+    prompt_id.chars().take(8).collect()
+}
+
 pub struct H3App {
     pub screen: Screen,
     pub server_url: String,
@@ -242,6 +298,20 @@ pub struct H3App {
     pub texture_tx: Option<std::sync::mpsc::Sender<AssetResult>>,
     pub job_rx: Option<std::sync::mpsc::Receiver<JobResult>>,
     pub job_tx: Option<std::sync::mpsc::Sender<JobResult>>,
+
+    /// Live WebSocket feed — real-time progress + execution lifecycle events.
+    pub ws_rx: Option<std::sync::mpsc::Receiver<crate::ws::WsEvent>>,
+    pub ws_connected: bool,
+    /// prompt_id → live progress (value/max) from the last `progress` event.
+    pub ws_progress: std::collections::HashMap<String, WsProgressEntry>,
+    /// prompt_id → currently executing node id (from `executing` events).
+    pub ws_node: std::collections::HashMap<String, String>,
+    /// prompt_id → the instant execution started (for elapsed-time display).
+    pub job_started_at: std::collections::HashMap<String, std::time::Instant>,
+    /// prompt_id → the instant execution finished (success or error).
+    pub job_completed_at: std::collections::HashMap<String, std::time::Instant>,
+    /// Ring buffer of recent log lines for the task-log panel (newest last).
+    pub ws_log: std::collections::VecDeque<(std::time::Instant, String)>,
 
     /// Input image key → source description for the last generated/uploaded image.
     pub selected_input_image: Option<String>,
@@ -313,6 +383,9 @@ impl H3App {
 
     pub fn new(initial_screen: Screen, server_url: String) -> Self {
         let local = crate::state::AppLocalState::load();
+        // Live WebSocket feed for real-time progress / execution events.
+        let (ws_tx, ws_rx) = std::sync::mpsc::channel::<crate::ws::WsEvent>();
+        crate::ws::spawn(server_url.clone(), "h3-studio".to_string(), ws_tx);
         H3App {
             screen: initial_screen,
             client: crate::client::ComfyClient::new(&server_url),
@@ -332,6 +405,13 @@ impl H3App {
             texture_tx: None,
             job_rx: None,
             job_tx: None,
+            ws_rx: Some(ws_rx),
+            ws_connected: false,
+            ws_progress: std::collections::HashMap::new(),
+            ws_node: std::collections::HashMap::new(),
+            job_started_at: std::collections::HashMap::new(),
+            job_completed_at: std::collections::HashMap::new(),
+            ws_log: std::collections::VecDeque::new(),
             selected_input_image: None,
             last_cutout: None,
             last_cinematic: None,
@@ -394,35 +474,62 @@ impl H3App {
         self.job_tx.clone().unwrap()
     }
 
-    /// Submit a workflow graph to the server in the background.
+    /// Submit a workflow graph to the server in the background (no shot link).
     /// Surfaces a "Queued" toast immediately, then polls /history/{prompt_id}
     /// and surfaces a "Ready" toast once the saved output filenames appear, so
     /// the preview panel can fetch and display the real generated image.
     pub fn submit_workflow(&mut self, graph: serde_json::Value, label: &str) {
+        self.submit_workflow_inner(graph, label, None);
+    }
+
+    /// Submit a storyboard shot's workflow. Marks the shot Queued immediately
+    /// (persisted) and threads `shot_id` through the job so the ingest path can
+    /// write the returned prompt_id and, on completion, the output filename +
+    /// Done/Failed status back onto the shot.
+    pub fn submit_shot(&mut self, shot_id: &str, graph: serde_json::Value, label: &str) {
+        if let Some(shot) = self.local.shot_mut(shot_id) {
+            shot.status = crate::state::ShotStatus::Queued;
+            shot.output = None;
+            self.local.save();
+        }
+        self.submit_workflow_inner(graph, label, Some(shot_id.to_string()));
+    }
+
+    fn submit_workflow_inner(
+        &mut self,
+        graph: serde_json::Value,
+        label: &str,
+        shot_id: Option<String>,
+    ) {
         let tx = self.ensure_job_channel();
         let client = self.client.clone();
         let label_owned = label.to_string();
+        let shot_id_owned = shot_id.clone();
         let lang = self.lang();
         std::thread::spawn(move || {
-            let (ok, prompt_id) = match client.submit_prompt(graph, "h3-studio") {
+            let prompt_id = match client.submit_prompt(graph, "h3-studio") {
                 Ok(resp) => {
                     let id = resp.get("prompt_id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                    (true, Some(id))
+                    Some(id)
                 }
                 Err(e) => {
                     let _ = tx.send(JobResult {
                         ok: false,
                         msg: format!("✗ {} — {}", label_owned, e),
                         outputs: Vec::new(),
+                        prompt_id: None,
+                        shot_id: shot_id_owned.clone(),
                     });
                     return;
                 }
             };
             let id_str = prompt_id.clone().unwrap_or_default();
             let _ = tx.send(JobResult {
-                ok,
+                ok: true,
                 msg: crate::i18n::tf(lang, "✓ Queued ({}) · {}", &[&label_owned, &id_str]),
                 outputs: Vec::new(),
+                prompt_id: prompt_id.clone(),
+                shot_id: shot_id_owned.clone(),
             });
             // Poll history until the saved output(s) appear (≤ ~3 min).
             if let Some(id) = prompt_id {
@@ -441,6 +548,8 @@ impl H3App {
                                 ok: true,
                                 msg: crate::i18n::tf(lang, "✓ Ready ({}) · {}", &[&label_owned, &joined]),
                                 outputs: outs,
+                                prompt_id: Some(id.clone()),
+                                shot_id: shot_id_owned.clone(),
                             });
                             return;
                         }
@@ -542,7 +651,9 @@ impl H3App {
                 let _ = self.textures.get(ctx, &result.key, &result.bytes);
             }
         }
-        // Job results
+        // Live WebSocket events — progress, execution lifecycle, task log.
+        self.ingest_ws_events();
+        // Job results (workflow submissions).
         let mut job_results = Vec::new();
         if let Some(rx) = self.job_rx.as_ref() {
             while let Ok(result) = rx.try_recv() {
@@ -551,9 +662,40 @@ impl H3App {
         }
         for result in job_results {
             if result.ok {
-                self.toast_success(result.msg);
+                self.toast_success(result.msg.clone());
             } else {
-                self.toast_error(result.msg);
+                self.toast_error(result.msg.clone());
+            }
+            // Resolve the shot this job belongs to (storyboard submissions).
+            if let Some(shot_id) = result.shot_id.as_deref() {
+                let mut changed = false;
+                // Queued ack: write the server-issued prompt_id onto the shot.
+                if let Some(pid) = result.prompt_id.as_deref() {
+                    if let Some(shot) = self.local.shot_mut(shot_id) {
+                        if shot.prompt_id.as_deref() != Some(pid) {
+                            shot.prompt_id = Some(pid.to_string());
+                            changed = true;
+                        }
+                    }
+                }
+                if !result.outputs.is_empty() {
+                    // Terminal success for image workflows — record output + Done.
+                    if let Some((_, fname)) = result.outputs.first() {
+                        if let Some(shot) = self.local.shot_mut(shot_id) {
+                            shot.output = Some(fname.clone());
+                            shot.status = crate::state::ShotStatus::Done;
+                            changed = true;
+                        }
+                    }
+                } else if !result.ok {
+                    if let Some(shot) = self.local.shot_mut(shot_id) {
+                        shot.status = crate::state::ShotStatus::Failed;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.local.save();
+                }
             }
             for (slot, filename) in result.outputs {
                 match slot {
@@ -566,9 +708,223 @@ impl H3App {
         }
     }
 
+    /// Drain pending WebSocket events into the live progress maps, task log,
+    /// and shot statuses.
+    fn ingest_ws_events(&mut self) {
+        let Some(rx) = self.ws_rx.as_ref() else { return };
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        if events.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        for ev in events {
+            match ev {
+                crate::ws::WsEvent::Connected => {
+                    self.ws_connected = true;
+                    self.push_log("ws · connected to server".into());
+                }
+                crate::ws::WsEvent::Disconnected => {
+                    self.ws_connected = false;
+                    self.push_log("ws · disconnected, reconnecting…".into());
+                }
+                crate::ws::WsEvent::Status(q) => {
+                    if q.get("queue_running").is_some() {
+                        self.queue = q;
+                    }
+                }
+                crate::ws::WsEvent::Progress { prompt_id, value, max, node } => {
+                    self.ws_progress
+                        .insert(prompt_id.clone(), WsProgressEntry { value, max, updated: now });
+                    if !node.is_empty() {
+                        self.ws_node.insert(prompt_id, node);
+                    }
+                }
+                crate::ws::WsEvent::ExecStart { prompt_id } => {
+                    self.job_started_at.insert(prompt_id.clone(), now);
+                    self.ws_progress.remove(&prompt_id);
+                    self.mark_shot_running(&prompt_id);
+                    self.push_log(format!("[{}] execution_start", short_id(&prompt_id)));
+                }
+                crate::ws::WsEvent::Executing { prompt_id, node } => {
+                    if let Some(n) = node.as_deref() {
+                        self.ws_node.insert(prompt_id.clone(), n.to_string());
+                        self.push_log(format!("[{}] executing node {}", short_id(&prompt_id), n));
+                    }
+                }
+                crate::ws::WsEvent::ExecSuccess { prompt_id, output } => {
+                    self.job_completed_at.insert(prompt_id.clone(), now);
+                    let fname = first_output_filename(&output).unwrap_or_default();
+                    self.mark_shot_done(&prompt_id, &fname);
+                    if fname.is_empty() {
+                        self.push_log(format!("[{}] execution_success", short_id(&prompt_id)));
+                    } else {
+                        self.push_log(format!("[{}] execution_success · {}", short_id(&prompt_id), fname));
+                    }
+                }
+                crate::ws::WsEvent::ExecError { prompt_id, error } => {
+                    self.job_completed_at.insert(prompt_id.clone(), now);
+                    self.mark_shot_failed(&prompt_id);
+                    self.push_log(format!("[{}] execution_error · {}", short_id(&prompt_id), error));
+                }
+            }
+        }
+        while self.ws_log.len() > 300 {
+            self.ws_log.pop_front();
+        }
+    }
+
+    fn push_log(&mut self, line: String) {
+        self.ws_log.push_back((std::time::Instant::now(), line));
+    }
+
+    fn mark_shot_running(&mut self, prompt_id: &str) {
+        let shot_id = self.local.shot_by_prompt(prompt_id).map(|(_, _, s)| s.id.clone());
+        if let Some(id) = shot_id {
+            if let Some(shot) = self.local.shot_mut(&id) {
+                if shot.status != crate::state::ShotStatus::Running {
+                    shot.status = crate::state::ShotStatus::Running;
+                    self.local.save();
+                }
+            }
+        }
+    }
+
+    fn mark_shot_done(&mut self, prompt_id: &str, output: &str) {
+        let shot_id = self.local.shot_by_prompt(prompt_id).map(|(_, _, s)| s.id.clone());
+        if let Some(id) = shot_id {
+            if let Some(shot) = self.local.shot_mut(&id) {
+                if !output.is_empty() {
+                    shot.output = Some(output.to_string());
+                }
+                if shot.status != crate::state::ShotStatus::Done {
+                    shot.status = crate::state::ShotStatus::Done;
+                    self.local.save();
+                }
+            }
+        }
+    }
+
+    fn mark_shot_failed(&mut self, prompt_id: &str) {
+        let shot_id = self.local.shot_by_prompt(prompt_id).map(|(_, _, s)| s.id.clone());
+        if let Some(id) = shot_id {
+            if let Some(shot) = self.local.shot_mut(&id) {
+                if shot.status != crate::state::ShotStatus::Failed {
+                    shot.status = crate::state::ShotStatus::Failed;
+                    self.local.save();
+                }
+            }
+        }
+    }
+
+    /// Reconcile every shot's status from the live /queue + /history snapshots
+    /// (authoritative fallback / complement to WebSocket events). Called once
+    /// per poll tick.
+    fn sync_shot_statuses(&mut self) {
+        use crate::state::ShotStatus;
+        let ids = |key: &str| -> std::collections::HashSet<String> {
+            self.queue
+                .get(key)
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|i| i.get("prompt_id").and_then(|x| x.as_str()).map(String::from))
+                .collect()
+        };
+        let running = ids("queue_running");
+        let pending = ids("queue_pending");
+        let history = self.history_recent.as_object();
+
+        // Snapshot (id, prompt_id) pairs to avoid borrowing self.local mutably
+        // while iterating it.
+        let pairs: Vec<(String, Option<String>)> = self
+            .local
+            .projects
+            .iter()
+            .flat_map(|p| p.scenes.iter())
+            .flat_map(|s| s.shots.iter())
+            .map(|s| (s.id.clone(), s.prompt_id.clone()))
+            .collect();
+
+        let mut changed = false;
+        for (shot_id, pid) in pairs {
+            let Some(pid) = pid else { continue };
+            let new_status = if running.contains(&pid) {
+                ShotStatus::Running
+            } else if pending.contains(&pid) {
+                ShotStatus::Queued
+            } else if let Some(h) = history.and_then(|m| m.get(&pid)) {
+                match h.get("status") {
+                    Some(serde_json::Value::String(s)) if s == "Completed" => ShotStatus::Done,
+                    Some(serde_json::Value::String(s)) if s == "Failed" => ShotStatus::Failed,
+                    Some(serde_json::Value::Object(_)) => ShotStatus::Failed,
+                    _ => continue,
+                }
+            } else {
+                continue;
+            };
+            if let Some(shot) = self.local.shot_mut(&shot_id) {
+                if shot.status != new_status {
+                    shot.status = new_status;
+                    changed = true;
+                }
+                if (new_status == ShotStatus::Done || new_status == ShotStatus::Failed)
+                    && shot.output.is_none()
+                {
+                    if let Some(h) = history.and_then(|m| m.get(&pid)) {
+                        if let Some(f) =
+                            first_output_filename(&h.get("outputs").cloned().unwrap_or_default())
+                        {
+                            shot.output = Some(f);
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            self.local.save();
+        }
+    }
+
+    /// Number of completed/failed jobs in history that aren't currently active
+    /// in the queue. Used by both the topbar subtitle and the queue filter chip
+    /// so the two counts always agree.
+    pub fn completed_count(&self) -> usize {
+        fn terminal(status: Option<&serde_json::Value>) -> bool {
+            match status {
+                Some(serde_json::Value::String(s)) => s == "Completed" || s == "Failed",
+                Some(serde_json::Value::Object(_)) => true,
+                _ => false,
+            }
+        }
+        let mut active = std::collections::HashSet::new();
+        for key in ["queue_running", "queue_pending"] {
+            if let Some(a) = self.queue.get(key).and_then(|v| v.as_array()) {
+                for it in a {
+                    if let Some(pid) = it.get("prompt_id").and_then(|x| x.as_str()) {
+                        active.insert(pid.to_string());
+                    }
+                }
+            }
+        }
+        self.history_recent
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .filter(|(pid, e)| !active.contains(pid.as_str()) && terminal(e.get("status")))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Poll server + local telemetry ~every 1.5s.
     fn maybe_poll(&mut self, ctx: &egui::Context) {
         self.ingest_background(ctx);
+        // Keep shot statuses in sync with the live /queue + /history snapshots
+        // (complements the faster WebSocket lifecycle events).
+        self.sync_shot_statuses();
         let every = std::time::Duration::from_millis(1500);
         if !self.initialized || self.last_poll.elapsed() >= every {
             self.initialized = true;
@@ -871,6 +1227,37 @@ impl H3App {
     }
 
     fn draw_topbar(&mut self, ctx: &egui::Context) {
+        use crate::i18n::{tr, tf};
+        let lang = self.lang();
+        // Projects topbar text is driven by the selected project (real data)
+        // instead of the hardcoded design-mock name / counts.
+        let (title_text, subtitle_text): (String, String) = if self.screen == Screen::Projects {
+            let proj = self.local.project().cloned();
+            let name = proj.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| tr(lang, "Project").to_string());
+            let (n_scenes, n_shots, n_done) = proj.as_ref().map(|p| {
+                let shots: Vec<_> = p.scenes.iter().flat_map(|s| &s.shots).collect();
+                let done = shots.iter().filter(|s| s.status == crate::state::ShotStatus::Done).count();
+                (p.scenes.len(), shots.len(), done)
+            }).unwrap_or((0, 0, 0));
+            (name, tf(lang, "Project · {} scenes · {} shots · {} generated", &[&n_scenes, &n_shots, &n_done]))
+        } else if self.screen == Screen::Queue {
+            let running = self.queue.get("queue_running").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let pending = self.queue.get("queue_pending").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let completed = self.completed_count();
+            let sub = if self.connect_ok {
+                tf(lang, "live · {} running · {} queued · {} completed", &[&running, &pending, &completed])
+            } else {
+                tr(lang, "Server offline — start comfy-server on :8188").to_string()
+            };
+            (tr(lang, self.screen.title()).to_string(), sub)
+        } else if self.screen == Screen::Storyboard {
+            let sub = self.local.selected_shot().map(|(p, sc, s)| {
+                tf(lang, "{} · {} · Shot {:02} · {} ({}s)", &[&p.name, &sc.name, &s.number, &s.title, &s.duration])
+            }).unwrap_or_else(|| tr(lang, self.screen.subtitle()).to_string());
+            (tr(lang, self.screen.title()).to_string(), sub)
+        } else {
+            (tr(lang, self.screen.title()).to_string(), tr(lang, self.screen.subtitle()).to_string())
+        };
         egui::TopBottomPanel::top("topbar")
             .exact_height(metrics::TOPBAR)
             .frame(egui::Frame::NONE.fill(color::topbar()))
@@ -882,10 +1269,12 @@ impl H3App {
                 ui.horizontal(|ui| {
                     ui.add_space(56.0);
                     ui.vertical(|ui| {
-                        ui.colored_label(color::text(), egui::RichText::new(crate::i18n::tr(self.lang(), self.screen.title())).size(typography::H1).strong());
-                        ui.colored_label(color::text2(), crate::i18n::tr(self.lang(), self.screen.subtitle()));
+                        ui.colored_label(color::text(), egui::RichText::new(&title_text).size(typography::H1).strong());
+                        ui.colored_label(color::text2(), &subtitle_text);
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // 40px gap between the action button and the topbar's right edge.
+                        ui.add_space(40.0);
                         self.topbar_action(ui);
                     });
                 });
@@ -941,11 +1330,7 @@ impl H3App {
                     self.nav_to(Screen::Characters);
                 }
             }
-            Screen::Projects => {
-                if widgets::outline_button(ui, "⌘↵", 110.0, 36.0) {
-                    self.set_toast(tr(lang, "Shortcut — coming soon"));
-                }
-            }
+            Screen::Projects => {}
             Screen::Studio => {
                 let label = if self.studio_mode == crate::screens::studio::StudioMode::Fl2VA { "⌘↵ switch to Ref2VA" } else { "⌘↵ switch to FL2VA" };
                 let label = tr(lang, label);

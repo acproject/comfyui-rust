@@ -24,6 +24,7 @@ rfd = "0.15"
 
 dirs = "5"
 sysinfo = { version = "0.33", default-features = false, features = ["system", "disk"] }
+tungstenite = "0.29"
 
 [features]
 # Enables eframe's headless screenshot mode (EFRAME_SCREENSHOT_TO=path.png).
